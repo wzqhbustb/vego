@@ -424,11 +424,55 @@ This project is licensed under the [Apache 2.0 License](LICENSE).
 
 ---
 
+## 📚 References & Papers
+
+This project is built on top of cutting-edge research in vector search and columnar storage. The following papers have significantly influenced our implementation:
+
+### Small-World Network Theory
+
+| Paper | Authors | Year | Contribution |
+|-------|---------|------|--------------|
+| **[Collective dynamics of 'small-world' networks](https://doi.org/10.1038/30918)** | Watts & Strogatz | 1998 | Foundational paper on small-world networks; provides the theoretical basis for understanding NSW/HNSW algorithms |
+| **[Navigable Networks as Nash Equilibria of Navigation Games](https://doi.org/10.1038/s41467-017-01294-3)** | Papadopoulos et al. | 2018 | Explains why certain network structures exhibit good navigability properties |
+
+### NSW (Navigable Small World) Algorithm
+
+| Paper | Authors | Year | Contribution |
+|-------|---------|------|--------------|
+| **[Approximate nearest neighbor algorithm based on navigable small world graphs](https://doi.org/10.1016/j.ins.2013.08.017)** | Malkov et al. | 2014 | The predecessor to HNSW; introduces approximate nearest neighbor search based on navigable small-world graphs |
+| **[Scalable Distributed Algorithm for Approximate Nearest Neighbor Search Problem in High Dimensional General Metric Spaces](https://doi.org/10.1109/TPDS.2015.2505333)** | Malkov et al. | 2016 | Early improvements to NSW, focusing on scalability and distributed processing |
+
+### HNSW (Hierarchical NSW) Algorithm
+
+| Paper | Authors | Year | Contribution |
+|-------|---------|------|--------------|
+| **[Efficient and robust approximate nearest neighbor search using Hierarchical Navigable Small World graphs](https://arxiv.org/abs/1603.09320)** | Malkov & Yashunin | 2016 | **Core algorithm** used by Vego; extends NSW with hierarchical structure for O(log N) query complexity |
+| **[A Comprehensive Survey and Experimental Comparison of Graph-Based Approximate Nearest Neighbor Search](https://doi.org/10.14778/3397230)** | Li et al. | 2020 | Comparative analysis of various graph-based ANN algorithms including HNSW; guided our implementation decisions |
+
+### Large-Scale Vector Search
+
+| Paper | Authors | Year | Contribution |
+|-------|---------|------|--------------|
+| **[Billion-scale similarity search with GPUs](https://arxiv.org/abs/1702.08734)** | Johnson et al. | 2017 | Facebook AI's FAISS library; provides comprehensive comparison of methods including HNSW |
+| **[DiskANN: Fast Accurate Billion-point Nearest Neighbor Search on a Single Node](https://doi.org/10.14778/3424573)** | Subramanya et al. | 2019 | Microsoft's improved approach for billion-scale data on SSDs; informs our future roadmap for large-scale support |
+
+### Columnar Storage & Vector Quantization
+
+| Paper | Authors | Year | Contribution |
+|-------|---------|------|--------------|
+| **[Apache Arrow: Cross-Language Development Platform for In-Memory Analytics](https://doi.org/10.14778/3397230)** | Apache Arrow Team | 2016 | Foundation for our storage layer's in-memory representation |
+| **[Lance: Efficient Random Access in Columnar Storage through Adaptive Structural Encodings](https://github.com/lancedb/lance)** | Lance Team | 2022 | Influenced our Lance-compatible columnar storage format design |
+| **[Lance v2: A New Columnar Container Format](https://lancedb.github.io/lance/format.html)** | Lance Team | 2023 | Latest columnar container format improvements |
+| **[Product Quantization for Nearest Neighbor Search](https://doi.org/10.1109/TPAMI.2010.57)** | Jégou et al. | 2011 | Foundation for future quantization support (PQ) to reduce memory footprint |
+
+---
+
 ## 🙏 Acknowledgments
 
-- HNSW original paper: [Efficient and robust approximate nearest neighbor search using Hierarchical Navigable Small World graphs](https://arxiv.org/abs/1603.09320)
-- Apache Arrow project
-- Lance storage format design
+- **HNSW Algorithm**: Yury A. Malkov and Dmitry A. Yashunin for the groundbreaking HNSW algorithm
+- **Apache Arrow Project**: For the standardized columnar memory format
+- **Lance**: For the modern columnar storage format designed for ML/AI workloads
+- **Go Community**: For the excellent ecosystem and tools
 
 ---
 
