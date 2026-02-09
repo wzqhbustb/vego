@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/wzqhbkjdx/vego/storage/arrow"
-	"github.com/wzqhbkjdx/vego/storage/encoding"
-	"github.com/wzqhbkjdx/vego/storage/format"
+	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/storage/encoding"
+	"github.com/wzqhbustb/vego/storage/format"
 )
 
 // TestE2E_SmartEncoding 验证智能编码选择（RLE、Dictionary、BitPacking、Zstd）

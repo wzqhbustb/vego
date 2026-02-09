@@ -2,9 +2,9 @@ package column
 
 import (
 	"fmt"
-	"github.com/wzqhbkjdx/vego/storage/arrow"
-	"github.com/wzqhbkjdx/vego/storage/encoding" // [NEW] 导入 encoding 包
-	"github.com/wzqhbkjdx/vego/storage/format"
+	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/storage/encoding" // [NEW] 导入 encoding 包
+	"github.com/wzqhbustb/vego/storage/format"
 	"os"
 	"path/filepath"
 	"testing"

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
-	lerrors "github.com/wzqhbkjdx/vego/storage/errors"
+	lerrors "github.com/wzqhbustb/vego/storage/errors"
 )
 
 // Page represents a single data page in a Lance file

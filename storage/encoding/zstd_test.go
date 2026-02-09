@@ -3,8 +3,8 @@ package encoding
 import (
 	"testing"
 
-	"github.com/wzqhbkjdx/vego/storage/arrow"
-	"github.com/wzqhbkjdx/vego/storage/format"
+	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/storage/format"
 )
 
 func TestZstdEncoder_Type(t *testing.T) {

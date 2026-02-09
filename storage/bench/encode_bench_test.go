@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/wzqhbkjdx/vego/storage/arrow"
-	"github.com/wzqhbkjdx/vego/storage/column"
+	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/storage/column"
 )
 
 // BenchmarkEncoding_Int32 测试 Int32 编码性能

@@ -3,7 +3,7 @@ package arrow
 import (
 	"fmt"
 
-	lerrors "github.com/wzqhbkjdx/vego/storage/errors"
+	lerrors "github.com/wzqhbustb/vego/storage/errors"
 )
 
 // Table represents a collection of RecordBatches with the same schema

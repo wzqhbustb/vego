@@ -3,8 +3,8 @@ package encoding
 import (
 	"encoding/binary"
 
-	lerrors "github.com/wzqhbkjdx/vego/storage/errors"
-	"github.com/wzqhbkjdx/vego/storage/arrow"
+	lerrors "github.com/wzqhbustb/vego/storage/errors"
+	"github.com/wzqhbustb/vego/storage/arrow"
 )
 
 type RLEDecoder struct{}

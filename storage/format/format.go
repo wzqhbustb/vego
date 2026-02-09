@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	lerrors "github.com/wzqhbkjdx/vego/storage/errors"
+	lerrors "github.com/wzqhbustb/vego/storage/errors"
 )
 
 // Lance file format constants

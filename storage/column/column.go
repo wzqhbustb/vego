@@ -2,9 +2,9 @@ package column
 
 import (
 	"fmt"
-	"github.com/wzqhbkjdx/vego/storage/arrow"
-	lerrors "github.com/wzqhbkjdx/vego/storage/errors"
-	"github.com/wzqhbkjdx/vego/storage/format"
+	"github.com/wzqhbustb/vego/storage/arrow"
+	lerrors "github.com/wzqhbustb/vego/storage/errors"
+	"github.com/wzqhbustb/vego/storage/format"
 )
 
 // ColumnMetadata contains metadata about a column in the file

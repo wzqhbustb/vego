@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/wzqhbkjdx/vego/storage/encoding"
+	"github.com/wzqhbustb/vego/storage/encoding"
 )
 
 var (

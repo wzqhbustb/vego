@@ -5,8 +5,8 @@ import (
 	"sync"
 	"unsafe"
 
-	lerrors "github.com/wzqhbkjdx/vego/storage/errors"
-	"github.com/wzqhbkjdx/vego/storage/arrow"
+	lerrors "github.com/wzqhbustb/vego/storage/errors"
+	"github.com/wzqhbustb/vego/storage/arrow"
 
 	"github.com/klauspost/compress/zstd"
 )

@@ -1,4 +1,4 @@
-module github.com/wzqhbkjdx/vego
+module github.com/wzqhbustb/vego
 
 go 1.23
 

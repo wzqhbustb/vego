@@ -8,7 +8,7 @@ import (
 	"io"
 	"time"
 
-	lerrors "github.com/wzqhbkjdx/vego/storage/errors"
+	lerrors "github.com/wzqhbustb/vego/storage/errors"
 )
 
 // Footer represents the Lance file footer
