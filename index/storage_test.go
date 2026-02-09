@@ -7,10 +7,10 @@ import (
 )
 
 func TestHNSWStorageBasic(t *testing.T) {
-	// 创建临时目录
+	// Create temporary directory
 	tempDir := t.TempDir()
 
-	// 创建测试HNSW索引
+	// Create test HNSW index
 	config := Config{
 		M:              16,
 		EfConstruction: 200,
@@ -20,7 +20,7 @@ func TestHNSWStorageBasic(t *testing.T) {
 
 	hnsw := NewHNSW(config)
 
-	// 添加测试向量
+	// Add test vectors
 	vectors := [][]float32{
 		{1.0, 2.0, 3.0, 4.0},
 		{2.0, 3.0, 4.0, 5.0},
@@ -36,12 +36,12 @@ func TestHNSWStorageBasic(t *testing.T) {
 		}
 	}
 
-	// 保存到Lance格式
+	// Save to Lance format
 	if err := hnsw.SaveToLance(tempDir); err != nil {
 		t.Fatalf("Failed to save HNSW: %v", err)
 	}
 
-	// 验证文件是否创建
+	// Verify files are created
 	expectedFiles := []string{"nodes.lance", "connections.lance", "metadata.lance"}
 	for _, filename := range expectedFiles {
 		fullPath := filepath.Join(tempDir, filename)
@@ -50,13 +50,13 @@ func TestHNSWStorageBasic(t *testing.T) {
 		}
 	}
 
-	// 从Lance格式加载
+	// Load from Lance format
 	loadedHNSW, err := LoadHNSWFromLance(tempDir)
 	if err != nil {
 		t.Fatalf("Failed to load HNSW: %v", err)
 	}
 
-	// 验证基本属性
+	// Verify basic properties
 	if loadedHNSW.M != hnsw.M {
 		t.Errorf("M mismatch: got %d, want %d", loadedHNSW.M, hnsw.M)
 	}
@@ -70,12 +70,12 @@ func TestHNSWStorageBasic(t *testing.T) {
 		t.Errorf("MaxLevel mismatch: got %d, want %d", loadedHNSW.maxLevel, hnsw.maxLevel)
 	}
 
-	// 验证节点数量
+	// Verify node count
 	if len(loadedHNSW.nodes) != len(hnsw.nodes) {
 		t.Errorf("Node count mismatch: got %d, want %d", len(loadedHNSW.nodes), len(hnsw.nodes))
 	}
 
-	// 验证节点内容
+	// Verify node content
 	for i, originalNode := range hnsw.nodes {
 		if i >= len(loadedHNSW.nodes) {
 			t.Errorf("Missing node at index %d", i)
@@ -84,17 +84,17 @@ func TestHNSWStorageBasic(t *testing.T) {
 
 		loadedNode := loadedHNSW.nodes[i]
 
-		// 验证节点ID
+		// Verify node ID
 		if loadedNode.ID() != originalNode.ID() {
 			t.Errorf("Node %d ID mismatch: got %d, want %d", i, loadedNode.ID(), originalNode.ID())
 		}
 
-		// 验证节点级别
+		// Verify node level
 		if loadedNode.Level() != originalNode.Level() {
 			t.Errorf("Node %d level mismatch: got %d, want %d", i, loadedNode.Level(), originalNode.Level())
 		}
 
-		// 验证向量
+		// Verify vector
 		originalVec := originalNode.Vector()
 		loadedVec := loadedNode.Vector()
 		if len(loadedVec) != len(originalVec) {
@@ -108,7 +108,7 @@ func TestHNSWStorageBasic(t *testing.T) {
 			}
 		}
 
-		// 验证连接关系
+		// Verify connections
 		for layer := 0; layer <= originalNode.Level(); layer++ {
 			originalConnections := originalNode.GetConnections(layer)
 			loadedConnections := loadedNode.GetConnections(layer)
@@ -119,7 +119,7 @@ func TestHNSWStorageBasic(t *testing.T) {
 				continue
 			}
 
-			// 转换为map进行比较（顺序可能不同）
+			// Convert to map for comparison (order may differ)
 			originalSet := make(map[int]bool)
 			for _, conn := range originalConnections {
 				originalSet[conn] = true
@@ -133,7 +133,7 @@ func TestHNSWStorageBasic(t *testing.T) {
 		}
 	}
 
-	// 测试搜索功能是否正常
+	// Test search functionality
 	queryVector := []float32{2.5, 3.5, 4.5, 5.5}
 	results, err := loadedHNSW.Search(queryVector, 3, 50)
 	if err != nil {
@@ -148,7 +148,7 @@ func TestHNSWStorageBasic(t *testing.T) {
 }
 
 func TestHNSWStorageEmptyIndex(t *testing.T) {
-	// 测试空HNSW的持久化
+	// Test persistence of empty HNSW
 	tempDir := t.TempDir()
 
 	config := Config{
@@ -160,7 +160,7 @@ func TestHNSWStorageEmptyIndex(t *testing.T) {
 
 	hnsw := NewHNSW(config)
 
-	// 尝试保存空索引应该失败
+	// Attempting to save empty index should fail
 	err := hnsw.SaveToLance(tempDir)
 	if err == nil {
 		t.Error("Expected error when saving empty HNSW, but got none")
@@ -173,7 +173,7 @@ func TestHNSWStorageEmptyIndex(t *testing.T) {
 }
 
 func TestHNSWStorageLargeDataset(t *testing.T) {
-	// 测试较大数据集的持久化
+	// Test persistence of larger dataset
 	tempDir := t.TempDir()
 
 	config := Config{
@@ -185,7 +185,7 @@ func TestHNSWStorageLargeDataset(t *testing.T) {
 
 	hnsw := NewHNSW(config)
 
-	// 添加100个向量
+	// Add 100 vectors
 	numVectors := 100
 	for i := 0; i < numVectors; i++ {
 		vector := make([]float32, 128)
@@ -199,7 +199,7 @@ func TestHNSWStorageLargeDataset(t *testing.T) {
 		}
 	}
 
-	// 保存和加载
+	// Save and load
 	if err := hnsw.SaveToLance(tempDir); err != nil {
 		t.Fatalf("Failed to save large HNSW: %v", err)
 	}
@@ -209,12 +209,12 @@ func TestHNSWStorageLargeDataset(t *testing.T) {
 		t.Fatalf("Failed to load large HNSW: %v", err)
 	}
 
-	// 基本验证
+	// Basic verification
 	if len(loadedHNSW.nodes) != numVectors {
 		t.Errorf("Node count mismatch: got %d, want %d", len(loadedHNSW.nodes), numVectors)
 	}
 
-	// 验证搜索功能
+	// Verify search functionality
 	queryVector := make([]float32, 128)
 	for j := 0; j < 128; j++ {
 		queryVector[j] = 0.5
@@ -234,19 +234,19 @@ func TestHNSWStorageLargeDataset(t *testing.T) {
 }
 
 func TestHNSWStorageHighDimensional(t *testing.T) {
-	// 测试高维向量（模拟真实的嵌入向量）
+	// Test high-dimensional vectors (simulating real embeddings)
 	tempDir := t.TempDir()
 
 	config := Config{
 		M:              16,
 		EfConstruction: 200,
-		Dimension:      768, // 常见的BERT嵌入维度
+		Dimension:      768, // Common BERT embedding dimension
 		DistanceFunc:   L2Distance,
 	}
 
 	hnsw := NewHNSW(config)
 
-	// 添加10个高维向量
+	// Add 10 high-dimensional vectors
 	numVectors := 10
 	for i := 0; i < numVectors; i++ {
 		vector := make([]float32, 768)
@@ -260,23 +260,23 @@ func TestHNSWStorageHighDimensional(t *testing.T) {
 		}
 	}
 
-	// 保存
+	// Save
 	if err := hnsw.SaveToLance(tempDir); err != nil {
 		t.Fatalf("Failed to save high-dim HNSW: %v", err)
 	}
 
-	// 加载
+	// Load
 	loadedHNSW, err := LoadHNSWFromLance(tempDir)
 	if err != nil {
 		t.Fatalf("Failed to load high-dim HNSW: %v", err)
 	}
 
-	// 验证维度
+	// Verify dimension
 	if loadedHNSW.dimension != 768 {
 		t.Errorf("Dimension mismatch: got %d, want 768", loadedHNSW.dimension)
 	}
 
-	// 验证向量数据完整性
+	// Verify vector data integrity
 	for i := 0; i < numVectors; i++ {
 		originalVec := hnsw.nodes[i].Vector()
 		loadedVec := loadedHNSW.nodes[i].Vector()
@@ -285,7 +285,7 @@ func TestHNSWStorageHighDimensional(t *testing.T) {
 			t.Errorf("Node %d vector dimension mismatch: got %d, want 768", i, len(loadedVec))
 		}
 
-		// 抽样验证几个值
+		// Sample verify a few values
 		for j := 0; j < 768; j += 100 {
 			if originalVec[j] != loadedVec[j] {
 				t.Errorf("Node %d vector[%d] mismatch: got %f, want %f",
@@ -298,11 +298,11 @@ func TestHNSWStorageHighDimensional(t *testing.T) {
 }
 
 func TestHNSWStorageConnectionIntegrity(t *testing.T) {
-	// 专门测试连接关系的完整性
+	// Specifically test connection integrity
 	tempDir := t.TempDir()
 
 	config := Config{
-		M:              4, // 较小的M值，更容易测试连接
+		M:              4, // Smaller M value, easier to test connections
 		EfConstruction: 100,
 		Dimension:      3,
 		DistanceFunc:   L2Distance,
@@ -310,7 +310,7 @@ func TestHNSWStorageConnectionIntegrity(t *testing.T) {
 
 	hnsw := NewHNSW(config)
 
-	// 添加足够多的向量以产生多层级结构
+	// Add enough vectors to create multi-level structure
 	vectors := [][]float32{
 		{1.0, 0.0, 0.0},
 		{0.0, 1.0, 0.0},
@@ -331,7 +331,7 @@ func TestHNSWStorageConnectionIntegrity(t *testing.T) {
 		}
 	}
 
-	// 计算原始总连接数
+	// Calculate original total connections
 	originalTotalConnections := 0
 	for _, node := range hnsw.nodes {
 		for layer := 0; layer <= node.Level(); layer++ {
@@ -339,7 +339,7 @@ func TestHNSWStorageConnectionIntegrity(t *testing.T) {
 		}
 	}
 
-	// 保存和加载
+	// Save and load
 	if err := hnsw.SaveToLance(tempDir); err != nil {
 		t.Fatalf("Failed to save HNSW: %v", err)
 	}
@@ -349,7 +349,7 @@ func TestHNSWStorageConnectionIntegrity(t *testing.T) {
 		t.Fatalf("Failed to load HNSW: %v", err)
 	}
 
-	// 计算加载后的总连接数
+	// Calculate total connections after loading
 	loadedTotalConnections := 0
 	for _, node := range loadedHNSW.nodes {
 		for layer := 0; layer <= node.Level(); layer++ {
@@ -362,7 +362,7 @@ func TestHNSWStorageConnectionIntegrity(t *testing.T) {
 			loadedTotalConnections, originalTotalConnections)
 	}
 
-	// 验证每个节点的连接
+	// Verify connections of each node
 	for i, originalNode := range hnsw.nodes {
 		loadedNode := loadedHNSW.nodes[i]
 
@@ -370,7 +370,7 @@ func TestHNSWStorageConnectionIntegrity(t *testing.T) {
 			originalConns := originalNode.GetConnections(layer)
 			loadedConns := loadedNode.GetConnections(layer)
 
-			// 构建集合进行比较
+			// Build sets for comparison
 			originalSet := make(map[int]bool)
 			for _, conn := range originalConns {
 				originalSet[conn] = true
@@ -381,7 +381,7 @@ func TestHNSWStorageConnectionIntegrity(t *testing.T) {
 				loadedSet[conn] = true
 			}
 
-			// 检查是否完全一致
+			// Check if completely consistent
 			if len(originalSet) != len(loadedSet) {
 				t.Errorf("Node %d layer %d connection set size mismatch: got %d, want %d",
 					i, layer, len(loadedSet), len(originalSet))
@@ -406,7 +406,7 @@ func TestHNSWStorageConnectionIntegrity(t *testing.T) {
 }
 
 func TestHNSWStorageMultipleSaveLoad(t *testing.T) {
-	// 测试多次保存和加载
+	// Test multiple save and load
 	tempDir := t.TempDir()
 
 	config := Config{
@@ -416,7 +416,7 @@ func TestHNSWStorageMultipleSaveLoad(t *testing.T) {
 		DistanceFunc:   L2Distance,
 	}
 
-	// 第一次：创建并保存
+	// First: create and save
 	hnsw1 := NewHNSW(config)
 	for i := 0; i < 5; i++ {
 		vec := []float32{float32(i), float32(i + 1), float32(i + 2), float32(i + 3)}
@@ -427,7 +427,7 @@ func TestHNSWStorageMultipleSaveLoad(t *testing.T) {
 		t.Fatalf("First save failed: %v", err)
 	}
 
-	// 第二次：加载并验证
+	// Second: load and verify
 	hnsw2, err := LoadHNSWFromLance(tempDir)
 	if err != nil {
 		t.Fatalf("First load failed: %v", err)
@@ -437,13 +437,13 @@ func TestHNSWStorageMultipleSaveLoad(t *testing.T) {
 		t.Errorf("After first load: got %d nodes, want 5", len(hnsw2.nodes))
 	}
 
-	// 第三次：再次保存同样的数据到新目录
+	// Third: save same data to new directory
 	tempDir2 := t.TempDir()
 	if err := hnsw2.SaveToLance(tempDir2); err != nil {
 		t.Fatalf("Second save failed: %v", err)
 	}
 
-	// 第四次：加载并验证
+	// Fourth: load and verify
 	hnsw3, err := LoadHNSWFromLance(tempDir2)
 	if err != nil {
 		t.Fatalf("Second load failed: %v", err)
@@ -453,7 +453,7 @@ func TestHNSWStorageMultipleSaveLoad(t *testing.T) {
 		t.Errorf("After second load: got %d nodes, want 5", len(hnsw3.nodes))
 	}
 
-	// 验证向量数据一致性
+	// Verify vector data consistency
 	for i := 0; i < 5; i++ {
 		vec1 := hnsw1.nodes[i].Vector()
 		vec3 := hnsw3.nodes[i].Vector()
@@ -469,7 +469,7 @@ func TestHNSWStorageMultipleSaveLoad(t *testing.T) {
 }
 
 func TestHNSWStorageSearchConsistency(t *testing.T) {
-	// 测试保存/加载后搜索结果的一致性
+	// Test search result consistency after save/load
 	tempDir := t.TempDir()
 
 	config := Config{
@@ -481,7 +481,7 @@ func TestHNSWStorageSearchConsistency(t *testing.T) {
 
 	hnsw := NewHNSW(config)
 
-	// 添加测试向量
+	// Add test vectors
 	numVectors := 50
 	for i := 0; i < numVectors; i++ {
 		vector := make([]float32, 8)
@@ -491,14 +491,14 @@ func TestHNSWStorageSearchConsistency(t *testing.T) {
 		hnsw.Add(vector)
 	}
 
-	// 在保存前执行搜索
+	// Execute search before save
 	queryVector := []float32{2.5, 2.6, 2.7, 2.8, 2.9, 3.0, 3.1, 3.2}
 	originalResults, err := hnsw.Search(queryVector, 5, 100)
 	if err != nil {
 		t.Fatalf("Original search failed: %v", err)
 	}
 
-	// 保存和加载
+	// Save and load
 	if err := hnsw.SaveToLance(tempDir); err != nil {
 		t.Fatalf("Save failed: %v", err)
 	}
@@ -508,26 +508,26 @@ func TestHNSWStorageSearchConsistency(t *testing.T) {
 		t.Fatalf("Load failed: %v", err)
 	}
 
-	// 在加载后执行相同的搜索
+	// Execute same search after load
 	loadedResults, err := loadedHNSW.Search(queryVector, 5, 100)
 	if err != nil {
 		t.Fatalf("Loaded search failed: %v", err)
 	}
 
-	// 验证搜索结果一致性
+	// Verify search result consistency
 	if len(loadedResults) != len(originalResults) {
 		t.Errorf("Search result count mismatch: got %d, want %d",
 			len(loadedResults), len(originalResults))
 	}
 
-	// 验证前几个结果的ID和距离
+	// Verify IDs and distances of first few results
 	for i := 0; i < min(len(originalResults), len(loadedResults)); i++ {
 		if originalResults[i].ID != loadedResults[i].ID {
 			t.Errorf("Result %d ID mismatch: got %d, want %d",
 				i, loadedResults[i].ID, originalResults[i].ID)
 		}
 
-		// 距离应该非常接近（允许浮点误差）
+		// Distances should be very close (allow floating point error)
 		distDiff := abs(originalResults[i].Distance - loadedResults[i].Distance)
 		if distDiff > 1e-5 {
 			t.Errorf("Result %d distance mismatch: got %f, want %f (diff: %f)",
@@ -538,7 +538,7 @@ func TestHNSWStorageSearchConsistency(t *testing.T) {
 	t.Logf("✓ Search consistency test passed: results match after save/load")
 }
 
-// 辅助函数
+// Helper function
 func abs(x float32) float32 {
 	if x < 0 {
 		return -x

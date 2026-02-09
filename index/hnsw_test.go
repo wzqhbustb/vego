@@ -299,7 +299,7 @@ func TestConcurrentInsertAndSearch(t *testing.T) {
 		}(i)
 	}
 
-	// 并发搜索
+	// Concurrent search
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func(id int) {
@@ -539,7 +539,7 @@ func TestRecall(t *testing.T) {
 	}
 }
 
-// 暴力搜索（ground truth）
+// Brute force search (ground truth)
 func bruteForceSearch(query []float32, vectors [][]float32, k int) []SearchResult {
 	results := make([]SearchResult, len(vectors))
 	for i, vec := range vectors {
@@ -558,7 +558,7 @@ func bruteForceSearch(query []float32, vectors [][]float32, k int) []SearchResul
 	return results
 }
 
-// 计算召回率
+// Calculate recall rate
 func calculateRecall(hnswResults, groundTruth []SearchResult) float64 {
 	if len(hnswResults) == 0 || len(groundTruth) == 0 {
 		return 0
@@ -636,7 +636,7 @@ func TestDifferentM(t *testing.T) {
 
 		index := NewHNSW(config)
 
-		// 添加数据
+		// Add data
 		numVectors := 500
 		for i := 0; i < numVectors; i++ {
 			vector := make([]float32, 64)
@@ -729,7 +729,7 @@ func BenchmarkHNSWSearchDifferentEf(b *testing.B) {
 
 	index := NewHNSW(config)
 
-	// 预先添加数据
+	// Pre-add data
 	for i := 0; i < 10000; i++ {
 		vector := make([]float32, 128)
 		for j := range vector {

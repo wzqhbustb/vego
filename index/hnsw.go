@@ -143,16 +143,16 @@ func (h *HNSWIndex) randomLevel() int {
 	uniform := h.rng.Float64()
 	// Calculate the level using the negative logarithm
 
-	// 使用指数分布生成层级，模拟 skip list 的概率层级
-	// 公式: level = floor(-ln(U) * ml), 其中 U ~ Uniform(0,1), ml = 1/ln(M)
-	// 保证 P(level >= L) = (1/M)^L，即高层节点呈指数衰减
-	// 例如 M=16 时：
-	//   - 约 93.75% 节点在第 0 层
-	//   - 约 6.25% 节点在第 1 层
-	//   - 约 0.39% 节点在第 2 层
+	// Generate level using exponential distribution, simulating skip list's probabilistic layering
+	// Formula: level = floor(-ln(U) * ml), where U ~ Uniform(0,1), ml = 1/ln(M)
+	// Ensures P(level >= L) = (1/M)^L, meaning higher level nodes decay exponentially
+	// For example, when M=16:
+	//   - ~93.75% nodes at level 0
+	//   - ~6.25% nodes at level 1
+	//   - ~0.39% nodes at level 2
 	level := int(math.Floor(-math.Log(uniform) * h.ml))
 
-	maxLevel := 16 // 足够大，实际很少超过 10 层
+	maxLevel := 16 // Large enough, rarely exceeds 10 levels in practice
 	if level > maxLevel {
 		level = maxLevel
 	}
@@ -165,7 +165,7 @@ type SearchResult struct {
 	Distance float32
 }
 
-// 辅助函数
+// Helper function
 func max(a, b int) int {
 	if a > b {
 		return a
