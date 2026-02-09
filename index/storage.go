@@ -58,6 +58,11 @@ func (h *HNSWIndex) SaveToLance(baseDir string) error {
 	h.globalLock.RLock()
 	defer h.globalLock.RUnlock()
 
+	// Ensure base directory exists
+	if err := os.MkdirAll(baseDir, 0755); err != nil {
+		return fmt.Errorf("create directory failed: %w", err)
+	}
+
 	// Save node data
 	if err := h.saveNodes(filepath.Join(baseDir, "nodes.lance")); err != nil {
 		return fmt.Errorf("save nodes failed: %w", err)

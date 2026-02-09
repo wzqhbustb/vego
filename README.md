@@ -74,7 +74,7 @@ package main
 
 import (
     "fmt"
-    "github.com/wzqhbustb/vego/index"
+    hnsw "github.com/wzqhbustb/vego/index"
 )
 
 func main() {
@@ -219,35 +219,79 @@ metadata.lance    # Metadata: M, Dimension, EntryPoint, etc.
 
 ## 📊 Performance Benchmarks
 
-Test Environment: Apple M3 Pro, 18GB RAM
+Test Environment: Intel Core i9-13950HX, Linux amd64, Go 1.23
+---
 
-### Index Build Performance
+### Storage Layer Performance
 
-| Dataset Size | Dimension | Build Time | Memory Usage |
-|-----------|------|----------|----------|
-| 10,000 | 128 | 0.12s | 2.1MB |
-| 100,000 | 128 | 1.8s | 18MB |
-| 1,000,000 | 128 | 25s | 175MB |
+#### Memory Access (Arrow Layer)
 
-### Query Performance (Single-threaded)
- RAGSystem struct {
-    index   *hnsw.HNSWIndex
-    client  *api.Client
-}
+| Operation | Latency | Allocations | Throughput |
+|-----------|---------|-------------|------------|
+| Int32 Array Access | 2.2 ns/op | 0 | ~450M ops/s |
+| Float32 Array Access | 1.3 ns/op | 0 | ~770M ops/s |
+| Buffer View (Zero-Copy) | 1.2 ns/op | 0 | ~830M ops/s |
+| RecordBatch Creation | 220 μs | 21 allocs | - |
 
-func (r *RAGSystem) AddDocument(ctx context.Context, text string) error {
-    // Generate embedding using Ollama
-    embedding, err := r.getEmbedding(ctx, text)
-    if err != nil {
-        return err
-    }
-    _, err = r.index.Add(embedding)
-    return err
-}
+#### Encoding Performance
 
-func (r *RAGSystem) Query(ctx context.Context, question string) (string, error) {
-    // 1. Vectorize the question
-    ] Quantization support (PQ/SQ)
+Encoding transforms Arrow arrays into compressed binary formats. Smaller is better for latency.
+
+| Encoding | Encode | Decode | Compression | Best For |
+|----------|--------|--------|-------------|----------|
+| **RLE** | 10 μs | 39 μs | High | Sequential data (timestamps) |
+| **ZSTD** | 23 μs | 62 μs | Very High | General purpose |
+| **BitPacking** | 50 μs | 88 μs | Medium | Integer arrays |
+| **BSS** | 48 μs | 48 μs | Medium | Float32 vectors |
+| **Dictionary** | 92 μs | 50 μs | High* | Low cardinality data |
+
+\* *Dictionary encoding degrades to ~650 μs for high cardinality data (>10K unique values)*
+
+#### File I/O Throughput
+
+Columnar file format (`.lance`) read/write performance:
+
+| Operation | Rows | Columns | Throughput | Latency |
+|-----------|------|---------|------------|---------|
+| **Write** | 10K | 1 | ~330 MB/s | 12 μs |
+| **Write** | 100K | 10 | ~280 MB/s | 1.4 ms |
+| **Read** | 10K | 1 | ~250 MB/s | 16 μs |
+| **Read** | 100K | 10 | ~220 MB/s | 1.8 ms |
+| **Roundtrip** | 10K | 5 | - | 890 μs |
+
+#### Concurrency & Async I/O
+
+The storage layer supports both synchronous and asynchronous I/O:
+
+| Mode | Concurrency | Latency (1 col) | Memory | Use Case |
+|------|-------------|-----------------|--------|----------|
+| **Sync** | 1 | 1.9 ms | 1.2 MB | Simple sequential access |
+| **Async** | 1 | 2.0 ms | 2.4 MB | - |
+| **Async** | 8 | 23 ms | 27 MB | Parallel column reads |
+| **Async** | 16 | 35 ms | 52 MB | High parallelism |
+
+> **⚠️ Note**: Current async I/O implementation shows linear latency increase with concurrency due to scheduling overhead. For most workloads, synchronous I/O is recommended until this is optimized.
+
+---
+
+### Comparative Summary
+
+| Feature | Vego | Typical Vector DB (Milvus/Qdrant) |
+|---------|------|-----------------------------------|
+| **Memory Overhead** | ~200MB per 1M vectors (128-dim) | 500MB-1GB+ |
+| **Query Latency (100K)** | <0.2ms P99 | 1-5ms |
+| **Cold Start (Load)** | <2s (100K vectors) | 5-30s |
+| **Binary Size** | Single static binary (~10MB) | 100MB+ with dependencies |
+| **CGO Dependency** | None | Often required (FAISS, RocksDB) |
+
+---
+
+## 🗺️ Roadmap
+
+- [x] HNSW index with configurable parameters
+- [x] Lance-compatible columnar storage
+- [x] ZSTD, BitPacking, RLE encoding
+- [ ] Quantization support (PQ/SQ)
 - [ ] Distributed index
 
 ---
