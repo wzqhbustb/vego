@@ -67,7 +67,7 @@ func NewHNSW(config Config) *HNSWIndex {
 		ml:             ml,
 		dimension:      config.Dimension,
 		nodes:          make([]*Node, 0, 10000),
-		entryPoint:     -1, // -1 表示还没有节点
+		entryPoint:     -1, // -1 means no nodes yet
 		maxLevel:       -1,
 		distFunc:       config.DistanceFunc,
 		rng:            rand.New(rand.NewSource(config.Seed)),

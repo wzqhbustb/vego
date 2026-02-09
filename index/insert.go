@@ -10,23 +10,23 @@ func (h *HNSWIndex) insert(newNode *Node) {
 	newNodeLevel := newNode.Level()
 	newNodeID := newNode.ID()
 
-	// 阶段1：从顶层到 newNodeLevel+1，使用贪心搜索找到入口点
+	// Phase 1: From top layer to newNodeLevel+1, use greedy search to find entry point
 	currentNearest := ep
 	for lc := maxLvl; lc > newNodeLevel; lc-- {
 		nearest := h.searchLayer(newNode.Vector(), currentNearest, 1, lc)
 		if len(nearest) == 0 {
-			// 理论上不会发生，但添加保护
+			// Theoretically won't happen, but add protection
 			break
 		}
 		currentNearest = nearest[0].ID
 	}
 
-	// 阶段2：从 newNodeLevel 到第 0 层，建立连接
+	// Phase 2: From newNodeLevel to layer 0, establish connections
 	for lc := min(newNodeLevel, maxLvl); lc >= 0; lc-- {
-		// 在当前层搜索最近邻
+		// Search for nearest neighbors at current layer
 		candidates := h.searchLayer(newNode.Vector(), currentNearest, h.efConstruction, lc)
 
-		// 选择 M 个邻居（启发式剪枝）
+		// Select M neighbors (heuristic pruning)
 		m := h.Mmax
 		if lc == 0 {
 			m = h.Mmax0
@@ -34,23 +34,23 @@ func (h *HNSWIndex) insert(newNode *Node) {
 
 		neighbors := h.selectNeighborsHeuristic(newNode.Vector(), candidates, m)
 
-		// 添加双向连接
+		// Add bidirectional connections
 		for _, neighbor := range neighbors {
-			// 新节点 -> 邻居
+			// New node -> neighbor
 			newNode.AddConnection(lc, neighbor.ID)
 
-			// 邻居 -> 新节点
+			// Neighbor -> new node
 			neighborNode := h.nodes[neighbor.ID]
 			neighborNode.AddConnection(lc, newNodeID)
 
-			// 如果邻居的连接数超过限制，需要剪枝
+			// If neighbor's connection count exceeds limit, pruning is needed
 			maxConn := h.Mmax
 			if lc == 0 {
 				maxConn = h.Mmax0
 			}
 
 			if neighborNode.ConnectionCount(lc) > maxConn {
-				// 重新选择邻居
+				// Reselect neighbors
 				neighborConnections := neighborNode.GetConnections(lc)
 				candidatesForPrune := make([]SearchResult, len(neighborConnections))
 
@@ -68,13 +68,13 @@ func (h *HNSWIndex) insert(newNode *Node) {
 			}
 		}
 
-		// 更新下一层的入口点
+		// Update entry point for next layer
 		if len(neighbors) > 0 {
 			currentNearest = neighbors[0].ID
 		}
 	}
 
-	// 如果新节点的层级更高，更新全局入口点和最大层级
+	// If new node's level is higher, update global entry point and max level
 	if newNodeLevel > maxLvl {
 		h.globalLock.Lock()
 		h.entryPoint = int32(newNodeID)

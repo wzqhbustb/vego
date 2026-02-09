@@ -10,7 +10,7 @@ import (
 )
 
 func TestHNSWBasic(t *testing.T) {
-	// 创建索引
+	// Create index
 	config := Config{
 		M:              16,
 		EfConstruction: 200,
@@ -21,7 +21,7 @@ func TestHNSWBasic(t *testing.T) {
 
 	index := NewHNSW(config)
 
-	// 添加一些向量
+	// Add some vectors
 	numVectors := 1000
 	vectors := make([][]float32, numVectors)
 
@@ -42,7 +42,7 @@ func TestHNSWBasic(t *testing.T) {
 		}
 	}
 
-	// 测试搜索
+	// Test search
 	query := vectors[0]
 	k := 10
 	results, err := index.Search(query, k, 0)
@@ -55,7 +55,7 @@ func TestHNSWBasic(t *testing.T) {
 		t.Errorf("Expected %d results, got %d", k, len(results))
 	}
 
-	// 第一个结果应该是查询向量本身（距离为0）
+	// First result should be the query vector itself (distance is 0)
 	if results[0].ID != 0 {
 		t.Errorf("Expected first result to be ID 0, got %d", results[0].ID)
 	}
@@ -87,14 +87,14 @@ func TestDistanceFunctions(t *testing.T) {
 	a := []float32{1, 2, 3}
 	b := []float32{4, 5, 6}
 
-	// L2 距离
+	// L2 distance
 	l2 := L2Distance(a, b)
 	expected := float32(27) // (1-4)^2 + (2-5)^2 + (3-6)^2 = 9+9+9 = 27
 	if l2 != expected {
 		t.Errorf("L2Distance: expected %f, got %f", expected, l2)
 	}
 
-	// 内积距离
+	// Inner product distance
 	ip := InnerProductDistance(a, b)
 	expectedIP := float32(-32) // -(1*4 + 2*5 + 3*6) = -(4+10+18) = -32
 	if ip != expectedIP {
@@ -130,7 +130,7 @@ func BenchmarkHNSWSearch(b *testing.B) {
 
 	index := NewHNSW(config)
 
-	// 预先添加一些向量
+	// Pre-add some vectors
 	for i := 0; i < 10000; i++ {
 		vector := make([]float32, 128)
 		for j := range vector {
@@ -187,12 +187,12 @@ func TestConcurrentInsert(t *testing.T) {
 	wg.Wait()
 	close(errors)
 
-	// 检查是否有错误
+	// Check for errors
 	for err := range errors {
 		t.Errorf("Concurrent insert error: %v", err)
 	}
 
-	// 验证索引大小
+	// Verify index size
 	if index.Len() != totalVectors {
 		t.Errorf("Expected %d vectors, got %d", totalVectors, index.Len())
 	}
@@ -209,7 +209,7 @@ func TestConcurrentSearch(t *testing.T) {
 
 	index := NewHNSW(config)
 
-	// 预先添加数据
+	// Pre-add data
 	numVectors := 1000
 	for i := 0; i < numVectors; i++ {
 		vector := make([]float32, 128)
@@ -219,7 +219,7 @@ func TestConcurrentSearch(t *testing.T) {
 		index.Add(vector)
 	}
 
-	// 并发搜索
+	// Concurrent search
 	numGoroutines := 20
 	searchesPerGoroutine := 50
 
@@ -251,7 +251,7 @@ func TestConcurrentSearch(t *testing.T) {
 	wg.Wait()
 	close(errors)
 
-	// 检查是否有错误
+	// Check for errors
 	for err := range errors {
 		t.Errorf("Concurrent search error: %v", err)
 	}
@@ -268,7 +268,7 @@ func TestConcurrentInsertAndSearch(t *testing.T) {
 
 	index := NewHNSW(config)
 
-	// 预先添加一些数据
+	// Pre-add some data
 	for i := 0; i < 500; i++ {
 		vector := make([]float32, 128)
 		for j := range vector {
@@ -280,7 +280,7 @@ func TestConcurrentInsertAndSearch(t *testing.T) {
 	var wg sync.WaitGroup
 	errors := make(chan error, 20)
 
-	// 并发插入
+	// Concurrent insert
 	for i := 0; i < 5; i++ {
 		wg.Add(1)
 		go func(id int) {
@@ -321,7 +321,7 @@ func TestConcurrentInsertAndSearch(t *testing.T) {
 	wg.Wait()
 	close(errors)
 
-	// 检查是否有错误
+	// Check for errors
 	for err := range errors {
 		t.Errorf("Concurrent operation error: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestConcurrentInsertAndSearch(t *testing.T) {
 	t.Logf("Successfully performed concurrent inserts and searches. Final index size: %d", index.Len())
 }
 
-// ==================== 数据隔离测试 ====================
+// ==================== Data Isolation Tests ====================
 
 func TestVectorIsolation(t *testing.T) {
 	config := Config{
@@ -340,27 +340,27 @@ func TestVectorIsolation(t *testing.T) {
 
 	index := NewHNSW(config)
 
-	// 测试 Add 的隔离性
+	// Test Add isolation
 	vector := []float32{1, 2, 3}
 	id, err := index.Add(vector)
 	if err != nil {
 		t.Fatalf("Failed to add vector: %v", err)
 	}
 
-	// 修改原始向量
+	// Modify original vector
 	vector[0] = 999
 
-	// 验证索引中的向量未被修改
+	// Verify vector in index was not modified
 	storedVec := index.nodes[id].Vector()
 	if storedVec[0] != 1 {
 		t.Errorf("Vector was modified externally! Expected 1, got %f", storedVec[0])
 	}
 
-	// 测试 Vector() 的隔离性
+	// Test Vector() isolation
 	returnedVec := index.nodes[id].Vector()
 	returnedVec[0] = 888
 
-	// 验证内部向量未被修改
+	// Verify internal vector was not modified
 	vec2 := index.nodes[id].Vector()
 	if vec2[0] != 1 {
 		t.Errorf("Internal vector was modified! Expected 1, got %f", vec2[0])
@@ -369,7 +369,7 @@ func TestVectorIsolation(t *testing.T) {
 	t.Log("Vector isolation test passed")
 }
 
-// ==================== 边界测试 ====================
+// ==================== Edge Case Tests ====================
 
 func TestDimensionMismatch(t *testing.T) {
 	config := Config{
@@ -380,21 +380,21 @@ func TestDimensionMismatch(t *testing.T) {
 
 	index := NewHNSW(config)
 
-	// 测试 Add 时维度不匹配
+	// Test dimension mismatch during Add
 	wrongVector := make([]float32, 64)
 	_, err := index.Add(wrongVector)
 	if err != ErrDimensionMismatch {
 		t.Errorf("Expected ErrDimensionMismatch, got %v", err)
 	}
 
-	// 添加正确维度的向量
+	// Add vector with correct dimension
 	correctVector := make([]float32, 128)
 	for i := range correctVector {
 		correctVector[i] = rand.Float32()
 	}
 	index.Add(correctVector)
 
-	// 测试 Search 时维度不匹配
+	// Test dimension mismatch during Search
 	wrongQuery := make([]float32, 64)
 	_, err = index.Search(wrongQuery, 10, 0)
 	if err != ErrDimensionMismatch {
@@ -413,7 +413,7 @@ func TestSingleVector(t *testing.T) {
 
 	index := NewHNSW(config)
 
-	// 只添加一个向量
+	// Add only one vector
 	vector := make([]float32, 128)
 	for i := range vector {
 		vector[i] = rand.Float32()
@@ -423,7 +423,7 @@ func TestSingleVector(t *testing.T) {
 		t.Fatalf("Failed to add vector: %v", err)
 	}
 
-	// 搜索
+	// Search
 	results, err := index.Search(vector, 5, 0)
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
@@ -449,7 +449,7 @@ func TestLargeK(t *testing.T) {
 
 	index := NewHNSW(config)
 
-	// 添加 100 个向量
+	// Add 100 vectors
 	numVectors := 100
 	for i := 0; i < numVectors; i++ {
 		vector := make([]float32, 128)
@@ -459,7 +459,7 @@ func TestLargeK(t *testing.T) {
 		index.Add(vector)
 	}
 
-	// 搜索 k > 实际向量数
+	// Search with k > actual vector count
 	query := make([]float32, 128)
 	for i := range query {
 		query[i] = rand.Float32()
@@ -470,7 +470,7 @@ func TestLargeK(t *testing.T) {
 		t.Fatalf("Search failed: %v", err)
 	}
 
-	// 应该返回所有向量
+	// Should return all vectors
 	if len(results) != numVectors {
 		t.Errorf("Expected %d results, got %d", numVectors, len(results))
 	}
@@ -478,7 +478,7 @@ func TestLargeK(t *testing.T) {
 	t.Logf("Large k test passed: requested 200, got %d", len(results))
 }
 
-// ==================== 召回率测试 ====================
+// ==================== Recall Tests ====================
 
 func TestRecall(t *testing.T) {
 	config := Config{
@@ -490,7 +490,7 @@ func TestRecall(t *testing.T) {
 
 	index := NewHNSW(config)
 
-	// 生成测试数据
+	// Generate test data
 	numVectors := 1000
 	vectors := make([][]float32, numVectors)
 	rand.Seed(42)
@@ -504,7 +504,7 @@ func TestRecall(t *testing.T) {
 		index.Add(vector)
 	}
 
-	// 生成测试查询
+	// Generate test queries
 	numQueries := 100
 	k := 10
 
@@ -516,16 +516,16 @@ func TestRecall(t *testing.T) {
 			query[i] = rand.Float32()
 		}
 
-		// HNSW 搜索
+		// HNSW search
 		hnswResults, err := index.Search(query, k, 100)
 		if err != nil {
 			t.Fatalf("HNSW search failed: %v", err)
 		}
 
-		// 暴力搜索（ground truth）
+		// Brute force search (ground truth)
 		groundTruth := bruteForceSearch(query, vectors, k)
 
-		// 计算召回率
+		// Calculate recall
 		recall := calculateRecall(hnswResults, groundTruth)
 		totalRecall += recall
 	}
@@ -533,7 +533,7 @@ func TestRecall(t *testing.T) {
 	avgRecall := totalRecall / float64(numQueries)
 	t.Logf("Average Recall@%d: %.2f%%", k, avgRecall*100)
 
-	// 召回率应该 > 90%
+	// Recall should be > 90%
 	if avgRecall < 0.90 {
 		t.Errorf("Recall too low: %.2f%%, expected > 90%%", avgRecall*100)
 	}
@@ -547,7 +547,7 @@ func bruteForceSearch(query []float32, vectors [][]float32, k int) []SearchResul
 		results[i] = SearchResult{ID: i, Distance: dist}
 	}
 
-	// 排序
+	// Sort
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Distance < results[j].Distance
 	})
@@ -564,13 +564,13 @@ func calculateRecall(hnswResults, groundTruth []SearchResult) float64 {
 		return 0
 	}
 
-	// 将 ground truth 转换为 map
+	// Convert ground truth to map
 	gtMap := make(map[int]bool)
 	for _, r := range groundTruth {
 		gtMap[r.ID] = true
 	}
 
-	// 计算命中数
+	// Calculate hits
 	hits := 0
 	for _, r := range hnswResults {
 		if gtMap[r.ID] {
@@ -581,7 +581,7 @@ func calculateRecall(hnswResults, groundTruth []SearchResult) float64 {
 	return float64(hits) / float64(len(groundTruth))
 }
 
-// ==================== 不同参数测试 ====================
+// ==================== Different Parameter Tests ====================
 
 func TestDifferentEf(t *testing.T) {
 	config := Config{
@@ -592,7 +592,7 @@ func TestDifferentEf(t *testing.T) {
 
 	index := NewHNSW(config)
 
-	// 添加数据
+	// Add data
 	numVectors := 1000
 	vectors := make([][]float32, numVectors)
 	for i := 0; i < numVectors; i++ {
@@ -607,7 +607,7 @@ func TestDifferentEf(t *testing.T) {
 	query := vectors[0]
 	k := 10
 
-	// 测试不同的 ef 值
+	// Test different ef values
 	efValues := []int{10, 50, 100, 200}
 
 	for _, ef := range efValues {
@@ -646,7 +646,7 @@ func TestDifferentM(t *testing.T) {
 			index.Add(vector)
 		}
 
-		// 测试搜索
+		// Test search
 		query := make([]float32, 64)
 		for i := range query {
 			query[i] = rand.Float32()
@@ -661,7 +661,7 @@ func TestDifferentM(t *testing.T) {
 	}
 }
 
-// ==================== 大规模测试 ====================
+// ==================== Large Scale Tests ====================
 
 func TestLargeScale(t *testing.T) {
 	if testing.Short() {
@@ -676,7 +676,7 @@ func TestLargeScale(t *testing.T) {
 
 	index := NewHNSW(config)
 
-	// 添加 10K 向量
+	// Add 10K vectors
 	numVectors := 10000
 	t.Logf("Adding %d vectors...", numVectors)
 
@@ -697,7 +697,7 @@ func TestLargeScale(t *testing.T) {
 
 	t.Logf("Index built with %d vectors", index.Len())
 
-	// 测试搜索性能
+	// Test search performance
 	numQueries := 100
 	k := 10
 
@@ -782,24 +782,24 @@ func BenchmarkDistanceFunctions(b *testing.B) {
 	})
 }
 
-// ==================== 特殊距离函数测试 ====================
+// ==================== Special Distance Function Tests ====================
 
 func TestCosineDistance(t *testing.T) {
-	// 测试相同向量
+	// Test same vectors
 	a := []float32{1, 0, 0}
 	dist := CosineDistance(a, a)
 	if math.Abs(float64(dist)) > 0.0001 {
 		t.Errorf("Cosine distance of same vector should be ~0, got %f", dist)
 	}
 
-	// 测试正交向量
+	// Test orthogonal vectors
 	b := []float32{0, 1, 0}
 	dist = CosineDistance(a, b)
 	if math.Abs(float64(dist-1.0)) > 0.0001 {
 		t.Errorf("Cosine distance of orthogonal vectors should be ~1, got %f", dist)
 	}
 
-	// 测试反向量
+	// Test opposite vectors
 	c := []float32{-1, 0, 0}
 	dist = CosineDistance(a, c)
 	if math.Abs(float64(dist-2.0)) > 0.0001 {

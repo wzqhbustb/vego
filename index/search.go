@@ -5,19 +5,19 @@ import (
 	"sort"
 )
 
-// 优先队列实现（最小堆）
+// PriorityQueue implements a min-heap
 type PriorityQueue []*Item
 
 type Item struct {
-	value    int     // 节点ID
-	priority float32 // 距离（优先级）
-	index    int     // 在堆中的索引
+	value    int     // Node ID
+	priority float32 // Distance (priority)
+	index    int     // Index in heap
 }
 
 func (pq PriorityQueue) Len() int { return len(pq) }
 
 func (pq PriorityQueue) Less(i, j int) bool {
-	return pq[i].priority < pq[j].priority // 最小堆
+	return pq[i].priority < pq[j].priority // Min-heap
 }
 
 func (pq PriorityQueue) Swap(i, j int) {
@@ -43,13 +43,13 @@ func (pq *PriorityQueue) Pop() interface{} {
 	return item
 }
 
-// 最大堆（用于维护结果集）
+// MaxHeap (used to maintain result set)
 type MaxHeap []*Item
 
 func (h MaxHeap) Len() int { return len(h) }
 
 func (h MaxHeap) Less(i, j int) bool {
-	return h[i].priority > h[j].priority // 最大堆
+	return h[i].priority > h[j].priority // Max-heap
 }
 
 func (h MaxHeap) Swap(i, j int) {
@@ -82,9 +82,9 @@ func (h *MaxHeap) Peek() interface{} {
 	return (*h)[0]
 }
 
-// search 在索引中搜索 k 个最近邻
+// search finds k nearest neighbors in the index
 func (h *HNSWIndex) search(query []float32, k int, ef int, ep int, topLevel int) ([]SearchResult, error) {
-	// 阶段1：从顶层到第1层，使用贪心搜索
+	// Phase 1: From top layer to layer 1, use greedy search
 	currentNearest := ep
 	for lc := topLevel; lc > 0; lc-- {
 		nearest := h.searchLayer(query, currentNearest, 1, lc)
@@ -93,10 +93,10 @@ func (h *HNSWIndex) search(query []float32, k int, ef int, ep int, topLevel int)
 		}
 	}
 
-	// 阶段2：在第0层使用 ef 进行搜索
+	// Phase 2: Search at layer 0 using ef
 	candidates := h.searchLayer(query, currentNearest, ef, 0)
 
-	// 返回前 k 个结果
+	// Return top k results
 	if len(candidates) > k {
 		return candidates[:k], nil
 	}
@@ -107,15 +107,15 @@ func (h *HNSWIndex) search(query []float32, k int, ef int, ep int, topLevel int)
 func (h *HNSWIndex) searchLayer(query []float32, ep int, ef int, level int) []SearchResult {
 	visited := make(map[int]bool)
 
-	// 候选集，最小堆，按距离从小到大
+	// Candidate set, min-heap, sorted by distance ascending
 	candidates := &PriorityQueue{}
 	heap.Init(candidates)
 
-	// 结果集，最大堆，按距离从大到小
+	// Result set, max-heap, sorted by distance descending
 	results := &MaxHeap{}
 	heap.Init(results)
 
-	// 计算入口点距离
+	// Calculate entry point distance
 	epDist := h.distFunc(query, h.nodes[ep].Vector())
 
 	heap.Push(candidates, &Item{value: ep, priority: epDist})
@@ -123,10 +123,10 @@ func (h *HNSWIndex) searchLayer(query []float32, ep int, ef int, level int) []Se
 	visited[ep] = true
 
 	for candidates.Len() > 0 {
-		// 取距离最近的候选点
+		// Get closest candidate
 		current := heap.Pop(candidates).(*Item)
 
-		// 优化：只在结果集满时检查
+		// Optimization: only check when result set is full
 		if results.Len() >= ef {
 			furthest := results.Peek().(*Item)
 			if current.priority > furthest.priority {
@@ -135,10 +135,10 @@ func (h *HNSWIndex) searchLayer(query []float32, ep int, ef int, level int) []Se
 		}
 
 		if current.value < 0 || current.value >= len(h.nodes) {
-			continue // 跳过无效节点
+			continue // Skip invalid nodes
 		}
 
-		// 检查当前节点的所有邻居
+		// Check all neighbors of current node
 		neighbors := h.nodes[current.value].GetConnections(level)
 
 		for _, neighborID := range neighbors {
@@ -147,15 +147,15 @@ func (h *HNSWIndex) searchLayer(query []float32, ep int, ef int, level int) []Se
 			}
 
 			if neighborID < 0 || neighborID >= len(h.nodes) {
-				continue // 跳过无效邻居
+				continue // Skip invalid neighbors
 			}
 
 			visited[neighborID] = true
 
-			// 计算距离
+			// Calculate distance
 			dist := h.distFunc(query, h.nodes[neighborID].Vector())
 
-			// 如果结果集未满，或者当前距离更近，添加到候选集
+			// If result set not full or current distance is closer, add to candidates
 			if results.Len() < ef {
 				heap.Push(candidates, &Item{value: neighborID, priority: dist})
 				heap.Push(results, &Item{value: neighborID, priority: dist})
@@ -170,7 +170,7 @@ func (h *HNSWIndex) searchLayer(query []float32, ep int, ef int, level int) []Se
 		}
 	}
 
-	// 转换为结果数组（从近到远排序）
+	// Convert to result array (sorted from nearest to farthest)
 	resultArray := make([]SearchResult, results.Len())
 	for i := results.Len() - 1; i >= 0; i-- {
 		item := heap.Pop(results).(*Item)
@@ -204,14 +204,14 @@ func (h *HNSWIndex) selectNeighborsHeuristic(query []float32, candidates []Searc
 		good := true
 		candidateVec := h.nodes[candidate.ID].Vector()
 
-		// 明确注释启发式逻辑
-		// 拒绝条件：如果候选点更接近已选邻居，而非 query
-		// 目的：保证邻居的多样性和覆盖范围
+		// Explicitly document heuristic logic
+		// Rejection condition: if candidate is closer to selected neighbor than to query
+		// Purpose: ensure diversity and coverage of neighbors
 		for _, selected := range result {
 			selectedVec := h.nodes[selected.ID].Vector()
 			distToSelected := h.distFunc(candidateVec, selectedVec)
 
-			// candidate.Distance 是候选点到 query 的距离
+			// candidate.Distance is the distance from candidate to query
 			if distToSelected < candidate.Distance {
 				good = false
 				break
@@ -223,7 +223,7 @@ func (h *HNSWIndex) selectNeighborsHeuristic(query []float32, candidates []Searc
 		}
 	}
 
-	// 补充逻辑保持不变
+	// Supplementary logic remains unchanged
 	if len(result) < m {
 		selected := make(map[int]bool, len(result))
 		for _, r := range result {
