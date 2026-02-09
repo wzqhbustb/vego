@@ -288,11 +288,26 @@ The storage layer supports both synchronous and asynchronous I/O:
 
 ## 🗺️ Roadmap
 
-- [x] HNSW index with configurable parameters
-- [x] Lance-compatible columnar storage
-- [x] ZSTD, BitPacking, RLE encoding
-- [ ] Quantization support (PQ/SQ)
-- [ ] Distributed index
+Vego is actively evolving. For the detailed development roadmap including:
+
+- **Phase 0**: Architecture Hardening (Foundation, benchmarks, error handling)
+- **Phase 1**: MVP (Block Cache, async I/O, Table abstraction)
+- **Phase 2**: Beta (CMO, projection pushdown, Zone Map)
+- **Phase 3**: V1.0 Performance (MiniBlock, prefetch, SIMD)
+- **Phase 4**: V1.5 Extreme (io_uring, vectorized execution)
+- **Phase 5**: V2.0 Enterprise (WAL, MVCC, indexing, partitioning)
+
+👉 See [ROADMAP.md](ROADMAP.md) for full details, timelines, and Architecture Decision Records (ADRs).
+
+### Current Status
+
+| Feature | Status | Milestone |
+|---------|--------|-----------|
+| HNSW index with configurable parameters | ✅ Available | v0.1 |
+| Lance-compatible columnar storage | ✅ Available | v0.1 |
+| ZSTD, BitPacking, RLE encoding | ✅ Available | v0.1 |
+| Quantization support (PQ/SQ) | 🚧 Planned | v0.5 |
+| Distributed index | 📋 Backlog | v1.0 |
 
 ---
 
