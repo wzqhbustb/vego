@@ -220,25 +220,6 @@ metadata.lance    # Metadata: M, Dimension, EntryPoint, etc.
 ## 📊 Performance Benchmarks
 
 Test Environment: Intel Core i9-13950HX, Linux amd64, Go 1.23
-
-### Index Build Performance (HNSW)
-
-| Dataset Size | Dimension | Build Time | Memory Usage | Throughput |
-|-------------|-----------|------------|--------------|------------|
-| 10,000 | 128 | 0.12s | 2.1MB | ~83K vectors/s |
-| 100,000 | 128 | 1.8s | 18MB | ~55K vectors/s |
-| 1,000,000 | 128 | 25s | 175MB | ~40K vectors/s |
-
-### Query Performance (HNSW)
-
-| Dataset Size | Top-K | P50 Latency | P99 Latency | QPS | Recall |
-|-------------|-------|-------------|-------------|-----|--------|
-| 10,000 | 10 | 0.05ms | 0.12ms | ~20,000 | 98% |
-| 100,000 | 10 | 0.12ms | 0.35ms | ~8,000 | 96% |
-| 1,000,000 | 10 | 0.35ms | 1.2ms | ~2,800 | 94% |
-
-> **Note**: Query performance scales logarithmically with dataset size, consistent with HNSW's O(log N) complexity.
-
 ---
 
 ### Storage Layer Performance
