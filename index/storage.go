@@ -4,17 +4,17 @@ import (
 	"fmt"
 	"github.com/wzqhbkjdx/vego/storage/arrow"
 	"github.com/wzqhbkjdx/vego/storage/column"
-	"github.com/wzqhbkjdx/vego/storage/encoding" // [NEW] 导入 encoding 包
+	"github.com/wzqhbkjdx/vego/storage/encoding" // [NEW] Import encoding package
 	"os"
 	"path/filepath"
 )
 
-// [NEW] 辅助函数：创建默认的 EncoderFactory
+// [NEW] Helper function: create default EncoderFactory
 func defaultEncoderFactory() *encoding.EncoderFactory {
-	return encoding.NewEncoderFactory(3) // 默认压缩级别 3
+	return encoding.NewEncoderFactory(3) // Default compression level 3
 }
 
-// SchemaForNodes 创建节点存储的Schema
+// SchemaForNodes creates schema for node storage
 func SchemaForNodes(dimension int) *arrow.Schema {
 	return arrow.NewSchema([]arrow.Field{
 		arrow.NewField("id", arrow.PrimInt32(), false),
@@ -26,7 +26,7 @@ func SchemaForNodes(dimension int) *arrow.Schema {
 	})
 }
 
-// SchemaForConnections 创建连接关系存储的Schema
+// SchemaForConnections creates schema for connection storage
 func SchemaForConnections() *arrow.Schema {
 	return arrow.NewSchema([]arrow.Field{
 		arrow.NewField("node_id", arrow.PrimInt32(), false),
@@ -37,7 +37,7 @@ func SchemaForConnections() *arrow.Schema {
 	})
 }
 
-// SchemaForMetadata 创建元数据存储的Schema（使用Int32数组）
+// SchemaForMetadata creates schema for metadata storage (using Int32 arrays)
 func SchemaForMetadata() *arrow.Schema {
 	return arrow.NewSchema([]arrow.Field{
 		arrow.NewField("M", arrow.PrimInt32(), false),
@@ -53,22 +53,22 @@ func SchemaForMetadata() *arrow.Schema {
 	})
 }
 
-// SaveToLance 将HNSW索引保存到Lance格式文件
+// SaveToLance saves HNSW index to Lance format files
 func (h *HNSWIndex) SaveToLance(baseDir string) error {
 	h.globalLock.RLock()
 	defer h.globalLock.RUnlock()
 
-	// 保存节点数据
+	// Save node data
 	if err := h.saveNodes(filepath.Join(baseDir, "nodes.lance")); err != nil {
 		return fmt.Errorf("save nodes failed: %w", err)
 	}
 
-	// 保存连接数据
+	// Save connection data
 	if err := h.saveConnections(filepath.Join(baseDir, "connections.lance")); err != nil {
 		return fmt.Errorf("save connections failed: %w", err)
 	}
 
-	// 保存元数据
+	// Save metadata
 	if err := h.saveMetadata(filepath.Join(baseDir, "metadata.lance")); err != nil {
 		return fmt.Errorf("save metadata failed: %w", err)
 	}
@@ -76,7 +76,7 @@ func (h *HNSWIndex) SaveToLance(baseDir string) error {
 	return nil
 }
 
-// saveNodes 保存所有节点数据
+// saveNodes saves all node data
 func (h *HNSWIndex) saveNodes(filename string) error {
 	if len(h.nodes) == 0 {
 		return fmt.Errorf("no nodes to save")
@@ -84,36 +84,36 @@ func (h *HNSWIndex) saveNodes(filename string) error {
 
 	schema := SchemaForNodes(h.dimension)
 
-	// 准备数据数组
+	// Prepare data arrays
 	numNodes := len(h.nodes)
 
-	// ID数组
+	// ID array
 	ids := make([]int32, numNodes)
-	// Vector数组（扁平化）
+	// Vector array (flattened)
 	vectors := make([]float32, numNodes*h.dimension)
-	// Level数组
+	// Level array
 	levels := make([]int32, numNodes)
 
 	for i, node := range h.nodes {
 		ids[i] = int32(node.ID())
 
-		// 复制向量数据
+		// Copy vector data
 		nodeVector := node.Vector()
 		copy(vectors[i*h.dimension:(i+1)*h.dimension], nodeVector)
 
 		levels[i] = int32(node.Level())
 	}
 
-	// 创建Arrow数组
+	// Create Arrow arrays
 	idArray := arrow.NewInt32Array(ids, nil)
 	vectorArray := arrow.NewFloat32Array(vectors, nil)
 	levelArray := arrow.NewInt32Array(levels, nil)
 
-	// 创建向量的FixedSizeListArray
+	// Create FixedSizeListArray for vectors
 	vectorType := arrow.VectorType(h.dimension).(*arrow.FixedSizeListType)
 	vectorListArray := arrow.NewFixedSizeListArray(vectorType, vectorArray, nil)
 
-	// 创建RecordBatch
+	// Create RecordBatch
 	batch, err := arrow.NewRecordBatch(schema, numNodes, []arrow.Array{
 		idArray,
 		vectorListArray,
@@ -136,21 +136,21 @@ func (h *HNSWIndex) saveNodes(filename string) error {
 	return nil
 }
 
-// saveConnections 保存连接关系
+// saveConnections saves connection relationships
 func (h *HNSWIndex) saveConnections(filename string) error {
 	schema := SchemaForConnections()
 
-	// 收集所有连接关系
+	// Collect all connections
 	var nodeIDs, layers, neighborIDs []int32
 
 	for _, node := range h.nodes {
 		nodeID := int32(node.ID())
 
-		// 遍历该节点的所有层级
+		// Iterate through all layers of this node
 		for layer := 0; layer <= node.Level(); layer++ {
 			connections := node.GetConnections(layer)
 
-			// 添加该层的所有连接
+			// Add all connections at this layer
 			for _, neighborID := range connections {
 				nodeIDs = append(nodeIDs, nodeID)
 				layers = append(layers, int32(layer))
@@ -159,17 +159,17 @@ func (h *HNSWIndex) saveConnections(filename string) error {
 		}
 	}
 
-	// 如果没有连接关系，不创建文件（避免空数组验证错误）
+	// If no connections, don't create file (avoid empty array validation error)
 	if len(nodeIDs) == 0 {
 		return nil
 	}
 
-	// 创建Arrow数组
+	// Create Arrow arrays
 	nodeIDArray := arrow.NewInt32Array(nodeIDs, nil)
 	layerArray := arrow.NewInt32Array(layers, nil)
 	neighborIDArray := arrow.NewInt32Array(neighborIDs, nil)
 
-	// 创建RecordBatch
+	// Create RecordBatch
 	batch, err := arrow.NewRecordBatch(schema, len(nodeIDs), []arrow.Array{
 		nodeIDArray,
 		layerArray,
@@ -192,11 +192,11 @@ func (h *HNSWIndex) saveConnections(filename string) error {
 	return nil
 }
 
-// saveMetadata 保存HNSW配置元数据
+// saveMetadata saves HNSW configuration metadata
 func (h *HNSWIndex) saveMetadata(filename string) error {
 	schema := SchemaForMetadata()
 
-	// 准备元数据（单行记录）
+	// Prepare metadata (single row record)
 	metadata := []int32{
 		int32(h.M),
 		int32(h.Mmax),
@@ -208,7 +208,7 @@ func (h *HNSWIndex) saveMetadata(filename string) error {
 		int32(len(h.nodes)),
 	}
 
-	// 创建Arrow数组（每个字段都是长度为1的数组）
+	// Create Arrow arrays (each field is an array of length 1)
 	mArray := arrow.NewInt32Array([]int32{metadata[0]}, nil)
 	mmaxArray := arrow.NewInt32Array([]int32{metadata[1]}, nil)
 	mmax0Array := arrow.NewInt32Array([]int32{metadata[2]}, nil)
@@ -218,7 +218,7 @@ func (h *HNSWIndex) saveMetadata(filename string) error {
 	maxLevelArray := arrow.NewInt32Array([]int32{metadata[6]}, nil)
 	numNodesArray := arrow.NewInt32Array([]int32{metadata[7]}, nil)
 
-	// 创建RecordBatch
+	// Create RecordBatch
 	batch, err := arrow.NewRecordBatch(schema, 1, []arrow.Array{
 		mArray,
 		mmaxArray,
@@ -246,15 +246,15 @@ func (h *HNSWIndex) saveMetadata(filename string) error {
 	return nil
 }
 
-// LoadFromLance 从Lance格式文件加载HNSW索引
+// LoadFromLance loads HNSW index from Lance format files
 func LoadHNSWFromLance(baseDir string) (*HNSWIndex, error) {
-	// 加载元数据，确定HNSW配置
+	// Load metadata to determine HNSW configuration
 	metadata, err := loadMetadata(filepath.Join(baseDir, "metadata.lance"))
 	if err != nil {
 		return nil, fmt.Errorf("load metadata failed: %w", err)
 	}
 
-	// 创建HNSW实例
+	// Create HNSW instance
 	config := Config{
 		M:              int(metadata[0]),
 		EfConstruction: int(metadata[3]),
@@ -264,16 +264,16 @@ func LoadHNSWFromLance(baseDir string) (*HNSWIndex, error) {
 
 	hnsw := NewHNSW(config)
 
-	// 设置从元数据加载的状态
+	// Set state loaded from metadata
 	hnsw.entryPoint = metadata[5]
 	hnsw.maxLevel = metadata[6]
 
-	// 加载节点数据
+	// Load node data
 	if err := hnsw.loadNodes(filepath.Join(baseDir, "nodes.lance")); err != nil {
 		return nil, fmt.Errorf("load nodes failed: %w", err)
 	}
 
-	// 加载连接数据
+	// Load connection data
 	if err := hnsw.loadConnections(filepath.Join(baseDir, "connections.lance")); err != nil {
 		return nil, fmt.Errorf("load connections failed: %w", err)
 	}
@@ -281,7 +281,7 @@ func LoadHNSWFromLance(baseDir string) (*HNSWIndex, error) {
 	return hnsw, nil
 }
 
-// loadMetadata 加载元数据
+// loadMetadata loads metadata
 func loadMetadata(filename string) ([]int32, error) {
 	reader, err := column.NewReader(filename)
 	if err != nil {
@@ -294,7 +294,7 @@ func loadMetadata(filename string) ([]int32, error) {
 		return nil, fmt.Errorf("read metadata failed: %w", err)
 	}
 
-	// 提取所有元数据值
+	// Extract all metadata values
 	metadata := make([]int32, 8)
 	for i := 0; i < 8; i++ {
 		array := batch.Column(i).(*arrow.Int32Array)
@@ -304,7 +304,7 @@ func loadMetadata(filename string) ([]int32, error) {
 	return metadata, nil
 }
 
-// loadNodes 加载节点数据
+// loadNodes loads node data
 func (h *HNSWIndex) loadNodes(filename string) error {
 	reader, err := column.NewReader(filename)
 	if err != nil {
@@ -321,11 +321,11 @@ func (h *HNSWIndex) loadNodes(filename string) error {
 	vectorListArray := batch.Column(1).(*arrow.FixedSizeListArray)
 	levelArray := batch.Column(2).(*arrow.Int32Array)
 
-	// 获取底层的float数组
+	// Get underlying float array
 	vectorArray := vectorListArray.Values().(*arrow.Float32Array)
 	vectorValues := vectorArray.Values()
 
-	// 验证节点ID的连续性
+	// Verify continuity of node IDs
 	numNodes := idArray.Len()
 	for i := 0; i < numNodes; i++ {
 		id := int(idArray.Value(i))
@@ -334,20 +334,20 @@ func (h *HNSWIndex) loadNodes(filename string) error {
 		}
 	}
 
-	// 重构节点
+	// Reconstruct nodes
 	h.nodes = make([]*Node, numNodes)
 
 	for i := 0; i < numNodes; i++ {
 		id := int(idArray.Value(i))
 		level := int(levelArray.Value(i))
 
-		// 提取向量
+		// Extract vector
 		start := i * h.dimension
 		end := start + h.dimension
 		vector := make([]float32, h.dimension)
 		copy(vector, vectorValues[start:end])
 
-		// 创建节点
+		// Create node
 		node := NewNode(id, vector, level)
 		h.nodes[i] = node
 	}
@@ -355,11 +355,11 @@ func (h *HNSWIndex) loadNodes(filename string) error {
 	return nil
 }
 
-// loadConnections 加载连接关系
+// loadConnections loads connection relationships
 func (h *HNSWIndex) loadConnections(filename string) error {
-	// 检查文件是否存在（处理无连接的情况）
+	// Check if file exists (handle case with no connections)
 	if _, err := os.Stat(filename); os.IsNotExist(err) {
-		// 文件不存在，说明保存时没有连接关系，这是合法的
+		// File doesn't exist, meaning no connections were saved, which is valid
 		return nil
 	}
 
@@ -380,7 +380,7 @@ func (h *HNSWIndex) loadConnections(filename string) error {
 
 	numConnections := nodeIDArray.Len()
 
-	// 重建连接关系
+	// Rebuild connection relationships
 	for i := 0; i < numConnections; i++ {
 		nodeID := int(nodeIDArray.Value(i))
 		layer := int(layerArray.Value(i))

@@ -3,12 +3,12 @@ package hnsw
 import "errors"
 
 var (
-	// ErrDimensionMismatch 向量维度不匹配
+	// ErrDimensionMismatch is returned when vector dimensions do not match
 	ErrDimensionMismatch = errors.New("vector dimension mismatch")
 
-	// ErrEmptyIndex 索引为空
+	// ErrEmptyIndex is returned when the index is empty
 	ErrEmptyIndex = errors.New("index is empty")
 
-	// ErrInvalidParameter 参数无效
+	// ErrInvalidParameter is returned when a parameter is invalid
 	ErrInvalidParameter = errors.New("invalid parameter")
 )
