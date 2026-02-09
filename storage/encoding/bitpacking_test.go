@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/wzqhbkjdx/vego/storage/arrow"
-	"github.com/wzqhbkjdx/vego/storage/format"
+	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/storage/format"
 )
 
 func TestBitPackingEncoder_Type(t *testing.T) {

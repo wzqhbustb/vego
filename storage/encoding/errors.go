@@ -1,7 +1,7 @@
 package encoding
 
 import (
-	lerrors "github.com/wzqhbkjdx/vego/storage/errors"
+	lerrors "github.com/wzqhbustb/vego/storage/errors"
 )
 
 var (

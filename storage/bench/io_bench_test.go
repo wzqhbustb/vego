@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/wzqhbkjdx/vego/storage/arrow"
-	"github.com/wzqhbkjdx/vego/storage/column"
+	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/storage/column"
 )
 
 // BenchmarkWriteFile 测试文件写入性能

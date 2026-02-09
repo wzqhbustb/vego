@@ -4,8 +4,8 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	lerrors "github.com/wzqhbkjdx/vego/storage/errors"
-	"github.com/wzqhbkjdx/vego/storage/arrow"
+	lerrors "github.com/wzqhbustb/vego/storage/errors"
+	"github.com/wzqhbustb/vego/storage/arrow"
 )
 
 type BitPackingDecoder struct{}

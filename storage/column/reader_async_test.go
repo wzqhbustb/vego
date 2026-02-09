@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wzqhbkjdx/vego/storage/arrow"
-	lanceio "github.com/wzqhbkjdx/vego/storage/io"
+	"github.com/wzqhbustb/vego/storage/arrow"
+	lanceio "github.com/wzqhbustb/vego/storage/io"
 )
 
 // ====================

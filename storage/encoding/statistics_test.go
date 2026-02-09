@@ -4,7 +4,7 @@ package encoding
 
 import (
 	"math"
-	"github.com/wzqhbkjdx/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/storage/arrow"
 	"testing"
 	"time"
 )

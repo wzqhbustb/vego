@@ -2,9 +2,9 @@ package hnsw
 
 import (
 	"fmt"
-	"github.com/wzqhbkjdx/vego/storage/arrow"
-	"github.com/wzqhbkjdx/vego/storage/column"
-	"github.com/wzqhbkjdx/vego/storage/encoding" // [NEW] Import encoding package
+	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/storage/column"
+	"github.com/wzqhbustb/vego/storage/encoding" // [NEW] Import encoding package
 	"os"
 	"path/filepath"
 )

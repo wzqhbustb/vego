@@ -1,6 +1,6 @@
 package encoding
 
-import "github.com/wzqhbkjdx/vego/storage/arrow"
+import "github.com/wzqhbustb/vego/storage/arrow"
 
 func GetValueSize(typeID arrow.TypeID) int {
 	switch typeID {

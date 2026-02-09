@@ -5,16 +5,16 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
-	"github.com/wzqhbkjdx/vego/storage/arrow"
-	lerrors "github.com/wzqhbkjdx/vego/storage/errors"
-	"github.com/wzqhbkjdx/vego/storage/format"
+	"github.com/wzqhbustb/vego/storage/arrow"
+	lerrors "github.com/wzqhbustb/vego/storage/errors"
+	"github.com/wzqhbustb/vego/storage/format"
 	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	lanceio "github.com/wzqhbkjdx/vego/storage/io" // 使用别名避免冲突
+	lanceio "github.com/wzqhbustb/vego/storage/io" // 使用别名避免冲突
 )
 
 // Reader reads RecordBatch data from a Lance file

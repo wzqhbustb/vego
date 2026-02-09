@@ -3,10 +3,10 @@ package encoding
 import (
 	"math"
 	"math/bits"
-	"github.com/wzqhbkjdx/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/storage/arrow"
 	time "time"
 
-	lerrors "github.com/wzqhbkjdx/vego/storage/errors"
+	lerrors "github.com/wzqhbustb/vego/storage/errors"
 )
 
 // Stat represents different types of statistics we can compute on data blocks

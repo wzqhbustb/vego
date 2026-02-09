@@ -1,7 +1,7 @@
 # Vego
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/wzqhbkjdx/vego.svg)](https://pkg.go.dev/github.com/wzqhbkjdx/vego)
-[![Go Report Card](https://goreportcard.com/badge/github.com/wzqhbkjdx/vego)](https://goreportcard.com/report/github.com/wzqhbkjdx/vego)
+[![Go Reference](https://pkg.go.dev/badge/github.com/wzqhbustb/vego.svg)](https://pkg.go.dev/github.com/wzqhbustb/vego)
+[![Go Report Card](https://goreportcard.com/badge/github.com/wzqhbustb/vego)](https://goreportcard.com/report/github.com/wzqhbustb/vego)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 **Vego** is a lightweight vector search engine for AI agents and embedded applications, written in pure Go with zero CGO dependencies.
@@ -100,7 +100,7 @@ Provide knowledge base retrieval capabilities for local LLMs:
 ### Installation
 
 ```bash
-go get github.com/wzqhbkjdx/vego
+go get github.com/wzqhbustb/vego
 ```
 
 ### Basic Example
@@ -110,7 +110,7 @@ package main
 
 import (
     "fmt"
-    "github.com/wzqhbkjdx/vego/index"
+    "github.com/wzqhbustb/vego/index"
 )
 
 func main() {
@@ -301,7 +301,7 @@ package main
 import (
     "context"
     "github.com/ollama/ollama/api"
-    "github.com/wzqhbkjdx/vego/index"
+    "github.com/wzqhbustb/vego/index"
 )
 
 type RAGSystem struct {
@@ -403,7 +403,7 @@ Contributions are welcome! Whether it's code, bug reports, or suggestions.
 
 ```bash
 # Clone repository
-git clone https://github.com/wzqhbkjdx/vego.git
+git clone https://github.com/wzqhbustb/vego.git
 cd vego
 
 # Run tests
@@ -478,9 +478,9 @@ This project is built on top of cutting-edge research in vector search and colum
 
 ## 📮 Contact
 
-- Project Homepage: https://github.com/wzqhbkjdx/vego
-- Issue Tracker: [GitHub Issues](https://github.com/wzqhbkjdx/vego/issues)
-- Discussions: [GitHub Discussions](https://github.com/wzqhbkjdx/vego/discussions)
+- Project Homepage: https://github.com/wzqhbustb/vego
+- Issue Tracker: [GitHub Issues](https://github.com/wzqhbustb/vego/issues)
+- Discussions: [GitHub Discussions](https://github.com/wzqhbustb/vego/discussions)
 
 ---
 

@@ -2,7 +2,7 @@
 
 # 模块配置
 MODULE_ROOT := ..
-MODULE_NAME := github.com/wzqhbkjdx/vego/storage
+MODULE_NAME := github.com/wzqhbustb/vego/storage
 LANCE_PKG := $(MODULE_NAME)
 
 # 子包列表

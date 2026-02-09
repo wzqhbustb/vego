@@ -2,8 +2,8 @@ package column
 
 import (
 	"encoding/binary"
-	"github.com/wzqhbkjdx/vego/storage/arrow"
-	"github.com/wzqhbkjdx/vego/storage/encoding"
+	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/storage/encoding"
 	"os"
 	"path/filepath"
 	"testing"

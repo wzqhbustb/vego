@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"github.com/wzqhbkjdx/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/storage/arrow"
 	"strconv"
 	"strings"
 
-	lerrors "github.com/wzqhbkjdx/vego/storage/errors"
+	lerrors "github.com/wzqhbustb/vego/storage/errors"
 )
 
 // Header represents the Lance file header

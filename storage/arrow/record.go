@@ -3,7 +3,7 @@ package arrow
 import (
 	"fmt"
 
-	lerrors "github.com/wzqhbkjdx/vego/storage/errors"
+	lerrors "github.com/wzqhbustb/vego/storage/errors"
 )
 
 // RecordBatch represents a collection of equal-length arrays (a "table slice")

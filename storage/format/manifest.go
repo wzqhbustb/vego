@@ -7,7 +7,7 @@ import (
 	"io"
 	"time"
 
-	lerrors "github.com/wzqhbkjdx/vego/storage/errors"
+	lerrors "github.com/wzqhbustb/vego/storage/errors"
 )
 
 // Manifest manages versioning and transaction metadata for Lance files
