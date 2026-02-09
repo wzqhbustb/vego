@@ -10,15 +10,6 @@
 
 ## 🎯 Why Vego?
 
-| Feature | Vego | Milvus | Weaviate | FAISS |
-|------|------|--------|----------|-------|
-| **Deployment** | Embedded Library | Standalone Service | Standalone Service | Python/C++ Lib |
-| **Go Native** | ✅ Pure Go | ❌ Go+CGO | ✅ Go | ❌ C++ |
-| **Binary Size** | ~500KB | 100MB+ | 50MB+ | 10MB+ |
-| **External Dependencies** | Zero CGO | Many | Many | Python/C++ |
-| **Startup Time** | Milliseconds | Seconds | Seconds | - |
-| **Persistence** | Built-in | Requires Config | Requires Config | DIY |
-
 ### Core Advantages
 
 1. **🚀 Ultra Lightweight**
