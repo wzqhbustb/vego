@@ -6,20 +6,6 @@
 
 **Vego** is a lightweight vector search engine for AI agents and embedded applications, written in pure Go with zero CGO dependencies.
 
-```go
-// Get started in 5 minutes: create a vector index
-index := vego.NewHNSW(vego.Config{
-    Dimension: 128,
-    M:         16,
-})
-
-// Add vectors
-id, _ := index.Add([]float32{0.1, 0.2, ...})
-
-// Search nearest neighbors
-results, _ := index.Search(query, 10)
-```
-
 ---
 
 ## 🎯 Why Vego?
@@ -60,20 +46,7 @@ results, _ := index.Search(query, 10)
 ## 📦 Use Cases
 
 ### 1. AI Agent Local Memory
-Provide long-term memory capabilities for AI agents without external databases:
-
-```go
-// Agent memory system
-memory := vego.NewHNSW(vego.Config{Dimension: 1536})
-
-// Save conversation history
-embedding := embed("User loves golang programming")
-memory.Add(embedding)
-
-// Retrieve relevant memories
-query := embed("What are the user's programming preferences?")
-memories, _ := memory.Search(query, 3)
-```
+Provide long-term memory capabilities for AI agents without external databases.
 
 ### 2. Edge Device Embedded Search
 Ideal for IoT, mobile, and edge computing scenarios:
@@ -215,14 +188,6 @@ type SearchResult struct {
 }
 ```
 
-### Parameter Tuning Guide
-
-| Parameter | Small Dataset (<1M) | Large Dataset (>1M) | High Recall | Low Latency |
-|-----------|---------------------|---------------------|-------------|-------------|
-| M | 16 | 32 | 32-64 | 8-16 |
-| EfConstruction | 100-200 | 200-400 | 400+ | 50-100 |
-| ef (search) | 50-100 | 100-200 | 200+ | 20-50 |
-
 ---
 
 ## 🏗️ Architecture
@@ -274,37 +239,7 @@ Test Environment: Apple M3 Pro, 18GB RAM
 | 1,000,000 | 128 | 25s | 175MB |
 
 ### Query Performance (Single-threaded)
-
-| Dataset Size | Top-K | Latency (P99) | Recall |
-|-----------|-------|-----------|--------|
-| 100,000 | 10 | 0.8ms | 96.5% |
-| 100,000 | 100 | 2.1ms | 98.2% |
-| 1,000,000 | 10 | 1.5ms | 95.1% |
-| 1,000,000 | 100 | 4.2ms | 97.8% |
-
-### Concurrent Performance
-
-```bash
-BenchmarkHNSWInsert-12      100000    15230 ns/op    // Concurrent insert
-BenchmarkHNSWSearch-12      100000     8920 ns/op    // Concurrent search
-```
-
----
-
-## 🔌 Integration Examples
-
-### Building Local RAG with Ollama
-
-```go
-package main
-
-import (
-    "context"
-    "github.com/ollama/ollama/api"
-    "github.com/wzqhbustb/vego/index"
-)
-
-type RAGSystem struct {
+ RAGSystem struct {
     index   *hnsw.HNSWIndex
     client  *api.Client
 }
@@ -321,70 +256,7 @@ func (r *RAGSystem) AddDocument(ctx context.Context, text string) error {
 
 func (r *RAGSystem) Query(ctx context.Context, question string) (string, error) {
     // 1. Vectorize the question
-    queryVec, _ := r.getEmbedding(ctx, question)
-    
-    // 2. Retrieve relevant documents
-    results, _ := r.index.Search(queryVec, 3, 0)
-    
-    // 3. Construct prompt and query LLM
-    context := r.buildContext(results)
-    return r.askLLM(ctx, question, context)
-}
-```
-
-### As AI Agent Memory System
-
-```go
-type AgentMemory struct {
-    shortTerm []string
-    longTerm  *hnsw.HNSWIndex
-}
-
-func (m *AgentMemory) Remember(ctx string, embedding []float32) {
-    // Long-term memory stored in vector index
-    m.longTerm.Add(embedding)
-}
-
-func (m *AgentMemory) Recall(query []float32, topK int) []string {
-    // Semantic retrieval of relevant memories
-    results, _ := m.longTerm.Search(query, topK, 0)
-    return m.fetchMemories(results)
-}
-```
-
----
-
-## 🤝 Comparison with Other Projects
-
-### vs FAISS
-- **FAISS**: Meta's C++ library with Python bindings, powerful but heavy dependencies
-- **Vego**: Go-native, no CGO, better suited for Go ecosystem and embedded scenarios
-
-### vs Milvus/Zilliz
-- **Milvus**: Enterprise-grade distributed vector database, feature-complete but complex deployment
-- **Vego**: Lightweight embedded library, ideal for edge and simple scenarios
-
-### vs Weaviate
-- **Weaviate**: Go-implemented vector database requiring standalone deployment
-- **Vego**: Pure library form, no service dependencies, faster startup
-
-### vs chroma-go
-- **chroma-go**: Go client for Chroma vector database
-- **Vego**: No external service dependencies, completely self-contained
-
----
-
-## 🛠️ Roadmap
-
-- [x] HNSW core algorithm
-- [x] Multiple distance function support
-- [x] Persistence storage
-- [x] Concurrent safety
-- [ ] Vector deletion/update
-- [ ] Incremental save
-- [ ] Metadata filtering (Filter Search)
-- [ ] SIMD acceleration (AVX/NEON)
-- [ ] Quantization support (PQ/SQ)
+    ] Quantization support (PQ/SQ)
 - [ ] Distributed index
 
 ---
