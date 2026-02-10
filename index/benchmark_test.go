@@ -450,10 +450,12 @@ func BenchmarkHNSW_E2E_10K_D128(b *testing.B) {
 	printBenchmarkResult(b, result)
 }
 
+// go test -v -bench=^BenchmarkHNSW_E2E_100K_D128$ -benchtime=1x -timeout=20m
 func BenchmarkHNSW_E2E_100K_D128(b *testing.B) {
 	if testing.Short() {
 		b.Skip("Skipping large benchmark in short mode")
 	}
+
 	config := BenchmarkConfig{
 		DatasetSize:      100000,
 		Dimension:        128,
@@ -497,6 +499,7 @@ func BenchmarkHNSW_E2E_10K_D128_Concurrent(b *testing.B) {
 }
 
 // Dimension benchmarks
+// go test -v -bench=^BenchmarkHNSW_E2E_10K_D256$ -benchtime=1x -timeout=20m
 func BenchmarkHNSW_E2E_10K_D256(b *testing.B) {
 	config := BenchmarkConfig{
 		DatasetSize:      10000,
