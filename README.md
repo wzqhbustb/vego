@@ -3,8 +3,20 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/wzqhbustb/vego.svg)](https://pkg.go.dev/github.com/wzqhbustb/vego)
 [![Go Report Card](https://goreportcard.com/badge/github.com/wzqhbustb/vego)](https://goreportcard.com/report/github.com/wzqhbustb/vego)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Go Version](https://img.shields.io/badge/Go-1.23+-blue.svg)](https://golang.org/dl/)
 
 **Vego** is a lightweight vector search engine for AI agents and embedded applications, written in pure Go with zero CGO dependencies.
+
+---
+
+## 📑 Quick Links
+
+- [🚀 Quick Start](#quick-start) - Get started in 5 minutes
+- [📖 API Docs](#api-documentation) - Configuration & usage
+- [💾 Storage Engine](STORAGE.md) - Deep dive into storage layer
+- [📊 Performance](#performance-benchmarks) - Benchmarks & comparisons
+- [⚠️ Known Limitations](#known-limitations) - Current constraints
+- [🗺️ Roadmap](#roadmap) - Future plans
 
 ---
 
@@ -65,11 +77,64 @@ Provide knowledge base retrieval capabilities for local LLMs:
 
 ### Installation
 
+**Requirements:** Go 1.23+
+
 ```bash
 go get github.com/wzqhbustb/vego
 ```
 
-### Basic Example
+### Complete Working Example
+
+```go
+package main
+
+import (
+    "fmt"
+    "math/rand"
+    hnsw "github.com/wzqhbustb/vego/index"
+)
+
+func main() {
+    // Step 1: Create index with adaptive configuration
+    config := hnsw.Config{
+        Dimension:    128,      // Vector dimension
+        Adaptive:     true,     // Auto-tune parameters
+        ExpectedSize: 10000,    // Expected dataset size
+    }
+    index := hnsw.NewHNSW(config)
+    
+    // Step 2: Add random vectors
+    fmt.Println("Adding 1000 vectors...")
+    for i := 0; i < 1000; i++ {
+        vec := make([]float32, 128)
+        for j := range vec {
+            vec[j] = rand.Float32()
+        }
+        id, _ := index.Add(vec)
+        if i%100 == 0 {
+            fmt.Printf("Added %d vectors, latest ID: %d\n", i+1, id)
+        }
+    }
+    
+    // Step 3: Search nearest neighbors
+    query := make([]float32, 128)
+    for j := range query {
+        query[j] = rand.Float32()
+    }
+    
+    results, err := index.Search(query, 10, 0)
+    if err != nil {
+        panic(err)
+    }
+    
+    fmt.Printf("Query returned %d neighbors:\n", len(results))
+    for i, r := range results {
+        fmt.Printf("  %d. ID: %d, Distance: %.4f\n", i+1, r.ID, r.Distance)
+    }
+}
+```
+
+### Basic Usage
 
 ```go
 package main
@@ -300,11 +365,11 @@ Vego features a **custom-built columnar storage engine** specifically designed f
 
 End-to-end performance including index construction, persistence, and query execution:
 
-| Dataset | Dimension | Config | Query Ef | Recall@10 | P99 Latency | QPS |
-|---------|-----------|--------|----------|-----------|-------------|-----|
-| 10K | 128 | Manual (M=16, EfConstruction=200) | 200 | **95.9%** | 975µs | ~1,000 |
-| 100K | 128 | Adaptive (M=16, EfConstruction=520) | 300 | **75.4%** | 3.17ms | 419 |
-| 10K | 768 | Adaptive (M=32, EfConstruction=200) | 100 | **74.6%** | 4.67ms | 255 |
+| Dataset | Dims | M | EfConst | Q.Ef | Recall | P99 Latency | QPS |
+|---------|------|---|---------|------|--------|-------------|-----|
+| 10K | 128 | 16 | 200 | 200 | **95.9%** | 975µs | ~1,000 |
+| 100K | 128 | 16 | 520 | 300 | **75.4%** | 3.17ms | 419 |
+| 10K | 768 | 32 | 200 | 100 | **74.6%** | 4.67ms | 255 |
 
 **Key Observations:**
 - **High Recall**: Achieves >95% recall on small datasets (10K) with low latency (<1ms P99)
@@ -318,6 +383,23 @@ End-to-end performance including index construction, persistence, and query exec
 - Large datasets (>100K): `ef=400+`
 
 > 💡 **Tip**: Start with `Adaptive=true` and `ExpectedSize` set to your dataset size. Fine-tune `Query Ef` during search based on your recall vs. latency requirements.
+
+---
+
+### Running Benchmarks
+
+Quick performance validation:
+
+```bash
+# Quick smoke test (~5 minutes)
+make bench-quick
+
+# Full benchmark suite (60-120 minutes)
+make bench-all
+
+# Specific test (e.g., 100K dataset)
+cd index && go test -bench=BenchmarkHNSW_E2E_100K_D128 -benchtime=1x -v
+```
 
 ---
 
@@ -372,6 +454,39 @@ The storage layer supports both synchronous and asynchronous I/O:
 | **Async** | 16 | 35 ms | 52 MB | High parallelism |
 
 > **⚠️ Note**: Current async I/O implementation shows linear latency increase with concurrency due to scheduling overhead. For most workloads, synchronous I/O is recommended until this is optimized.
+
+---
+
+## ⚠️ Known Limitations
+
+While Vego is production-ready for many use cases, please be aware of these current limitations:
+
+### 1. Async I/O Concurrency
+- **Issue**: Async I/O latency increases linearly with concurrency (8 concurrent = 12x slower)
+- **Workaround**: Use synchronous I/O (default) for production workloads
+- **Status**: Optimizations planned for Phase 1 (see [Roadmap](#roadmap))
+
+### 2. Memory Allocation
+- **Issue**: High memory allocations during search (6GB+ per op for 10K vectors in benchmarks)
+- **Impact**: GC pressure under heavy load
+- **Workaround**: Use sync.Pool for high-concurrency scenarios
+- **Status**: Optimization in progress
+
+### 3. Vector Update/Delete
+- **Issue**: No support for updating or deleting vectors after insertion
+- **Workaround**: Rebuild index with updated data
+- **Status**: Planned for v0.5
+
+### 4. Incremental Persistence
+- **Issue**: `SaveToLance` performs full export; no incremental save
+- **Impact**: Large datasets take longer to persist
+- **Status**: Under investigation
+
+### 5. Distance Functions
+- **Issue**: Only L2, Cosine, and InnerProduct are supported
+- **Status**: Hamming, Jaccard in backlog
+
+See [STORAGE.md](STORAGE.md) for storage-specific limitations and workarounds.
 
 ---
 
