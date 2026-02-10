@@ -19,7 +19,7 @@
 
 2. **⚡ High Performance**
    - HNSW algorithm with millisecond-level latency
-   - >95% recall rate (compared to brute-force search)
+   - 75% ～ 95% recall rate(Continuously iterating)
    - Concurrent read/write support
 
 3. **💾 Built-in Storage Engine**
@@ -372,20 +372,6 @@ The storage layer supports both synchronous and asynchronous I/O:
 | **Async** | 16 | 35 ms | 52 MB | High parallelism |
 
 > **⚠️ Note**: Current async I/O implementation shows linear latency increase with concurrency due to scheduling overhead. For most workloads, synchronous I/O is recommended until this is optimized.
-
----
-
-### Comparative Summary
-
-| Feature | Vego | Typical Vector DB (Milvus/Qdrant) |
-|---------|------|-----------------------------------|
-| **Recall Rate** | 95.9% @ 10K, 75.4% @ 100K | ~90-95% average |
-| **Query Latency (10K)** | <1ms P99 | 1-3ms |
-| **Query Latency (100K)** | 3.17ms P99 | 5-15ms |
-| **Memory Overhead** | ~200MB per 1M vectors (128-dim) | 500MB-1GB+ |
-| **Cold Start (Load)** | <200ms (100K vectors) | 5-30s |
-| **Binary Size** | Single static binary (~10MB) | 100MB+ with dependencies |
-| **CGO Dependency** | None | Often required (FAISS, RocksDB) |
 
 ---
 
