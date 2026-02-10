@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"golang.org/x/exp/rand"
+	"github.com/google/uuid"
 )
 
 // Document represents a document with vector embedding and metadata
@@ -15,9 +15,9 @@ type Document struct {
 	Timestamp time.Time              `json:"timestamp"`
 }
 
-// DocumentID generates a unique document ID
+// DocumentID generates a unique document ID using UUID v4
 func DocumentID() string {
-	return fmt.Sprintf("%d_%d", time.Now().UnixNano(), rand.Int63())
+	return uuid.New().String()
 }
 
 // Validate checks if document is valid

@@ -68,23 +68,15 @@ func (db *DB) Close() error {
 
 // Collection returns a collection by name, creates if not exists
 func (db *DB) Collection(name string) (*Collection, error) {
-	db.mu.RLock()
-	coll, exists := db.collections[name]
-	db.mu.RUnlock()
-
-	if exists {
-		return coll, nil
-	}
-
-	// Create new collection
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	// Double check
+	// Check if exists
 	if coll, exists := db.collections[name]; exists {
 		return coll, nil
 	}
 
+	// Create new collection
 	coll, err := db.createCollection(name)
 	if err != nil {
 		return nil, err

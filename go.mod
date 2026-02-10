@@ -1,5 +1,9 @@
 module github.com/wzqhbustb/vego
 
-go 1.22
+go 1.23
 
-require github.com/klauspost/compress v1.17.11
+toolchain go1.24.13
+
+require github.com/klauspost/compress v1.18.3
+
+require github.com/google/uuid v1.6.0

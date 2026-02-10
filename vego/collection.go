@@ -1,10 +1,13 @@
 package vego
 
 import (
+	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	hnsw "github.com/wzqhbustb/vego/index"
 )
@@ -93,14 +96,17 @@ func (c *Collection) Insert(doc *Document) error {
 
 	// Store document
 	if err := c.storage.Put(doc.ID, doc); err != nil {
-		// Rollback index
-		c.index.Delete(nodeID) // Need to implement Delete in HNSW
+		// TODO: Rollback index - HNSW Delete not implemented yet
+		// For now, we leave the orphan node in the index
 		return fmt.Errorf("store document: %w", err)
 	}
 
 	// Update mappings
 	c.docToNode[doc.ID] = nodeID
 	c.nodeToDoc[nodeID] = doc.ID
+
+	// Update timestamp
+	doc.Timestamp = time.Now()
 
 	return nil
 }
@@ -132,6 +138,7 @@ func (c *Collection) InsertBatch(docs []*Document) error {
 		}
 		c.docToNode[doc.ID] = nodeID
 		c.nodeToDoc[nodeID] = doc.ID
+		doc.Timestamp = time.Now()
 	}
 
 	// Store documents
@@ -173,7 +180,9 @@ func (c *Collection) Delete(id string) error {
 	return nil
 }
 
-// Update updates a document
+// Update updates a document's metadata and vector
+// WARNING: This creates a new node in the index. The old node remains (HNSW doesn't support delete).
+// For production use, consider: 1) Periodic index rebuild, 2) Or use Delete + Insert pattern
 func (c *Collection) Update(doc *Document) error {
 	if err := doc.Validate(c.dimension); err != nil {
 		return err
@@ -182,28 +191,41 @@ func (c *Collection) Update(doc *Document) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	nodeID, exists := c.docToNode[doc.ID]
+	oldNodeID, exists := c.docToNode[doc.ID]
 	if !exists {
 		return fmt.Errorf("document %s not found", doc.ID)
 	}
 
-	// Update storage
+	// Update storage first
 	if err := c.storage.Put(doc.ID, doc); err != nil {
 		return fmt.Errorf("update document: %w", err)
 	}
 
-	// Update vector in index (delete old, insert new)
-	// This is simplified - in production, might want to update in place
+	// Add new vector to index
 	newNodeID, err := c.index.Add(doc.Vector)
 	if err != nil {
 		return fmt.Errorf("update index: %w", err)
 	}
 
-	delete(c.nodeToDoc, nodeID)
+	// Update mappings (old node becomes orphaned)
+	delete(c.nodeToDoc, oldNodeID)
 	c.docToNode[doc.ID] = newNodeID
 	c.nodeToDoc[newNodeID] = doc.ID
+	doc.Timestamp = time.Now()
 
 	return nil
+}
+
+// Upsert inserts or updates a document
+func (c *Collection) Upsert(doc *Document) error {
+	c.mu.RLock()
+	_, exists := c.docToNode[doc.ID]
+	c.mu.RUnlock()
+
+	if exists {
+		return c.Update(doc)
+	}
+	return c.Insert(doc)
 }
 
 // Search performs vector similarity search
@@ -233,11 +255,13 @@ func (c *Collection) Search(query []float32, k int, opts ...SearchOption) ([]Sea
 	for _, hr := range hnswResults {
 		docID, exists := c.nodeToDoc[hr.ID]
 		if !exists {
-			continue // Skip deleted documents
+			log.Printf("Warning: node %d has no document mapping (orphaned)", hr.ID)
+			continue // Skip deleted/orphaned nodes
 		}
 
 		doc, err := c.storage.Get(docID)
 		if err != nil {
+			log.Printf("Warning: failed to load document %s: %v", docID, err)
 			continue // Skip missing documents
 		}
 
@@ -251,25 +275,87 @@ func (c *Collection) Search(query []float32, k int, opts ...SearchOption) ([]Sea
 }
 
 // SearchWithFilter performs vector search with metadata filter
+// Dynamically expands search scope until enough filtered results are found
 func (c *Collection) SearchWithFilter(query []float32, k int, filter Filter) ([]SearchResult, error) {
-	// First search without filter
-	results, err := c.Search(query, k*2) // Get more candidates
-	if err != nil {
-		return nil, err
+	batchSize := k * 2
+	maxBatchSize := k * 20
+	maxAttempts := 5
+
+	var allFiltered []SearchResult
+
+	for attempt := 0; attempt < maxAttempts && batchSize <= maxBatchSize; attempt++ {
+		// Search with current batch size
+		results, err := c.Search(query, batchSize)
+		if err != nil {
+			return nil, err
+		}
+
+		// Apply filter
+		allFiltered = allFiltered[:0] // Reset
+		for _, r := range results {
+			if r.Document != nil && filter.Match(r.Document) {
+				allFiltered = append(allFiltered, r)
+				if len(allFiltered) >= k {
+					return allFiltered[:k], nil
+				}
+			}
+		}
+
+		// If we got all available results and found some matches, return them
+		if len(results) < batchSize {
+			// We got all available results
+			return allFiltered, nil
+		}
+
+		// Otherwise expand search
+		batchSize *= 2
 	}
 
-	// Apply filter
-	var filtered []SearchResult
-	for _, r := range results {
-		if filter.Match(r.Document) {
-			filtered = append(filtered, r)
-			if len(filtered) >= k {
-				break
+	return allFiltered, nil
+}
+
+// SearchBatch performs multiple vector searches in parallel
+func (c *Collection) SearchBatch(queries [][]float32, k int, opts ...SearchOption) ([][]SearchResult, error) {
+	if len(queries) == 0 {
+		return [][]SearchResult{}, nil
+	}
+
+	results := make([][]SearchResult, len(queries))
+	errors := make([]error, len(queries))
+
+	// Use worker pool for parallel search
+	var wg sync.WaitGroup
+	numWorkers := 4
+	if len(queries) < numWorkers {
+		numWorkers = len(queries)
+	}
+
+	jobs := make(chan int, len(queries))
+
+	for w := 0; w < numWorkers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				results[i], errors[i] = c.Search(queries[i], k, opts...)
 			}
+		}()
+	}
+
+	for i := range queries {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+
+	// Check for errors
+	for i, err := range errors {
+		if err != nil {
+			return nil, fmt.Errorf("search query %d: %w", i, err)
 		}
 	}
 
-	return filtered, nil
+	return results, nil
 }
 
 // Count returns number of documents in collection
@@ -277,6 +363,39 @@ func (c *Collection) Count() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return len(c.docToNode)
+}
+
+// CollectionStats contains collection statistics
+type CollectionStats struct {
+	Name        string    // Collection name
+	Count       int       // Number of documents
+	Dimension   int       // Vector dimension
+	IndexNodes  int       // Total HNSW nodes (includes orphaned)
+	OrphanNodes int       // Orphaned nodes (from updates)
+	LastUpdate  time.Time // Last modification time
+}
+
+// Stats returns collection statistics
+func (c *Collection) Stats() CollectionStats {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	// Count unique node IDs in mapping (all nodes ever created)
+	allNodes := make(map[int]bool)
+	for _, nodeID := range c.docToNode {
+		allNodes[nodeID] = true
+	}
+	totalIndexNodes := len(allNodes)
+	docCount := len(c.docToNode)
+
+	return CollectionStats{
+		Name:        c.name,
+		Count:       docCount,
+		Dimension:   c.dimension,
+		IndexNodes:  totalIndexNodes,
+		OrphanNodes: 0, // Will need HNSW API to accurately count
+		LastUpdate:  time.Now(),
+	}
 }
 
 // Save persists collection to disk
@@ -341,11 +460,60 @@ func (c *Collection) load() error {
 }
 
 func (c *Collection) saveMappings(path string) error {
-	// Implementation to save docToNode and nodeToDoc mappings
+	data := map[string]interface{}{
+		"docToNode": c.docToNode,
+		"nodeToDoc": c.nodeToDoc,
+	}
+
+	bytes, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal mappings: %w", err)
+	}
+
+	if err := os.WriteFile(path, bytes, 0644); err != nil {
+		return fmt.Errorf("write mappings: %w", err)
+	}
+
 	return nil
 }
 
 func (c *Collection) loadMappings(path string) error {
-	// Implementation to load mappings
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+
+	var mappings map[string]interface{}
+	if err := json.Unmarshal(data, &mappings); err != nil {
+		return fmt.Errorf("unmarshal mappings: %w", err)
+	}
+
+	// Load docToNode
+	if docToNodeRaw, ok := mappings["docToNode"].(map[string]interface{}); ok {
+		for k, v := range docToNodeRaw {
+			if nodeID, ok := v.(float64); ok {
+				c.docToNode[k] = int(nodeID)
+			}
+		}
+	}
+
+	// Load nodeToDoc
+	if nodeToDocRaw, ok := mappings["nodeToDoc"].(map[string]interface{}); ok {
+		for k, v := range nodeToDocRaw {
+			if docID, ok := v.(string); ok {
+				if nodeID, ok := parseIntKey(k); ok {
+					c.nodeToDoc[nodeID] = docID
+				}
+			}
+		}
+	}
+
 	return nil
+}
+
+// parseIntKey converts string key to int (JSON only supports string keys)
+func parseIntKey(s string) (int, bool) {
+	var i int
+	_, err := fmt.Sscanf(s, "%d", &i)
+	return i, err == nil
 }
