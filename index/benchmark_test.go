@@ -240,6 +240,11 @@ func runBenchmark(b *testing.B, config BenchmarkConfig) *BenchmarkResult {
 	memBefore, totalBefore := getMemoryUsageMB()
 
 	index := NewHNSW(indexConfig)
+
+	// 更新 result.Config 为实际使用的参数（从索引读取）
+	result.Config.M = index.M
+	result.Config.EfConstruction = index.efConstruction
+
 	buildStart := time.Now()
 
 	for i, vec := range vectors {
@@ -445,6 +450,24 @@ func BenchmarkHNSW_E2E_10K_D128(b *testing.B) {
 		DistanceFunc:     L2Distance,
 		DistanceFuncName: "L2",
 		Concurrency:      1,
+	}
+	result := runBenchmark(b, config)
+	printBenchmarkResult(b, result)
+}
+
+func BenchmarkHNSW_E2E_10K_D128Adaptive(b *testing.B) {
+	config := BenchmarkConfig{
+		DatasetSize:      10000,
+		Dimension:        128,
+		M:                0,
+		EfConstruction:   0,
+		QueryEf:          100,
+		TopK:             10,
+		NumQueries:       1000,
+		DistanceFunc:     L2Distance,
+		DistanceFuncName: "L2",
+		Concurrency:      1,
+		UseAdaptive:      true,
 	}
 	result := runBenchmark(b, config)
 	printBenchmarkResult(b, result)
