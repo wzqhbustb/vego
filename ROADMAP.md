@@ -251,14 +251,3 @@ This roadmap is a living document. We welcome:
 
 Please open an issue to discuss any roadmap changes before submitting PRs.
 
----
-
-## Changelog
-
-| Date | Version | Changes |
-|------|---------|---------|
-| 2024-02 | V2.0 | Initial comprehensive roadmap with phased approach |
-
----
-
-**Note**: Timeline estimates assume 2-3 full-time engineers. Adjust based on actual team size and priorities.
