@@ -357,8 +357,6 @@ Vego features a **custom-built columnar storage engine** specifically designed f
 
 ## 📊 Performance Benchmarks
 
----
-
 ### HNSW Index Performance
 
 **Test Environment:** Apple M3 Max, macOS ARM64, Go 1.23
@@ -405,7 +403,7 @@ cd index && go test -bench=BenchmarkHNSW_E2E_100K_D128 -benchtime=1x -v
 
 ### Storage Layer Performance
 
-**Test Environment: Intel Core i9-13950HX, Linux amd64, Go 1.23
+**Test Environment:** Intel Core i9-13950HX, Linux amd64, Go 1.23
 
 #### Memory Access (Arrow Layer)
 
