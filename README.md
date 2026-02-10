@@ -292,10 +292,38 @@ Vego features a **custom-built columnar storage engine** specifically designed f
 
 ## 📊 Performance Benchmarks
 
-Test Environment: Intel Core i9-13950HX, Linux amd64, Go 1.23
+---
+
+### HNSW Index Performance
+
+**Test Environment:** Apple M3 Max, macOS ARM64, Go 1.23
+
+End-to-end performance including index construction, persistence, and query execution:
+
+| Dataset | Dimension | Config | Query Ef | Recall@10 | P99 Latency | QPS |
+|---------|-----------|--------|----------|-----------|-------------|-----|
+| 10K | 128 | Manual (M=16, EfConstruction=200) | 200 | **95.9%** | 975µs | ~1,000 |
+| 100K | 128 | Adaptive (M=16, EfConstruction=520) | 300 | **75.4%** | 3.17ms | 419 |
+| 10K | 768 | Adaptive (M=32, EfConstruction=200) | 100 | **74.6%** | 4.67ms | 255 |
+
+**Key Observations:**
+- **High Recall**: Achieves >95% recall on small datasets (10K) with low latency (<1ms P99)
+- **Scalability**: Maintains 75%+ recall on 100K datasets with sub-5ms latency
+- **High Dimensions**: Adaptive configuration automatically tunes parameters for D=768 (BERT embeddings)
+- **Query Ef Tuning**: Larger datasets benefit from higher `ef` values (100→300 for 100K dataset)
+
+**Recommended Query Ef Settings:**
+- Small datasets (≤10K): `ef=100-200`
+- Medium datasets (10K-100K): `ef=200-300`
+- Large datasets (>100K): `ef=400+`
+
+> 💡 **Tip**: Start with `Adaptive=true` and `ExpectedSize` set to your dataset size. Fine-tune `Query Ef` during search based on your recall vs. latency requirements.
+
 ---
 
 ### Storage Layer Performance
+
+**Test Environment: Intel Core i9-13950HX, Linux amd64, Go 1.23
 
 #### Memory Access (Arrow Layer)
 
@@ -351,9 +379,11 @@ The storage layer supports both synchronous and asynchronous I/O:
 
 | Feature | Vego | Typical Vector DB (Milvus/Qdrant) |
 |---------|------|-----------------------------------|
+| **Recall Rate** | 95.9% @ 10K, 75.4% @ 100K | ~90-95% average |
+| **Query Latency (10K)** | <1ms P99 | 1-3ms |
+| **Query Latency (100K)** | 3.17ms P99 | 5-15ms |
 | **Memory Overhead** | ~200MB per 1M vectors (128-dim) | 500MB-1GB+ |
-| **Query Latency (100K)** | <0.2ms P99 | 1-5ms |
-| **Cold Start (Load)** | <2s (100K vectors) | 5-30s |
+| **Cold Start (Load)** | <200ms (100K vectors) | 5-30s |
 | **Binary Size** | Single static binary (~10MB) | 100MB+ with dependencies |
 | **CGO Dependency** | None | Often required (FAISS, RocksDB) |
 
