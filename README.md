@@ -22,10 +22,12 @@
    - >95% recall rate (compared to brute-force search)
    - Concurrent read/write support
 
-3. **💾 Built-in Persistence**
-   - Self-developed Lance-like columnar storage format
-   - Supports ZSTD, BitPacking, and other compression algorithms
+3. **💾 Built-in Storage Engine**
+   - Self-developed **Lance-compatible** columnar storage format
+   - Adaptive encoding (ZSTD, BitPacking, RLE, BSS) with intelligent auto-selection
+   - Zero-copy Arrow implementation for optimal memory efficiency
    - One-click save/load complete index
+   - [📖 Learn more about the storage engine](STORAGE.md)
 
 4. **🔧 Simple & Easy to Use**
    - Clean API design
@@ -199,21 +201,62 @@ Layer 0: [EP]->[C]->[E]->[F]->[B]->[G]->[D]->[H]->[A]  (Full Graph)
 - **Probabilistic Layer Assignment**: Exponential distribution determines node levels, ensuring O(log N) query efficiency
 - **Heuristic Edge Selection**: Considers both distance and neighbor diversity
 
-### Storage Format
+### Storage Engine Architecture
 
-Self-developed **Lance-compatible** columnar storage:
+Vego's storage layer is built on a **5-tier columnar architecture** designed specifically for vector workloads:
 
 ```
-nodes.lance       # Node data: ID + Vector + Level
-connections.lance # Edge data: NodeID + Layer + NeighborID
-metadata.lance    # Metadata: M, Dimension, EntryPoint, etc.
+Application (HNSW Index)
+    ↓
+Column API (Read/Write)
+    ↓
+Arrow Subsystem (Zero-Copy Memory)     ← 1.2 ns/op access, no CGO
+    ↓
+Encoding Layer (Adaptive Compression)  ← Auto-selects ZSTD/RLE/BitPacking
+    ↓
+Format Layer (Lance-compatible)        ← 0.77-0.84x compression ratio
+    ↓
+I/O Layer (Sync/Async)                 ← 330 MB/s write, 250 MB/s read
 ```
 
-**Encoding Support:**
-- ZSTD compression
-- BitPacking integer compression
-- RLE run-length encoding
-- Dictionary encoding
+**Key Design Decisions:**
+- **Self-Developed Arrow**: Custom implementation without CGO dependencies
+- **Adaptive Encoding**: Intelligent encoder selection based on data statistics
+- **Dual I/O Modes**: Synchronous (production-ready) and Asynchronous (experimental)
+
+👉 **[Full storage engine docs →](STORAGE.md)**
+
+### Storage Engine Highlights
+
+Vego features a **custom-built columnar storage engine** specifically designed for vector workloads:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Lance-compatible Format                   │
+├─────────────────────────────────────────────────────────────┤
+│  nodes.lance       →  ID + Vector (FixedSizeList) + Level   │
+│  connections.lance →  NodeID + Layer + NeighborID          │
+│  metadata.lance    →  M, Dimension, EntryPoint, etc.       │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key Features:**
+
+| Feature | Performance | Benefit |
+|---------|-------------|---------|
+| **Zero-Copy Arrow** | 1.2 ns/op access | No CGO, minimal GC pressure |
+| **Adaptive Encoding** | Auto-selects ZSTD/RLE/BitPacking | Optimal compression ratio |
+| **Columnar Layout** | 0.77-0.84x compression | Efficient vector storage |
+| **Dual I/O Modes** | 330 MB/s write, 250 MB/s read | Sync (stable) / Async (concurrent) |
+
+**Supported Encodings:**
+- **ZSTD**: General-purpose, high compression (23μs encode / 62μs decode)
+- **BitPacking**: Narrow integers (up to 16-bit)
+- **RLE**: Run-length encoding for sequential data
+- **BSS**: Byte-stream split for Float32 vectors
+- **Dictionary**: Low-cardinality data
+
+👉 **[Read the full storage engine documentation →](STORAGE.md)**
 
 ---
 

@@ -459,8 +459,8 @@ func BenchmarkHNSW_E2E_100K_D128(b *testing.B) {
 	config := BenchmarkConfig{
 		DatasetSize:      100000,
 		Dimension:        128,
-		M:                16,
-		EfConstruction:   200,
+		M:                0,
+		EfConstruction:   0,
 		QueryEf:          100,
 		TopK:             10,
 		NumQueries:       1000,
@@ -478,8 +478,8 @@ func BenchmarkHNSW_E2E_10K_D128_Concurrent(b *testing.B) {
 	baseConfig := BenchmarkConfig{
 		DatasetSize:      10000,
 		Dimension:        128,
-		M:                16,
-		EfConstruction:   200,
+		M:                0,
+		EfConstruction:   0,
 		QueryEf:          100,
 		TopK:             10,
 		NumQueries:       1000,
@@ -534,12 +534,13 @@ func BenchmarkHNSW_E2E_10K_D512(b *testing.B) {
 	printBenchmarkResult(b, result)
 }
 
+// go test -v -bench=^BenchmarkHNSW_E2E_10K_D768$ -benchtime=1x -timeout=20m
 func BenchmarkHNSW_E2E_10K_D768(b *testing.B) {
 	config := BenchmarkConfig{
 		DatasetSize:      10000,
 		Dimension:        768,
-		M:                16,
-		EfConstruction:   200,
+		M:                0,
+		EfConstruction:   0,
 		QueryEf:          100,
 		TopK:             10,
 		NumQueries:       1000,
@@ -556,8 +557,8 @@ func BenchmarkHNSW_E2E_10K_D1536(b *testing.B) {
 	config := BenchmarkConfig{
 		DatasetSize:      10000,
 		Dimension:        1536,
-		M:                16,
-		EfConstruction:   200,
+		M:                0,
+		EfConstruction:   0,
 		QueryEf:          100,
 		TopK:             10,
 		NumQueries:       1000,
