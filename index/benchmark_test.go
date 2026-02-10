@@ -9,20 +9,23 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
 // BenchmarkConfig defines the configuration for benchmark tests
 type BenchmarkConfig struct {
-	DatasetSize    int
-	Dimension      int
-	M              int
-	EfConstruction int
-	QueryEf        int
-	TopK           int
-	NumQueries     int
-	DistanceFunc   DistanceFunc
+	DatasetSize      int
+	Dimension        int
+	M                int
+	EfConstruction   int
+	QueryEf          int
+	TopK             int
+	NumQueries       int
+	DistanceFunc     DistanceFunc
+	DistanceFuncName string // Added: explicit distance function name
+	Concurrency      int    // Added: for concurrent tests
 }
 
 // BenchmarkResult stores the results of a benchmark run
@@ -39,11 +42,12 @@ type BenchmarkResult struct {
 	P95Latency      time.Duration
 	P99Latency      time.Duration
 	MemoryUsageMB   float64
+	TotalAllocMB    float64 // Added: total allocation
 	StorageSizeMB   float64
 	Recall          float64
 }
 
-// generateRandomVectors generates random float32 vectors
+// generateRandomVectors generates random float32 vectors with uniform distribution
 func generateRandomVectors(n, dim int, seed int64) [][]float32 {
 	rng := rand.New(rand.NewSource(seed))
 	vectors := make([][]float32, n)
@@ -53,6 +57,37 @@ func generateRandomVectors(n, dim int, seed int64) [][]float32 {
 			vectors[i][j] = rng.Float32()*2 - 1 // Range [-1, 1]
 		}
 		// Normalize for better numerical stability
+		norm := float32(0)
+		for j := 0; j < dim; j++ {
+			norm += vectors[i][j] * vectors[i][j]
+		}
+		norm = float32(math.Sqrt(float64(norm)))
+		if norm > 1e-6 {
+			for j := 0; j < dim; j++ {
+				vectors[i][j] /= norm
+			}
+		}
+	}
+	return vectors
+}
+
+// generateGaussianVectors generates random vectors with Gaussian distribution (more realistic)
+func generateGaussianVectors(n, dim int, seed int64) [][]float32 {
+	rng := rand.New(rand.NewSource(seed))
+	vectors := make([][]float32, n)
+	for i := 0; i < n; i++ {
+		vectors[i] = make([]float32, dim)
+		for j := 0; j < dim; j++ {
+			// Box-Muller transform for Gaussian distribution
+			u1 := rng.Float32()
+			u2 := rng.Float32()
+			if u1 < 1e-10 {
+				u1 = 1e-10 // Avoid log(0)
+			}
+			vectors[i][j] = float32(math.Sqrt(-2*math.Log(float64(u1))) *
+				math.Cos(2*math.Pi*float64(u2)))
+		}
+		// Normalize
 		norm := float32(0)
 		for j := 0; j < dim; j++ {
 			norm += vectors[i][j] * vectors[i][j]
@@ -91,6 +126,34 @@ func bruteForceSearch2(index *HNSWIndex, query []float32, k int) []SearchResult 
 	return results
 }
 
+// computeGroundTruthParallel computes ground truth in parallel for better performance
+func computeGroundTruthParallel(index *HNSWIndex, queries [][]float32, k int) [][]SearchResult {
+	results := make([][]SearchResult, len(queries))
+
+	// Use worker pool to avoid goroutine explosion
+	numWorkers := runtime.GOMAXPROCS(0)
+	jobs := make(chan int, len(queries))
+	var wg sync.WaitGroup
+
+	for w := 0; w < numWorkers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				results[i] = bruteForceSearch2(index, queries[i], k)
+			}
+		}()
+	}
+
+	for i := range queries {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+
+	return results
+}
+
 // calculateRecall2 calculates the recall@k
 func calculateRecall2(groundTruth, results []SearchResult) float64 {
 	if len(groundTruth) == 0 || len(results) == 0 {
@@ -112,11 +175,12 @@ func calculateRecall2(groundTruth, results []SearchResult) float64 {
 	return float64(hits) / float64(len(groundTruth))
 }
 
-// getMemoryUsageMB returns current memory usage in MB
-func getMemoryUsageMB() float64 {
+// getMemoryUsageMB returns current and total memory usage in MB
+func getMemoryUsageMB() (alloc, totalAlloc float64) {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	return float64(m.Alloc) / (1024 * 1024)
+	return float64(m.Alloc) / (1024 * 1024),
+		float64(m.TotalAlloc) / (1024 * 1024)
 }
 
 // getStorageSize calculates total storage size in bytes
@@ -158,7 +222,8 @@ func runBenchmark(b *testing.B, config BenchmarkConfig) *BenchmarkResult {
 	}
 
 	runtime.GC()
-	memBefore := getMemoryUsageMB()
+	time.Sleep(10 * time.Millisecond) // Let GC settle
+	memBefore, totalBefore := getMemoryUsageMB()
 
 	index := NewHNSW(indexConfig)
 	buildStart := time.Now()
@@ -175,10 +240,12 @@ func runBenchmark(b *testing.B, config BenchmarkConfig) *BenchmarkResult {
 
 	result.BuildTime = time.Since(buildStart)
 	result.BuildQPS = float64(config.DatasetSize) / result.BuildTime.Seconds()
-	result.MemoryUsageMB = getMemoryUsageMB() - memBefore
+	memAfter, totalAfter := getMemoryUsageMB()
+	result.MemoryUsageMB = memAfter - memBefore
+	result.TotalAllocMB = totalAfter - totalBefore
 
-	b.Logf("Build completed in %v (%.2f vectors/sec, %.2f MB memory)",
-		result.BuildTime, result.BuildQPS, result.MemoryUsageMB)
+	b.Logf("Build completed in %v (%.2f vectors/sec, %.2f MB memory, %.2f MB total alloc)",
+		result.BuildTime, result.BuildQPS, result.MemoryUsageMB, result.TotalAllocMB)
 
 	// Phase 2: Save to storage
 	b.Logf("Saving index to storage...")
@@ -199,6 +266,7 @@ func runBenchmark(b *testing.B, config BenchmarkConfig) *BenchmarkResult {
 	// Clear memory to test load from cold start
 	index = nil
 	runtime.GC()
+	time.Sleep(10 * time.Millisecond)
 
 	// Phase 3: Load from storage
 	b.Logf("Loading index from storage...")
@@ -220,45 +288,96 @@ func runBenchmark(b *testing.B, config BenchmarkConfig) *BenchmarkResult {
 	if numGroundTruth > 100 {
 		numGroundTruth = 100
 	}
-	b.Logf("Computing ground truth for %d queries...", numGroundTruth)
-	groundTruths := make([][]SearchResult, numGroundTruth)
-	for i := 0; i < numGroundTruth; i++ {
-		groundTruths[i] = bruteForceSearch2(loadedIndex, queryVectors[i], config.TopK)
+	// For very large datasets, use even fewer ground truth queries
+	if config.DatasetSize > 50000 {
+		numGroundTruth = 50
 	}
+
+	b.Logf("Computing ground truth for %d queries (parallel)...", numGroundTruth)
+	gtStart := time.Now()
+	groundTruths := computeGroundTruthParallel(loadedIndex, queryVectors[:numGroundTruth], config.TopK)
+	b.Logf("Ground truth computed in %v", time.Since(gtStart))
 
 	// Phase 5: Query performance
 	b.Logf("Running %d queries with ef=%d, k=%d...", config.NumQueries, config.QueryEf, config.TopK)
 
-	// Warm up
-	for i := 0; i < 10 && i < config.NumQueries; i++ {
+	// Warm up: ensure CPU caches are hot and GC doesn't skew results
+	warmupQueries := 10
+	if config.DatasetSize > 50000 {
+		warmupQueries = 50
+	}
+	b.Logf("Warming up with %d queries...", warmupQueries)
+	for i := 0; i < warmupQueries && i < config.NumQueries; i++ {
 		_, _ = loadedIndex.Search(queryVectors[i], config.TopK, config.QueryEf)
 	}
+	runtime.GC() // Final GC before measurement
 
 	// Measure query performance
 	latencies := make([]time.Duration, config.NumQueries)
 	totalRecall := 0.0
 
-	queryStart := time.Now()
-	for i := 0; i < config.NumQueries; i++ {
-		start := time.Now()
-		results, err := loadedIndex.Search(queryVectors[i], config.TopK, config.QueryEf)
-		latencies[i] = time.Since(start)
+	if config.Concurrency > 1 {
+		// Concurrent benchmark
+		b.Logf("Running concurrent queries with %d workers...", config.Concurrency)
+		queriesPerWorker := config.NumQueries / config.Concurrency
+		var wg sync.WaitGroup
 
-		if err != nil {
-			b.Fatalf("Query %d failed: %v", i, err)
-		}
+		queryStart := time.Now()
+		for w := 0; w < config.Concurrency; w++ {
+			wg.Add(1)
+			go func(workerID int) {
+				defer wg.Done()
+				startIdx := workerID * queriesPerWorker
+				endIdx := startIdx + queriesPerWorker
+				if workerID == config.Concurrency-1 {
+					endIdx = config.NumQueries // Last worker takes remainder
+				}
 
-		// Calculate recall for subset
-		if i < numGroundTruth {
-			recall := calculateRecall2(groundTruths[i], results)
-			totalRecall += recall
-		}
+				for i := startIdx; i < endIdx; i++ {
+					start := time.Now()
+					results, err := loadedIndex.Search(queryVectors[i], config.TopK, config.QueryEf)
+					latencies[i] = time.Since(start)
 
-		if (i+1)%100 == 0 {
-			b.Logf("  Completed %d/%d queries...", i+1, config.NumQueries)
+					if err != nil {
+						b.Errorf("Query %d failed: %v", i, err)
+						return
+					}
+
+					// Calculate recall for subset
+					if i < numGroundTruth {
+						recall := calculateRecall2(groundTruths[i], results)
+						totalRecall += recall
+					}
+				}
+			}(w)
 		}
+		wg.Wait()
+		result.QueryTime = time.Since(queryStart)
+	} else {
+		// Sequential benchmark
+		queryStart := time.Now()
+		for i := 0; i < config.NumQueries; i++ {
+			start := time.Now()
+			results, err := loadedIndex.Search(queryVectors[i], config.TopK, config.QueryEf)
+			latencies[i] = time.Since(start)
+
+			if err != nil {
+				b.Fatalf("Query %d failed: %v", i, err)
+			}
+
+			// Calculate recall for subset
+			if i < numGroundTruth {
+				recall := calculateRecall2(groundTruths[i], results)
+				totalRecall += recall
+			}
+
+			if (i+1)%100 == 0 {
+				b.Logf("  Completed %d/%d queries...", i+1, config.NumQueries)
+			}
+		}
+		result.QueryTime = time.Since(queryStart)
 	}
-	result.QueryTime = time.Since(queryStart)
+
 	result.QueryQPS = float64(config.NumQueries) / result.QueryTime.Seconds()
 	result.Recall = totalRecall / float64(numGroundTruth)
 
@@ -285,14 +404,16 @@ func runBenchmark(b *testing.B, config BenchmarkConfig) *BenchmarkResult {
 // Benchmark suite for different scales
 func BenchmarkHNSW_E2E_1K_D128(b *testing.B) {
 	config := BenchmarkConfig{
-		DatasetSize:    1000,
-		Dimension:      128,
-		M:              16,
-		EfConstruction: 200,
-		QueryEf:        100,
-		TopK:           10,
-		NumQueries:     500,
-		DistanceFunc:   L2Distance,
+		DatasetSize:      1000,
+		Dimension:        128,
+		M:                16,
+		EfConstruction:   200,
+		QueryEf:          100,
+		TopK:             10,
+		NumQueries:       500,
+		DistanceFunc:     L2Distance,
+		DistanceFuncName: "L2",
+		Concurrency:      1,
 	}
 	result := runBenchmark(b, config)
 	printBenchmarkResult(b, result)
@@ -300,14 +421,16 @@ func BenchmarkHNSW_E2E_1K_D128(b *testing.B) {
 
 func BenchmarkHNSW_E2E_10K_D128(b *testing.B) {
 	config := BenchmarkConfig{
-		DatasetSize:    10000,
-		Dimension:      128,
-		M:              16,
-		EfConstruction: 200,
-		QueryEf:        100,
-		TopK:           10,
-		NumQueries:     1000,
-		DistanceFunc:   L2Distance,
+		DatasetSize:      10000,
+		Dimension:        128,
+		M:                16,
+		EfConstruction:   200,
+		QueryEf:          100,
+		TopK:             10,
+		NumQueries:       1000,
+		DistanceFunc:     L2Distance,
+		DistanceFuncName: "L2",
+		Concurrency:      1,
 	}
 	result := runBenchmark(b, config)
 	printBenchmarkResult(b, result)
@@ -318,30 +441,58 @@ func BenchmarkHNSW_E2E_100K_D128(b *testing.B) {
 		b.Skip("Skipping large benchmark in short mode")
 	}
 	config := BenchmarkConfig{
-		DatasetSize:    100000,
-		Dimension:      128,
-		M:              16,
-		EfConstruction: 200,
-		QueryEf:        100,
-		TopK:           10,
-		NumQueries:     1000,
-		DistanceFunc:   L2Distance,
+		DatasetSize:      100000,
+		Dimension:        128,
+		M:                16,
+		EfConstruction:   200,
+		QueryEf:          100,
+		TopK:             10,
+		NumQueries:       1000,
+		DistanceFunc:     L2Distance,
+		DistanceFuncName: "L2",
+		Concurrency:      1,
 	}
 	result := runBenchmark(b, config)
 	printBenchmarkResult(b, result)
 }
 
+// Concurrent benchmarks
+func BenchmarkHNSW_E2E_10K_D128_Concurrent(b *testing.B) {
+	baseConfig := BenchmarkConfig{
+		DatasetSize:      10000,
+		Dimension:        128,
+		M:                16,
+		EfConstruction:   200,
+		QueryEf:          100,
+		TopK:             10,
+		NumQueries:       1000,
+		DistanceFunc:     L2Distance,
+		DistanceFuncName: "L2",
+	}
+
+	for _, concurrency := range []int{1, 2, 4, 8, 16} {
+		config := baseConfig
+		config.Concurrency = concurrency
+		b.Run(fmt.Sprintf("C%d", concurrency), func(b *testing.B) {
+			result := runBenchmark(b, config)
+			printBenchmarkResult(b, result)
+		})
+	}
+}
+
 // Dimension benchmarks
 func BenchmarkHNSW_E2E_10K_D256(b *testing.B) {
 	config := BenchmarkConfig{
-		DatasetSize:    10000,
-		Dimension:      256,
-		M:              16,
-		EfConstruction: 200,
-		QueryEf:        100,
-		TopK:           10,
-		NumQueries:     1000,
-		DistanceFunc:   L2Distance,
+		DatasetSize:      10000,
+		Dimension:        256,
+		M:                16,
+		EfConstruction:   200,
+		QueryEf:          100,
+		TopK:             10,
+		NumQueries:       1000,
+		DistanceFunc:     L2Distance,
+		DistanceFuncName: "L2",
+		Concurrency:      1,
 	}
 	result := runBenchmark(b, config)
 	printBenchmarkResult(b, result)
@@ -349,14 +500,16 @@ func BenchmarkHNSW_E2E_10K_D256(b *testing.B) {
 
 func BenchmarkHNSW_E2E_10K_D512(b *testing.B) {
 	config := BenchmarkConfig{
-		DatasetSize:    10000,
-		Dimension:      512,
-		M:              16,
-		EfConstruction: 200,
-		QueryEf:        100,
-		TopK:           10,
-		NumQueries:     1000,
-		DistanceFunc:   L2Distance,
+		DatasetSize:      10000,
+		Dimension:        512,
+		M:                16,
+		EfConstruction:   200,
+		QueryEf:          100,
+		TopK:             10,
+		NumQueries:       1000,
+		DistanceFunc:     L2Distance,
+		DistanceFuncName: "L2",
+		Concurrency:      1,
 	}
 	result := runBenchmark(b, config)
 	printBenchmarkResult(b, result)
@@ -364,14 +517,16 @@ func BenchmarkHNSW_E2E_10K_D512(b *testing.B) {
 
 func BenchmarkHNSW_E2E_10K_D768(b *testing.B) {
 	config := BenchmarkConfig{
-		DatasetSize:    10000,
-		Dimension:      768,
-		M:              16,
-		EfConstruction: 200,
-		QueryEf:        100,
-		TopK:           10,
-		NumQueries:     1000,
-		DistanceFunc:   L2Distance,
+		DatasetSize:      10000,
+		Dimension:        768,
+		M:                16,
+		EfConstruction:   200,
+		QueryEf:          100,
+		TopK:             10,
+		NumQueries:       1000,
+		DistanceFunc:     L2Distance,
+		DistanceFuncName: "L2",
+		Concurrency:      1,
 	}
 	result := runBenchmark(b, config)
 	printBenchmarkResult(b, result)
@@ -379,14 +534,16 @@ func BenchmarkHNSW_E2E_10K_D768(b *testing.B) {
 
 func BenchmarkHNSW_E2E_10K_D1536(b *testing.B) {
 	config := BenchmarkConfig{
-		DatasetSize:    10000,
-		Dimension:      1536,
-		M:              16,
-		EfConstruction: 200,
-		QueryEf:        100,
-		TopK:           10,
-		NumQueries:     1000,
-		DistanceFunc:   L2Distance,
+		DatasetSize:      10000,
+		Dimension:        1536,
+		M:                16,
+		EfConstruction:   200,
+		QueryEf:          100,
+		TopK:             10,
+		NumQueries:       1000,
+		DistanceFunc:     L2Distance,
+		DistanceFuncName: "L2",
+		Concurrency:      1,
 	}
 	result := runBenchmark(b, config)
 	printBenchmarkResult(b, result)
@@ -395,14 +552,16 @@ func BenchmarkHNSW_E2E_10K_D1536(b *testing.B) {
 // Distance function benchmarks
 func BenchmarkHNSW_E2E_10K_Cosine(b *testing.B) {
 	config := BenchmarkConfig{
-		DatasetSize:    10000,
-		Dimension:      128,
-		M:              16,
-		EfConstruction: 200,
-		QueryEf:        100,
-		TopK:           10,
-		NumQueries:     1000,
-		DistanceFunc:   CosineDistance,
+		DatasetSize:      10000,
+		Dimension:        128,
+		M:                16,
+		EfConstruction:   200,
+		QueryEf:          100,
+		TopK:             10,
+		NumQueries:       1000,
+		DistanceFunc:     CosineDistance,
+		DistanceFuncName: "Cosine",
+		Concurrency:      1,
 	}
 	result := runBenchmark(b, config)
 	printBenchmarkResult(b, result)
@@ -410,14 +569,16 @@ func BenchmarkHNSW_E2E_10K_Cosine(b *testing.B) {
 
 func BenchmarkHNSW_E2E_10K_InnerProduct(b *testing.B) {
 	config := BenchmarkConfig{
-		DatasetSize:    10000,
-		Dimension:      128,
-		M:              16,
-		EfConstruction: 200,
-		QueryEf:        100,
-		TopK:           10,
-		NumQueries:     1000,
-		DistanceFunc:   InnerProductDistance,
+		DatasetSize:      10000,
+		Dimension:        128,
+		M:                16,
+		EfConstruction:   200,
+		QueryEf:          100,
+		TopK:             10,
+		NumQueries:       1000,
+		DistanceFunc:     InnerProductDistance,
+		DistanceFuncName: "InnerProduct",
+		Concurrency:      1,
 	}
 	result := runBenchmark(b, config)
 	printBenchmarkResult(b, result)
@@ -426,14 +587,16 @@ func BenchmarkHNSW_E2E_10K_InnerProduct(b *testing.B) {
 // Parameter tuning benchmarks - M values
 func BenchmarkHNSW_E2E_10K_M8(b *testing.B) {
 	config := BenchmarkConfig{
-		DatasetSize:    10000,
-		Dimension:      128,
-		M:              8,
-		EfConstruction: 200,
-		QueryEf:        100,
-		TopK:           10,
-		NumQueries:     1000,
-		DistanceFunc:   L2Distance,
+		DatasetSize:      10000,
+		Dimension:        128,
+		M:                8,
+		EfConstruction:   200,
+		QueryEf:          100,
+		TopK:             10,
+		NumQueries:       1000,
+		DistanceFunc:     L2Distance,
+		DistanceFuncName: "L2",
+		Concurrency:      1,
 	}
 	result := runBenchmark(b, config)
 	printBenchmarkResult(b, result)
@@ -441,14 +604,16 @@ func BenchmarkHNSW_E2E_10K_M8(b *testing.B) {
 
 func BenchmarkHNSW_E2E_10K_M32(b *testing.B) {
 	config := BenchmarkConfig{
-		DatasetSize:    10000,
-		Dimension:      128,
-		M:              32,
-		EfConstruction: 200,
-		QueryEf:        100,
-		TopK:           10,
-		NumQueries:     1000,
-		DistanceFunc:   L2Distance,
+		DatasetSize:      10000,
+		Dimension:        128,
+		M:                32,
+		EfConstruction:   200,
+		QueryEf:          100,
+		TopK:             10,
+		NumQueries:       1000,
+		DistanceFunc:     L2Distance,
+		DistanceFuncName: "L2",
+		Concurrency:      1,
 	}
 	result := runBenchmark(b, config)
 	printBenchmarkResult(b, result)
@@ -456,14 +621,16 @@ func BenchmarkHNSW_E2E_10K_M32(b *testing.B) {
 
 func BenchmarkHNSW_E2E_10K_M64(b *testing.B) {
 	config := BenchmarkConfig{
-		DatasetSize:    10000,
-		Dimension:      128,
-		M:              64,
-		EfConstruction: 200,
-		QueryEf:        100,
-		TopK:           10,
-		NumQueries:     1000,
-		DistanceFunc:   L2Distance,
+		DatasetSize:      10000,
+		Dimension:        128,
+		M:                64,
+		EfConstruction:   200,
+		QueryEf:          100,
+		TopK:             10,
+		NumQueries:       1000,
+		DistanceFunc:     L2Distance,
+		DistanceFuncName: "L2",
+		Concurrency:      1,
 	}
 	result := runBenchmark(b, config)
 	printBenchmarkResult(b, result)
@@ -472,14 +639,16 @@ func BenchmarkHNSW_E2E_10K_M64(b *testing.B) {
 // Parameter tuning benchmarks - Query Ef values
 func BenchmarkHNSW_E2E_10K_Ef50(b *testing.B) {
 	config := BenchmarkConfig{
-		DatasetSize:    10000,
-		Dimension:      128,
-		M:              16,
-		EfConstruction: 200,
-		QueryEf:        50,
-		TopK:           10,
-		NumQueries:     1000,
-		DistanceFunc:   L2Distance,
+		DatasetSize:      10000,
+		Dimension:        128,
+		M:                16,
+		EfConstruction:   200,
+		QueryEf:          50,
+		TopK:             10,
+		NumQueries:       1000,
+		DistanceFunc:     L2Distance,
+		DistanceFuncName: "L2",
+		Concurrency:      1,
 	}
 	result := runBenchmark(b, config)
 	printBenchmarkResult(b, result)
@@ -487,14 +656,16 @@ func BenchmarkHNSW_E2E_10K_Ef50(b *testing.B) {
 
 func BenchmarkHNSW_E2E_10K_Ef200(b *testing.B) {
 	config := BenchmarkConfig{
-		DatasetSize:    10000,
-		Dimension:      128,
-		M:              16,
-		EfConstruction: 200,
-		QueryEf:        200,
-		TopK:           10,
-		NumQueries:     1000,
-		DistanceFunc:   L2Distance,
+		DatasetSize:      10000,
+		Dimension:        128,
+		M:                16,
+		EfConstruction:   200,
+		QueryEf:          200,
+		TopK:             10,
+		NumQueries:       1000,
+		DistanceFunc:     L2Distance,
+		DistanceFuncName: "L2",
+		Concurrency:      1,
 	}
 	result := runBenchmark(b, config)
 	printBenchmarkResult(b, result)
@@ -502,14 +673,16 @@ func BenchmarkHNSW_E2E_10K_Ef200(b *testing.B) {
 
 func BenchmarkHNSW_E2E_10K_Ef400(b *testing.B) {
 	config := BenchmarkConfig{
-		DatasetSize:    10000,
-		Dimension:      128,
-		M:              16,
-		EfConstruction: 200,
-		QueryEf:        400,
-		TopK:           10,
-		NumQueries:     1000,
-		DistanceFunc:   L2Distance,
+		DatasetSize:      10000,
+		Dimension:        128,
+		M:                16,
+		EfConstruction:   200,
+		QueryEf:          400,
+		TopK:             10,
+		NumQueries:       1000,
+		DistanceFunc:     L2Distance,
+		DistanceFuncName: "L2",
+		Concurrency:      1,
 	}
 	result := runBenchmark(b, config)
 	printBenchmarkResult(b, result)
@@ -518,14 +691,16 @@ func BenchmarkHNSW_E2E_10K_Ef400(b *testing.B) {
 // TopK benchmarks
 func BenchmarkHNSW_E2E_10K_Top1(b *testing.B) {
 	config := BenchmarkConfig{
-		DatasetSize:    10000,
-		Dimension:      128,
-		M:              16,
-		EfConstruction: 200,
-		QueryEf:        100,
-		TopK:           1,
-		NumQueries:     1000,
-		DistanceFunc:   L2Distance,
+		DatasetSize:      10000,
+		Dimension:        128,
+		M:                16,
+		EfConstruction:   200,
+		QueryEf:          100,
+		TopK:             1,
+		NumQueries:       1000,
+		DistanceFunc:     L2Distance,
+		DistanceFuncName: "L2",
+		Concurrency:      1,
 	}
 	result := runBenchmark(b, config)
 	printBenchmarkResult(b, result)
@@ -533,14 +708,16 @@ func BenchmarkHNSW_E2E_10K_Top1(b *testing.B) {
 
 func BenchmarkHNSW_E2E_10K_Top50(b *testing.B) {
 	config := BenchmarkConfig{
-		DatasetSize:    10000,
-		Dimension:      128,
-		M:              16,
-		EfConstruction: 200,
-		QueryEf:        100,
-		TopK:           50,
-		NumQueries:     1000,
-		DistanceFunc:   L2Distance,
+		DatasetSize:      10000,
+		Dimension:        128,
+		M:                16,
+		EfConstruction:   200,
+		QueryEf:          100,
+		TopK:             50,
+		NumQueries:       1000,
+		DistanceFunc:     L2Distance,
+		DistanceFuncName: "L2",
+		Concurrency:      1,
 	}
 	result := runBenchmark(b, config)
 	printBenchmarkResult(b, result)
@@ -548,14 +725,16 @@ func BenchmarkHNSW_E2E_10K_Top50(b *testing.B) {
 
 func BenchmarkHNSW_E2E_10K_Top100(b *testing.B) {
 	config := BenchmarkConfig{
-		DatasetSize:    10000,
-		Dimension:      128,
-		M:              16,
-		EfConstruction: 200,
-		QueryEf:        100,
-		TopK:           100,
-		NumQueries:     1000,
-		DistanceFunc:   L2Distance,
+		DatasetSize:      10000,
+		Dimension:        128,
+		M:                16,
+		EfConstruction:   200,
+		QueryEf:          100,
+		TopK:             100,
+		NumQueries:       1000,
+		DistanceFunc:     L2Distance,
+		DistanceFuncName: "L2",
+		Concurrency:      1,
 	}
 	result := runBenchmark(b, config)
 	printBenchmarkResult(b, result)
@@ -577,22 +756,16 @@ func printBenchmarkResult(b *testing.B, result *BenchmarkResult) {
 	fmt.Printf("  Query Ef:         %d\n", result.Config.QueryEf)
 	fmt.Printf("  Top-K:            %d\n", result.Config.TopK)
 	fmt.Printf("  Num Queries:      %d\n", result.Config.NumQueries)
-
-	distName := "L2"
-	if result.Config.DistanceFunc != nil {
-		switch fmt.Sprintf("%p", result.Config.DistanceFunc) {
-		case fmt.Sprintf("%p", CosineDistance):
-			distName = "Cosine"
-		case fmt.Sprintf("%p", InnerProductDistance):
-			distName = "InnerProduct"
-		}
+	fmt.Printf("  Distance Func:    %s\n", result.Config.DistanceFuncName)
+	if result.Config.Concurrency > 1 {
+		fmt.Printf("  Concurrency:      %d\n", result.Config.Concurrency)
 	}
-	fmt.Printf("  Distance Func:    %s\n", distName)
 
 	fmt.Println("\nBuild Performance:")
 	fmt.Printf("  Time:             %v\n", result.BuildTime)
 	fmt.Printf("  Throughput:       %.2f vectors/sec\n", result.BuildQPS)
-	fmt.Printf("  Memory Usage:     %.2f MB\n", result.MemoryUsageMB)
+	fmt.Printf("  Memory Usage:     %.2f MB (%.2f MB total alloc)\n",
+		result.MemoryUsageMB, result.TotalAllocMB)
 
 	fmt.Println("\nPersistence Performance:")
 	fmt.Printf("  Save Time:        %v\n", result.SaveTime)
@@ -604,11 +777,18 @@ func printBenchmarkResult(b *testing.B, result *BenchmarkResult) {
 	fmt.Println("\nQuery Performance:")
 	fmt.Printf("  Total Time:       %v\n", result.QueryTime)
 	fmt.Printf("  Throughput:       %.2f queries/sec\n", result.QueryQPS)
+	if result.Config.Concurrency > 1 {
+		fmt.Printf("  Per-Thread QPS:   %.2f queries/sec\n",
+			result.QueryQPS/float64(result.Config.Concurrency))
+	}
 	fmt.Printf("  Avg Latency:      %v\n", result.AvgQueryLatency)
 	fmt.Printf("  P50 Latency:      %v\n", result.P50Latency)
 	fmt.Printf("  P95 Latency:      %v\n", result.P95Latency)
 	fmt.Printf("  P99 Latency:      %v\n", result.P99Latency)
-	fmt.Printf("  Recall@%d:        %.4f (%.2f%%)\n", result.Config.TopK, result.Recall, result.Recall*100)
+	fmt.Printf("  P99/P50 Ratio:    %.2fx\n",
+		float64(result.P99Latency)/float64(result.P50Latency))
+	fmt.Printf("  Recall@%d:        %.4f (%.2f%%)\n",
+		result.Config.TopK, result.Recall, result.Recall*100)
 
 	fmt.Println(strings.Repeat("=", 80))
 }
