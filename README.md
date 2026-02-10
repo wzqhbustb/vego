@@ -80,11 +80,11 @@ import (
 )
 
 func main() {
-    // 1. Create index
+    // 1. Create index (using adaptive configuration)
     config := hnsw.Config{
         Dimension:      128,        // Vector dimension
-        M:              16,         // Connections (affects recall and memory)
-        EfConstruction: 200,        // Build parameter (higher = more accurate)
+        Adaptive:       true,       // Auto-tune M and EfConstruction
+        ExpectedSize:   10000,      // Expected number of vectors
         DistanceFunc:   hnsw.L2Distance,
     }
     index := hnsw.NewHNSW(config)
@@ -136,6 +136,36 @@ results, _ := loadedIndex.Search(query, 10, 0)
 ## 📖 API Documentation
 
 ### Creating an Index
+
+#### Option 1: Adaptive Configuration (Recommended)
+
+Let Vego automatically choose optimal parameters based on your data characteristics:
+
+```go
+config := hnsw.Config{
+    Dimension:      128,                      // Required: vector dimension
+    Adaptive:       true,                     // Enable adaptive parameter tuning
+    ExpectedSize:   100000,                   // Expected number of vectors
+    DistanceFunc:   hnsw.CosineDistance,      // Optional: distance function
+    Seed:           42,                       // Optional: random seed
+}
+index := hnsw.NewHNSW(config)
+```
+
+**Adaptive Configuration Rules:**
+- **M (connections)**: Auto-selected based on dimension
+  - D ≤ 128: M = 16
+  - D ≤ 512: M = 24
+  - D ≤ 1024: M = 32
+  - D > 1024: M = 48
+- **EfConstruction**: Auto-scaled based on dataset size
+  - 10K vectors: EfConstruction = 200
+  - 100K vectors: EfConstruction = 520
+  - 1M vectors: EfConstruction = 780
+
+#### Option 2: Manual Configuration
+
+For fine-grained control, specify parameters explicitly:
 
 ```go
 config := hnsw.Config{
