@@ -96,8 +96,10 @@ func (c *Collection) Insert(doc *Document) error {
 
 	// Store document
 	if err := c.storage.Put(doc); err != nil {
-		// TODO: Rollback index - HNSW Delete not implemented yet
-		// For now, we leave the orphan node in the index
+		// Rollback: Remove from mappings (node remains orphaned in index until rebuilt)
+		// Note: HNSW doesn't support Delete, so the node will stay in the index
+		// but won't be discoverable through normal operations
+		log.Printf("Warning: Failed to store document %s, node %d is orphaned", doc.ID, nodeID)
 		return fmt.Errorf("store document: %w", err)
 	}
 

@@ -60,3 +60,26 @@ func WithDistanceFunc(fn hnsw.DistanceFunc) Option {
 		c.DistanceFunc = fn
 	}
 }
+
+// WithExpectedSize sets the expected dataset size for adaptive configuration
+func WithExpectedSize(size int) Option {
+	return func(c *Config) {
+		c.ExpectedSize = size
+	}
+}
+
+// WithM sets the HNSW M parameter (max connections per layer)
+func WithM(m int) Option {
+	return func(c *Config) {
+		c.M = m
+		c.Adaptive = false // Disable adaptive when manually set
+	}
+}
+
+// WithEfConstruction sets the HNSW EfConstruction parameter
+func WithEfConstruction(ef int) Option {
+	return func(c *Config) {
+		c.EfConstruction = ef
+		c.Adaptive = false // Disable adaptive when manually set
+	}
+}

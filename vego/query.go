@@ -45,10 +45,92 @@ func (f *MetadataFilter) Match(doc *Document) bool {
 		return val == f.Value
 	case "ne":
 		return val != f.Value
-	// Add more operators as needed
+	case "gt":
+		return compareGreater(val, f.Value)
+	case "gte":
+		return compareGreater(val, f.Value) || val == f.Value
+	case "lt":
+		return compareLess(val, f.Value)
+	case "lte":
+		return compareLess(val, f.Value) || val == f.Value
+	case "in":
+		if slice, ok := f.Value.([]interface{}); ok {
+			for _, v := range slice {
+				if val == v {
+					return true
+				}
+			}
+		}
+		return false
+	case "contains":
+		if str, ok := val.(string); ok {
+			if substr, ok := f.Value.(string); ok {
+				return contains(str, substr)
+			}
+		}
+		return false
 	default:
 		return false
 	}
+}
+
+// Helper functions for type-safe comparison
+func compareGreater(a, b interface{}) bool {
+	switch v := a.(type) {
+	case int:
+		if bv, ok := b.(int); ok {
+			return v > bv
+		}
+	case int64:
+		if bv, ok := b.(int64); ok {
+			return v > bv
+		}
+	case float64:
+		if bv, ok := b.(float64); ok {
+			return v > bv
+		}
+	case string:
+		if bv, ok := b.(string); ok {
+			return v > bv
+		}
+	}
+	return false
+}
+
+func compareLess(a, b interface{}) bool {
+	switch v := a.(type) {
+	case int:
+		if bv, ok := b.(int); ok {
+			return v < bv
+		}
+	case int64:
+		if bv, ok := b.(int64); ok {
+			return v < bv
+		}
+	case float64:
+		if bv, ok := b.(float64); ok {
+			return v < bv
+		}
+	case string:
+		if bv, ok := b.(string); ok {
+			return v < bv
+		}
+	}
+	return false
+}
+
+func contains(s, substr string) bool {
+	// Simple contains check
+	return len(s) >= len(substr) && indexOf(s, substr) >= 0
+}
+
+func indexOf(s, substr string) int {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return i
+		}
+	}
+	return -1
 }
 
 // AndFilter combines multiple filters with AND
