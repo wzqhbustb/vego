@@ -37,9 +37,27 @@ type Config struct {
 	Dimension      int          // Vector dimensionality.
 	DistanceFunc   DistanceFunc // default L2Distance.
 	Seed           int64        // Seed for random level generation.
+	Adaptive       bool         // If true, automatically calculate M and EfConstruction based on Dimension and ExpectedSize
+	ExpectedSize   int          // Expected dataset size for adaptive parameter calculation (default: 10000)
 }
 
 func NewHNSW(config Config) *HNSWIndex {
+	// ========== 自适应配置逻辑 ==========
+	if config.Adaptive && config.Dimension > 0 {
+		adaptive := calculateAdaptiveParams(config.Dimension, config.ExpectedSize)
+
+		// 只覆盖用户未显式设置的值（<= 0 表示未设置）
+		if config.M <= 0 {
+			config.M = adaptive.M
+		}
+		if config.EfConstruction <= 0 {
+			config.EfConstruction = adaptive.EfConstruction
+		}
+		if config.DistanceFunc == nil {
+			config.DistanceFunc = adaptive.DistanceFunc
+		}
+	}
+
 	if config.M <= 0 {
 		config.M = 16
 	}
@@ -171,4 +189,68 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// calculateAdaptiveParams 根据维度和预期数据规模计算最优参数
+func calculateAdaptiveParams(dimension, expectedSize int) Config {
+	// 如果 expectedSize 未设置，使用默认值 10K
+	if expectedSize <= 0 {
+		expectedSize = 10000
+	}
+
+	// ========== 计算最优 M ==========
+	// 原则：维度越高，需要更多连接保持图连通性
+	m := 16 // 基础默认值
+
+	switch {
+	case dimension <= 128:
+		// 低维向量 (小型 embeddings)：标准配置
+		m = 16
+	case dimension <= 512:
+		// 中维向量 (BERT base 等)：适当增加连接
+		m = 24
+	case dimension <= 1024:
+		// 高维向量 (BERT large 等)：需要更多连接
+		m = 32
+	default:
+		// 超高维向量 (OpenAI text-embedding-3 1536 等)：最大连接
+		m = 48
+	}
+
+	// ========== 计算最优 EfConstruction ==========
+	// 基础值
+	efConstruction := 200
+
+	// 1. 基于数据规模的对数增长
+	// 公式：ef = 200 + 100 * log10(N/10000)
+	if expectedSize > 10000 {
+		scaleFactor := math.Log10(float64(expectedSize) / 10000.0)
+		efConstruction = int(200 + 100*scaleFactor)
+	}
+
+	// 2. 高维需要更多探索
+	// 维度 > 512 时，efConstruction 增加 50%
+	if dimension > 512 {
+		efConstruction = int(float64(efConstruction) * 1.5)
+	}
+
+	// 3. 数据量特别大时需要更高 ef
+	// 超过 100万时，额外增加
+	if expectedSize > 1000000 {
+		efConstruction = int(float64(efConstruction) * 1.3)
+	}
+
+	// ========== 设置上限保护 ==========
+	if efConstruction > 800 {
+		efConstruction = 800 // 防止内存爆炸
+	}
+	if m > 64 {
+		m = 64 // 防止连接过多导致搜索变慢
+	}
+
+	return Config{
+		M:              m,
+		EfConstruction: efConstruction,
+		DistanceFunc:   L2Distance,
+	}
 }

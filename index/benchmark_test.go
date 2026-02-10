@@ -26,6 +26,7 @@ type BenchmarkConfig struct {
 	DistanceFunc     DistanceFunc
 	DistanceFuncName string // Added: explicit distance function name
 	Concurrency      int    // Added: for concurrent tests
+	UseAdaptive      bool   // Added: use adaptive configuration based on Dimension and DatasetSize
 }
 
 // BenchmarkResult stores the results of a benchmark run
@@ -212,13 +213,26 @@ func runBenchmark(b *testing.B, config BenchmarkConfig) *BenchmarkResult {
 	queryVectors := generateRandomVectors(config.NumQueries, config.Dimension, 123)
 
 	// Phase 1: Build index
-	b.Logf("Building index with M=%d, EfConstruction=%d...", config.M, config.EfConstruction)
-	indexConfig := Config{
-		Dimension:      config.Dimension,
-		M:              config.M,
-		EfConstruction: config.EfConstruction,
-		DistanceFunc:   config.DistanceFunc,
-		Seed:           42,
+	var indexConfig Config
+	if config.UseAdaptive {
+		b.Logf("Building index with adaptive config (Dimension=%d, ExpectedSize=%d)...", config.Dimension, config.DatasetSize)
+		indexConfig = Config{
+			Dimension:    config.Dimension,
+			Adaptive:     true,
+			ExpectedSize: config.DatasetSize,
+			DistanceFunc: config.DistanceFunc,
+			Seed:         42,
+		}
+		// Log actual values after adaptive calculation (NewHNSW will compute these)
+	} else {
+		b.Logf("Building index with M=%d, EfConstruction=%d...", config.M, config.EfConstruction)
+		indexConfig = Config{
+			Dimension:      config.Dimension,
+			M:              config.M,
+			EfConstruction: config.EfConstruction,
+			DistanceFunc:   config.DistanceFunc,
+			Seed:           42,
+		}
 	}
 
 	runtime.GC()
@@ -451,6 +465,7 @@ func BenchmarkHNSW_E2E_100K_D128(b *testing.B) {
 		DistanceFunc:     L2Distance,
 		DistanceFuncName: "L2",
 		Concurrency:      1,
+		UseAdaptive:      true, // Enable adaptive config for large dataset
 	}
 	result := runBenchmark(b, config)
 	printBenchmarkResult(b, result)
@@ -468,6 +483,7 @@ func BenchmarkHNSW_E2E_10K_D128_Concurrent(b *testing.B) {
 		NumQueries:       1000,
 		DistanceFunc:     L2Distance,
 		DistanceFuncName: "L2",
+		UseAdaptive:      true, // Enable adaptive config for better recall
 	}
 
 	for _, concurrency := range []int{1, 2, 4, 8, 16} {
@@ -527,6 +543,7 @@ func BenchmarkHNSW_E2E_10K_D768(b *testing.B) {
 		DistanceFunc:     L2Distance,
 		DistanceFuncName: "L2",
 		Concurrency:      1,
+		UseAdaptive:      true, // Enable adaptive config for high dimension (BERT)
 	}
 	result := runBenchmark(b, config)
 	printBenchmarkResult(b, result)
@@ -544,6 +561,7 @@ func BenchmarkHNSW_E2E_10K_D1536(b *testing.B) {
 		DistanceFunc:     L2Distance,
 		DistanceFuncName: "L2",
 		Concurrency:      1,
+		UseAdaptive:      true, // Enable adaptive config for high dimension
 	}
 	result := runBenchmark(b, config)
 	printBenchmarkResult(b, result)
