@@ -104,82 +104,161 @@ func (h *HNSWIndex) search(query []float32, k int, ef int, ep int, topLevel int)
 	return candidates, nil
 }
 
+// func (h *HNSWIndex) searchLayer(query []float32, ep int, ef int, level int) []SearchResult {
+// 	visited := make(map[int]bool)
+
+// 	// Candidate set, min-heap, sorted by distance ascending
+// 	candidates := &PriorityQueue{}
+// 	heap.Init(candidates)
+
+// 	// Result set, max-heap, sorted by distance descending
+// 	results := &MaxHeap{}
+// 	heap.Init(results)
+
+// 	// Calculate entry point distance
+// 	epDist := h.distFunc(query, h.nodes[ep].Vector())
+
+// 	heap.Push(candidates, &Item{value: ep, priority: epDist})
+// 	heap.Push(results, &Item{value: ep, priority: epDist})
+// 	visited[ep] = true
+
+// 	for candidates.Len() > 0 {
+// 		// Get closest candidate
+// 		current := heap.Pop(candidates).(*Item)
+
+// 		// Optimization: only check when result set is full
+// 		if results.Len() >= ef {
+// 			furthest := results.Peek().(*Item)
+// 			if current.priority > furthest.priority {
+// 				break
+// 			}
+// 		}
+
+// 		if current.value < 0 || current.value >= len(h.nodes) {
+// 			continue // Skip invalid nodes
+// 		}
+
+// 		// Check all neighbors of current node
+// 		neighbors := h.nodes[current.value].GetConnections(level)
+
+// 		for _, neighborID := range neighbors {
+// 			if visited[neighborID] {
+// 				continue
+// 			}
+
+// 			if neighborID < 0 || neighborID >= len(h.nodes) {
+// 				continue // Skip invalid neighbors
+// 			}
+
+// 			visited[neighborID] = true
+
+// 			// Calculate distance
+// 			dist := h.distFunc(query, h.nodes[neighborID].Vector())
+
+// 			// If result set not full or current distance is closer, add to candidates
+// 			if results.Len() < ef {
+// 				heap.Push(candidates, &Item{value: neighborID, priority: dist})
+// 				heap.Push(results, &Item{value: neighborID, priority: dist})
+// 			} else {
+// 				furthest := results.Peek().(*Item)
+// 				if dist < furthest.priority {
+// 					heap.Push(candidates, &Item{value: neighborID, priority: dist})
+// 					heap.Push(results, &Item{value: neighborID, priority: dist})
+// 					heap.Pop(results)
+// 				}
+// 			}
+// 		}
+// 	}
+
+// 	// Convert to result array (sorted from nearest to farthest)
+// 	resultArray := make([]SearchResult, results.Len())
+// 	for i := results.Len() - 1; i >= 0; i-- {
+// 		item := heap.Pop(results).(*Item)
+// 		resultArray[i] = SearchResult{
+// 			ID:       item.value,
+// 			Distance: item.priority,
+// 		}
+// 	}
+
+// 	return resultArray
+// }
+
+// searchLayerConservative
 func (h *HNSWIndex) searchLayer(query []float32, ep int, ef int, level int) []SearchResult {
-	visited := make(map[int]bool)
-
-	// Candidate set, min-heap, sorted by distance ascending
+	visited := make(map[int]bool, ef*2) // 预分配容量
 	candidates := &PriorityQueue{}
-	heap.Init(candidates)
-
-	// Result set, max-heap, sorted by distance descending
 	results := &MaxHeap{}
+
+	heap.Init(candidates)
 	heap.Init(results)
 
-	// Calculate entry point distance
-	epDist := h.distFunc(query, h.nodes[ep].Vector())
-
+	// 初始化
+	epDist := h.distFunc(query, h.nodes[ep].vector)
 	heap.Push(candidates, &Item{value: ep, priority: epDist})
 	heap.Push(results, &Item{value: ep, priority: epDist})
 	visited[ep] = true
 
+	// 扩展因子: 搜索更多候选以提高召回率
+	expansionFactor := 1.2
+	if level == 0 {
+		expansionFactor = 1.5 // 底层更激进扩展
+	}
+	maxCandidates := int(float64(ef) * expansionFactor)
+
 	for candidates.Len() > 0 {
-		// Get closest candidate
 		current := heap.Pop(candidates).(*Item)
 
-		// Optimization: only check when result set is full
+		// FIX 1: 更保守的终止条件
+		// 只有当结果集满 AND 当前距离 > 最远结果距离时才终止
 		if results.Len() >= ef {
-			furthest := results.Peek().(*Item)
+			furthest := (*results)[0] // MaxHeap 根是最大距离
 			if current.priority > furthest.priority {
 				break
 			}
 		}
 
-		if current.value < 0 || current.value >= len(h.nodes) {
-			continue // Skip invalid nodes
+		// FIX 2: 限制候选数量防止爆炸增长
+		if candidates.Len() > maxCandidates {
+			continue
 		}
 
-		// Check all neighbors of current node
-		neighbors := h.nodes[current.value].GetConnections(level)
-
-		for _, neighborID := range neighbors {
+		// 遍历邻居
+		for _, neighborID := range h.nodes[current.value].connections[level] {
 			if visited[neighborID] {
 				continue
 			}
-
-			if neighborID < 0 || neighborID >= len(h.nodes) {
-				continue // Skip invalid neighbors
-			}
-
 			visited[neighborID] = true
 
-			// Calculate distance
-			dist := h.distFunc(query, h.nodes[neighborID].Vector())
+			dist := h.distFunc(query, h.nodes[neighborID].vector)
 
-			// If result set not full or current distance is closer, add to candidates
+			// FIX 3: 更宽松的入队条件
+			shouldAdd := false
 			if results.Len() < ef {
+				shouldAdd = true
+			} else {
+				furthest := (*results)[0]
+				// 使用 1.01 倍容差避免浮点误差
+				if dist < furthest.priority*1.01 {
+					shouldAdd = true
+				}
+			}
+
+			if shouldAdd {
 				heap.Push(candidates, &Item{value: neighborID, priority: dist})
 				heap.Push(results, &Item{value: neighborID, priority: dist})
-			} else {
-				furthest := results.Peek().(*Item)
-				if dist < furthest.priority {
-					heap.Push(candidates, &Item{value: neighborID, priority: dist})
-					heap.Push(results, &Item{value: neighborID, priority: dist})
+				if results.Len() > ef {
 					heap.Pop(results)
 				}
 			}
 		}
 	}
 
-	// Convert to result array (sorted from nearest to farthest)
+	// 转换为结果数组
 	resultArray := make([]SearchResult, results.Len())
 	for i := results.Len() - 1; i >= 0; i-- {
 		item := heap.Pop(results).(*Item)
-		resultArray[i] = SearchResult{
-			ID:       item.value,
-			Distance: item.priority,
-		}
+		resultArray[i] = SearchResult{ID: item.value, Distance: item.priority}
 	}
-
 	return resultArray
 }
 
