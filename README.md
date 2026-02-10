@@ -456,8 +456,8 @@ This project is built on top of cutting-edge research in vector search and colum
 | Paper | Authors | Year | Contribution |
 |-------|---------|------|--------------|
 | **[Apache Arrow: Cross-Language Development Platform for In-Memory Analytics](https://doi.org/10.14778/3397230)** | Apache Arrow Team | 2016 | Foundation for our storage layer's in-memory representation |
-| **[Lance: Efficient Random Access in Columnar Storage through Adaptive Structural Encodings](https://github.com/lancedb/lance)** | Lance Team | 2022 | Influenced our Lance-compatible columnar storage format design |
-| **[Lance v2: A New Columnar Container Format](https://lancedb.github.io/lance/format.html)** | Lance Team | 2023 | Latest columnar container format improvements |
+| **[Lance: Efficient Random Access in Columnar Storage through Adaptive Structural Encodings](https://arxiv.org/html/2504.15247v1)** | Lance Team | 2022 | Influenced our Lance-compatible columnar storage format design |
+| **[Lance v2: A New Columnar Container Format](https://lancedb.com/blog/lance-v2/)** | Lance Team | 2023 | Latest columnar container format improvements |
 | **[Product Quantization for Nearest Neighbor Search](https://doi.org/10.1109/TPAMI.2010.57)** | Jégou et al. | 2011 | Foundation for future quantization support (PQ) to reduce memory footprint |
 
 ---
