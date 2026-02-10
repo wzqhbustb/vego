@@ -22,10 +22,12 @@
    - >95% recall rate (compared to brute-force search)
    - Concurrent read/write support
 
-3. **💾 Built-in Persistence**
-   - Self-developed Lance-like columnar storage format
-   - Supports ZSTD, BitPacking, and other compression algorithms
+3. **💾 Built-in Storage Engine**
+   - Self-developed **Lance-compatible** columnar storage format
+   - Adaptive encoding (ZSTD, BitPacking, RLE, BSS) with intelligent auto-selection
+   - Zero-copy Arrow implementation for optimal memory efficiency
    - One-click save/load complete index
+   - [📖 Learn more about the storage engine](STORAGE.md)
 
 4. **🔧 Simple & Easy to Use**
    - Clean API design
@@ -78,11 +80,11 @@ import (
 )
 
 func main() {
-    // 1. Create index
+    // 1. Create index (using adaptive configuration)
     config := hnsw.Config{
         Dimension:      128,        // Vector dimension
-        M:              16,         // Connections (affects recall and memory)
-        EfConstruction: 200,        // Build parameter (higher = more accurate)
+        Adaptive:       true,       // Auto-tune M and EfConstruction
+        ExpectedSize:   10000,      // Expected number of vectors
         DistanceFunc:   hnsw.L2Distance,
     }
     index := hnsw.NewHNSW(config)
@@ -134,6 +136,36 @@ results, _ := loadedIndex.Search(query, 10, 0)
 ## 📖 API Documentation
 
 ### Creating an Index
+
+#### Option 1: Adaptive Configuration (Recommended)
+
+Let Vego automatically choose optimal parameters based on your data characteristics:
+
+```go
+config := hnsw.Config{
+    Dimension:      128,                      // Required: vector dimension
+    Adaptive:       true,                     // Enable adaptive parameter tuning
+    ExpectedSize:   100000,                   // Expected number of vectors
+    DistanceFunc:   hnsw.CosineDistance,      // Optional: distance function
+    Seed:           42,                       // Optional: random seed
+}
+index := hnsw.NewHNSW(config)
+```
+
+**Adaptive Configuration Rules:**
+- **M (connections)**: Auto-selected based on dimension
+  - D ≤ 128: M = 16
+  - D ≤ 512: M = 24
+  - D ≤ 1024: M = 32
+  - D > 1024: M = 48
+- **EfConstruction**: Auto-scaled based on dataset size
+  - 10K vectors: EfConstruction = 200
+  - 100K vectors: EfConstruction = 520
+  - 1M vectors: EfConstruction = 780
+
+#### Option 2: Manual Configuration
+
+For fine-grained control, specify parameters explicitly:
 
 ```go
 config := hnsw.Config{
@@ -199,30 +231,99 @@ Layer 0: [EP]->[C]->[E]->[F]->[B]->[G]->[D]->[H]->[A]  (Full Graph)
 - **Probabilistic Layer Assignment**: Exponential distribution determines node levels, ensuring O(log N) query efficiency
 - **Heuristic Edge Selection**: Considers both distance and neighbor diversity
 
-### Storage Format
+### Storage Engine Architecture
 
-Self-developed **Lance-compatible** columnar storage:
+Vego's storage layer is built on a **5-tier columnar architecture** designed specifically for vector workloads:
 
 ```
-nodes.lance       # Node data: ID + Vector + Level
-connections.lance # Edge data: NodeID + Layer + NeighborID
-metadata.lance    # Metadata: M, Dimension, EntryPoint, etc.
+Application (HNSW Index)
+    ↓
+Column API (Read/Write)
+    ↓
+Arrow Subsystem (Zero-Copy Memory)     ← 1.2 ns/op access, no CGO
+    ↓
+Encoding Layer (Adaptive Compression)  ← Auto-selects ZSTD/RLE/BitPacking
+    ↓
+Format Layer (Lance-compatible)        ← 0.77-0.84x compression ratio
+    ↓
+I/O Layer (Sync/Async)                 ← 330 MB/s write, 250 MB/s read
 ```
 
-**Encoding Support:**
-- ZSTD compression
-- BitPacking integer compression
-- RLE run-length encoding
-- Dictionary encoding
+**Key Design Decisions:**
+- **Self-Developed Arrow**: Custom implementation without CGO dependencies
+- **Adaptive Encoding**: Intelligent encoder selection based on data statistics
+- **Dual I/O Modes**: Synchronous (production-ready) and Asynchronous (experimental)
+
+👉 **[Full storage engine docs →](STORAGE.md)**
+
+### Storage Engine Highlights
+
+Vego features a **custom-built columnar storage engine** specifically designed for vector workloads:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Lance-compatible Format                   │
+├─────────────────────────────────────────────────────────────┤
+│  nodes.lance       →  ID + Vector (FixedSizeList) + Level   │
+│  connections.lance →  NodeID + Layer + NeighborID          │
+│  metadata.lance    →  M, Dimension, EntryPoint, etc.       │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key Features:**
+
+| Feature | Performance | Benefit |
+|---------|-------------|---------|
+| **Zero-Copy Arrow** | 1.2 ns/op access | No CGO, minimal GC pressure |
+| **Adaptive Encoding** | Auto-selects ZSTD/RLE/BitPacking | Optimal compression ratio |
+| **Columnar Layout** | 0.77-0.84x compression | Efficient vector storage |
+| **Dual I/O Modes** | 330 MB/s write, 250 MB/s read | Sync (stable) / Async (concurrent) |
+
+**Supported Encodings:**
+- **ZSTD**: General-purpose, high compression (23μs encode / 62μs decode)
+- **BitPacking**: Narrow integers (up to 16-bit)
+- **RLE**: Run-length encoding for sequential data
+- **BSS**: Byte-stream split for Float32 vectors
+- **Dictionary**: Low-cardinality data
+
+👉 **[Read the full storage engine documentation →](STORAGE.md)**
 
 ---
 
 ## 📊 Performance Benchmarks
 
-Test Environment: Intel Core i9-13950HX, Linux amd64, Go 1.23
+---
+
+### HNSW Index Performance
+
+**Test Environment:** Apple M3 Max, macOS ARM64, Go 1.23
+
+End-to-end performance including index construction, persistence, and query execution:
+
+| Dataset | Dimension | Config | Query Ef | Recall@10 | P99 Latency | QPS |
+|---------|-----------|--------|----------|-----------|-------------|-----|
+| 10K | 128 | Manual (M=16, EfConstruction=200) | 200 | **95.9%** | 975µs | ~1,000 |
+| 100K | 128 | Adaptive (M=16, EfConstruction=520) | 300 | **75.4%** | 3.17ms | 419 |
+| 10K | 768 | Adaptive (M=32, EfConstruction=200) | 100 | **74.6%** | 4.67ms | 255 |
+
+**Key Observations:**
+- **High Recall**: Achieves >95% recall on small datasets (10K) with low latency (<1ms P99)
+- **Scalability**: Maintains 75%+ recall on 100K datasets with sub-5ms latency
+- **High Dimensions**: Adaptive configuration automatically tunes parameters for D=768 (BERT embeddings)
+- **Query Ef Tuning**: Larger datasets benefit from higher `ef` values (100→300 for 100K dataset)
+
+**Recommended Query Ef Settings:**
+- Small datasets (≤10K): `ef=100-200`
+- Medium datasets (10K-100K): `ef=200-300`
+- Large datasets (>100K): `ef=400+`
+
+> 💡 **Tip**: Start with `Adaptive=true` and `ExpectedSize` set to your dataset size. Fine-tune `Query Ef` during search based on your recall vs. latency requirements.
+
 ---
 
 ### Storage Layer Performance
+
+**Test Environment: Intel Core i9-13950HX, Linux amd64, Go 1.23
 
 #### Memory Access (Arrow Layer)
 
@@ -278,9 +379,11 @@ The storage layer supports both synchronous and asynchronous I/O:
 
 | Feature | Vego | Typical Vector DB (Milvus/Qdrant) |
 |---------|------|-----------------------------------|
+| **Recall Rate** | 95.9% @ 10K, 75.4% @ 100K | ~90-95% average |
+| **Query Latency (10K)** | <1ms P99 | 1-3ms |
+| **Query Latency (100K)** | 3.17ms P99 | 5-15ms |
 | **Memory Overhead** | ~200MB per 1M vectors (128-dim) | 500MB-1GB+ |
-| **Query Latency (100K)** | <0.2ms P99 | 1-5ms |
-| **Cold Start (Load)** | <2s (100K vectors) | 5-30s |
+| **Cold Start (Load)** | <200ms (100K vectors) | 5-30s |
 | **Binary Size** | Single static binary (~10MB) | 100MB+ with dependencies |
 | **CGO Dependency** | None | Often required (FAISS, RocksDB) |
 
@@ -383,8 +486,8 @@ This project is built on top of cutting-edge research in vector search and colum
 | Paper | Authors | Year | Contribution |
 |-------|---------|------|--------------|
 | **[Apache Arrow: Cross-Language Development Platform for In-Memory Analytics](https://doi.org/10.14778/3397230)** | Apache Arrow Team | 2016 | Foundation for our storage layer's in-memory representation |
-| **[Lance: Efficient Random Access in Columnar Storage through Adaptive Structural Encodings](https://github.com/lancedb/lance)** | Lance Team | 2022 | Influenced our Lance-compatible columnar storage format design |
-| **[Lance v2: A New Columnar Container Format](https://lancedb.github.io/lance/format.html)** | Lance Team | 2023 | Latest columnar container format improvements |
+| **[Lance: Efficient Random Access in Columnar Storage through Adaptive Structural Encodings](https://arxiv.org/html/2504.15247v1)** | Lance Team | 2022 | Influenced our Lance-compatible columnar storage format design |
+| **[Lance v2: A New Columnar Container Format](https://lancedb.com/blog/lance-v2/)** | Lance Team | 2023 | Latest columnar container format improvements |
 | **[Product Quantization for Nearest Neighbor Search](https://doi.org/10.1109/TPAMI.2010.57)** | Jégou et al. | 2011 | Foundation for future quantization support (PQ) to reduce memory footprint |
 
 ---

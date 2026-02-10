@@ -37,9 +37,27 @@ type Config struct {
 	Dimension      int          // Vector dimensionality.
 	DistanceFunc   DistanceFunc // default L2Distance.
 	Seed           int64        // Seed for random level generation.
+	Adaptive       bool         // If true, automatically calculate M and EfConstruction based on Dimension and ExpectedSize
+	ExpectedSize   int          // Expected dataset size for adaptive parameter calculation (default: 10000)
 }
 
 func NewHNSW(config Config) *HNSWIndex {
+	// ========== Adaptive Configuration Logic ==========
+	if config.Adaptive && config.Dimension > 0 {
+		adaptive := calculateAdaptiveParams(config.Dimension, config.ExpectedSize)
+
+		// Only override values not explicitly set by user (<= 0 means unset)
+		if config.M <= 0 {
+			config.M = adaptive.M
+		}
+		if config.EfConstruction <= 0 {
+			config.EfConstruction = adaptive.EfConstruction
+		}
+		if config.DistanceFunc == nil {
+			config.DistanceFunc = adaptive.DistanceFunc
+		}
+	}
+
 	if config.M <= 0 {
 		config.M = 16
 	}
@@ -112,7 +130,7 @@ func (h *HNSWIndex) Search(query []float32, k int, ef int) ([]SearchResult, erro
 	}
 
 	if ef == 0 {
-		ef = max(h.efConstruction, k)
+		ef = max(200, k*2)
 	}
 
 	h.globalLock.RLock()
@@ -171,4 +189,70 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// calculateAdaptiveParams calculates optimal parameters based on dimension and expected dataset size
+func calculateAdaptiveParams(dimension, expectedSize int) Config {
+	// If expectedSize is not set, use default value 10K
+	if expectedSize <= 0 {
+		expectedSize = 10000
+	}
+
+	// ========== Calculate Optimal M ==========
+	// Principle: Higher dimensions require more connections to maintain graph connectivity
+	m := 16 // 基础默认值
+
+	switch {
+	case dimension <= 128:
+		// Low-dimensional vectors (small embeddings): Standard configuration
+		m = 16
+	case dimension <= 512:
+		// Medium-dimensional vectors (BERT base, etc.): Moderately increase connections
+		m = 24
+	case dimension <= 1024:
+		// High-dimensional vectors (BERT large, etc.): Need more connections
+		m = 32
+	default:
+		// Ultra-high-dimensional vectors (OpenAI text-embedding-3 1536, etc.): Maximum connections
+		m = 48
+	}
+
+	// ========== Calculate Optimal EfConstruction ==========
+	// Base value
+	efConstruction := 200
+
+	// 1. Logarithmic growth based on dataset size
+	// Modified: Use stronger scaling factor 200 (was 100)
+	// Formula: ef = 200 + 200 * log10(N/10000)
+	if expectedSize > 10000 {
+		scaleFactor := math.Log10(float64(expectedSize) / 10000.0)
+		efConstruction = int(200 + 200*scaleFactor) // Key modification: 100 → 200
+	}
+
+	// 2. Extra boost for large-scale datasets
+	// For datasets >50K, add another 30% to ensure build quality
+	// This is critical for 100K datasets (400 * 1.3 = 520)
+	if expectedSize > 50000 {
+		efConstruction = int(float64(efConstruction) * 1.3)
+	}
+
+	// 3. High dimensions require more exploration
+	// When dimension > 512, increase efConstruction by 50%
+	if dimension > 512 {
+		efConstruction = int(float64(efConstruction) * 1.5)
+	}
+
+	// ========== Set Upper Bound Protection ==========
+	if efConstruction > 800 {
+		efConstruction = 800 // Prevent memory explosion
+	}
+	if m > 64 {
+		m = 64 // Prevent too many connections from slowing down search
+	}
+
+	return Config{
+		M:              m,
+		EfConstruction: efConstruction,
+		DistanceFunc:   L2Distance,
+	}
 }

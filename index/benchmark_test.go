@@ -26,6 +26,7 @@ type BenchmarkConfig struct {
 	DistanceFunc     DistanceFunc
 	DistanceFuncName string // Added: explicit distance function name
 	Concurrency      int    // Added: for concurrent tests
+	UseAdaptive      bool   // Added: use adaptive configuration based on Dimension and DatasetSize
 }
 
 // BenchmarkResult stores the results of a benchmark run
@@ -212,13 +213,26 @@ func runBenchmark(b *testing.B, config BenchmarkConfig) *BenchmarkResult {
 	queryVectors := generateRandomVectors(config.NumQueries, config.Dimension, 123)
 
 	// Phase 1: Build index
-	b.Logf("Building index with M=%d, EfConstruction=%d...", config.M, config.EfConstruction)
-	indexConfig := Config{
-		Dimension:      config.Dimension,
-		M:              config.M,
-		EfConstruction: config.EfConstruction,
-		DistanceFunc:   config.DistanceFunc,
-		Seed:           42,
+	var indexConfig Config
+	if config.UseAdaptive {
+		b.Logf("Building index with adaptive config (Dimension=%d, ExpectedSize=%d)...", config.Dimension, config.DatasetSize)
+		indexConfig = Config{
+			Dimension:    config.Dimension,
+			Adaptive:     true,
+			ExpectedSize: config.DatasetSize,
+			DistanceFunc: config.DistanceFunc,
+			Seed:         42,
+		}
+		// Log actual values after adaptive calculation (NewHNSW will compute these)
+	} else {
+		b.Logf("Building index with M=%d, EfConstruction=%d...", config.M, config.EfConstruction)
+		indexConfig = Config{
+			Dimension:      config.Dimension,
+			M:              config.M,
+			EfConstruction: config.EfConstruction,
+			DistanceFunc:   config.DistanceFunc,
+			Seed:           42,
+		}
 	}
 
 	runtime.GC()
@@ -226,6 +240,11 @@ func runBenchmark(b *testing.B, config BenchmarkConfig) *BenchmarkResult {
 	memBefore, totalBefore := getMemoryUsageMB()
 
 	index := NewHNSW(indexConfig)
+
+	// 更新 result.Config 为实际使用的参数（从索引读取）
+	result.Config.M = index.M
+	result.Config.EfConstruction = index.efConstruction
+
 	buildStart := time.Now()
 
 	for i, vec := range vectors {
@@ -436,21 +455,42 @@ func BenchmarkHNSW_E2E_10K_D128(b *testing.B) {
 	printBenchmarkResult(b, result)
 }
 
-func BenchmarkHNSW_E2E_100K_D128(b *testing.B) {
-	if testing.Short() {
-		b.Skip("Skipping large benchmark in short mode")
-	}
+func BenchmarkHNSW_E2E_10K_D128Adaptive(b *testing.B) {
 	config := BenchmarkConfig{
-		DatasetSize:      100000,
+		DatasetSize:      10000,
 		Dimension:        128,
-		M:                16,
-		EfConstruction:   200,
+		M:                0,
+		EfConstruction:   0,
 		QueryEf:          100,
 		TopK:             10,
 		NumQueries:       1000,
 		DistanceFunc:     L2Distance,
 		DistanceFuncName: "L2",
 		Concurrency:      1,
+		UseAdaptive:      true,
+	}
+	result := runBenchmark(b, config)
+	printBenchmarkResult(b, result)
+}
+
+// go test -v -bench=^BenchmarkHNSW_E2E_100K_D128$ -benchtime=1x -timeout=20m
+func BenchmarkHNSW_E2E_100K_D128(b *testing.B) {
+	if testing.Short() {
+		b.Skip("Skipping large benchmark in short mode")
+	}
+
+	config := BenchmarkConfig{
+		DatasetSize:      100000,
+		Dimension:        128,
+		M:                0,
+		EfConstruction:   0,
+		QueryEf:          300,
+		TopK:             10,
+		NumQueries:       1000,
+		DistanceFunc:     L2Distance,
+		DistanceFuncName: "L2",
+		Concurrency:      1,
+		UseAdaptive:      true, // Enable adaptive config for large dataset
 	}
 	result := runBenchmark(b, config)
 	printBenchmarkResult(b, result)
@@ -461,13 +501,14 @@ func BenchmarkHNSW_E2E_10K_D128_Concurrent(b *testing.B) {
 	baseConfig := BenchmarkConfig{
 		DatasetSize:      10000,
 		Dimension:        128,
-		M:                16,
-		EfConstruction:   200,
+		M:                0,
+		EfConstruction:   0,
 		QueryEf:          100,
 		TopK:             10,
 		NumQueries:       1000,
 		DistanceFunc:     L2Distance,
 		DistanceFuncName: "L2",
+		UseAdaptive:      true, // Enable adaptive config for better recall
 	}
 
 	for _, concurrency := range []int{1, 2, 4, 8, 16} {
@@ -481,6 +522,7 @@ func BenchmarkHNSW_E2E_10K_D128_Concurrent(b *testing.B) {
 }
 
 // Dimension benchmarks
+// go test -v -bench=^BenchmarkHNSW_E2E_10K_D256$ -benchtime=1x -timeout=20m
 func BenchmarkHNSW_E2E_10K_D256(b *testing.B) {
 	config := BenchmarkConfig{
 		DatasetSize:      10000,
@@ -515,18 +557,20 @@ func BenchmarkHNSW_E2E_10K_D512(b *testing.B) {
 	printBenchmarkResult(b, result)
 }
 
+// go test -v -bench=^BenchmarkHNSW_E2E_10K_D768$ -benchtime=1x -timeout=20m
 func BenchmarkHNSW_E2E_10K_D768(b *testing.B) {
 	config := BenchmarkConfig{
 		DatasetSize:      10000,
 		Dimension:        768,
-		M:                16,
-		EfConstruction:   200,
+		M:                0,
+		EfConstruction:   0,
 		QueryEf:          100,
 		TopK:             10,
 		NumQueries:       1000,
 		DistanceFunc:     L2Distance,
 		DistanceFuncName: "L2",
 		Concurrency:      1,
+		UseAdaptive:      true, // Enable adaptive config for high dimension (BERT)
 	}
 	result := runBenchmark(b, config)
 	printBenchmarkResult(b, result)
@@ -536,14 +580,15 @@ func BenchmarkHNSW_E2E_10K_D1536(b *testing.B) {
 	config := BenchmarkConfig{
 		DatasetSize:      10000,
 		Dimension:        1536,
-		M:                16,
-		EfConstruction:   200,
+		M:                0,
+		EfConstruction:   0,
 		QueryEf:          100,
 		TopK:             10,
 		NumQueries:       1000,
 		DistanceFunc:     L2Distance,
 		DistanceFuncName: "L2",
 		Concurrency:      1,
+		UseAdaptive:      true, // Enable adaptive config for high dimension
 	}
 	result := runBenchmark(b, config)
 	printBenchmarkResult(b, result)

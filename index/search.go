@@ -104,7 +104,7 @@ func (h *HNSWIndex) search(query []float32, k int, ef int, ep int, topLevel int)
 	return candidates, nil
 }
 
-func (h *HNSWIndex) searchLayer(query []float32, ep int, ef int, level int) []SearchResult {
+func (h *HNSWIndex) searchLayerAggressive(query []float32, ep int, ef int, level int) []SearchResult {
 	visited := make(map[int]bool)
 
 	// Candidate set, min-heap, sorted by distance ascending
@@ -180,6 +180,88 @@ func (h *HNSWIndex) searchLayer(query []float32, ep int, ef int, level int) []Se
 		}
 	}
 
+	return resultArray
+}
+
+// searchLayerConservative
+func (h *HNSWIndex) searchLayer(query []float32, ep int, ef int, level int) []SearchResult {
+	estimatedVisits := int(float64(ef) * 2.0 * float64(h.Mmax))
+	visited := make(map[int]bool, estimatedVisits)
+
+	candidates := &PriorityQueue{}
+	results := &MaxHeap{}
+	heap.Init(candidates)
+	heap.Init(results)
+
+	epDist := h.distFunc(query, h.nodes[ep].vector)
+	heap.Push(candidates, &Item{value: ep, priority: epDist})
+	heap.Push(results, &Item{value: ep, priority: epDist})
+	visited[ep] = true
+
+	for candidates.Len() > 0 {
+		current := heap.Pop(candidates).(*Item)
+
+		// Boundary check
+		if current.value < 0 || current.value >= len(h.nodes) {
+			continue
+		}
+
+		// Conservative early termination
+		if results.Len() >= ef {
+			furthest := (*results)[0]
+			if current.priority > furthest.priority {
+				break
+			}
+		}
+
+		// Iterate through neighbors
+		for _, neighborID := range h.nodes[current.value].connections[level] {
+			if visited[neighborID] {
+				continue
+			}
+
+			if neighborID < 0 || neighborID >= len(h.nodes) {
+				continue
+			}
+
+			visited[neighborID] = true
+			dist := h.distFunc(query, h.nodes[neighborID].vector)
+
+			// More precise floating-point tolerance
+			shouldAdd := false
+			if results.Len() < ef {
+				shouldAdd = true
+			} else {
+				furthest := (*results)[0]
+				const (
+					absoluteTolerance = 1e-5
+					relativeTolerance = 0.01
+				)
+				tolerance := furthest.priority*relativeTolerance + absoluteTolerance
+				if dist < furthest.priority+tolerance {
+					shouldAdd = true
+				}
+			}
+
+			if shouldAdd {
+				// Remove maxCandidates limit
+				heap.Push(candidates, &Item{value: neighborID, priority: dist})
+
+				// results maintain original logic
+				heap.Push(results, &Item{value: neighborID, priority: dist})
+				if results.Len() > ef {
+					heap.Pop(results)
+				}
+			}
+		}
+	}
+
+	// Convert to result array
+	resultArray := make([]SearchResult, results.Len())
+	for i := results.Len() - 1; i >= 0; i-- {
+		item := heap.Pop(results).(*Item)
+		resultArray[i] = SearchResult{ID: item.value, Distance: item.priority}
+	}
 	return resultArray
 }
 

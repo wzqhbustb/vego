@@ -18,8 +18,8 @@ const (
 	// MinSupportedVersion is the minimum version this implementation can read
 	MinSupportedVersion uint16 = 1
 
-	// MaxPageSize is the maximum size of a single page (16 MB)
-	MaxPageSize = 16 * 1024 * 1024
+	// MaxPageSize is the maximum size of a single page (64 MB)
+	MaxPageSize = 64 * 1024 * 1024
 
 	// DefaultPageSize is the default page size (1 MB)
 	DefaultPageSize = 1024 * 1024
