@@ -13,7 +13,7 @@
 
 - [🚀 Quick Start](#quick-start) - Get started in 5 minutes
 - [📖 API Docs](#api-documentation) - Configuration & usage
-- [💾 Storage Engine](STORAGE.md) - Deep dive into storage layer
+- [💾 Storage Engine](./STORAGE.md) - Deep dive into storage layer
 - [📊 Performance](#performance-benchmarks) - Benchmarks & comparisons
 - [⚠️ Known Limitations](#known-limitations) - Current constraints
 - [🗺️ Roadmap](#roadmap) - Future plans
@@ -74,6 +74,8 @@ Provide knowledge base retrieval capabilities for local LLMs:
 ---
 
 ## 🚀 Quick Start
+
+<a name="quick-start"></a>
 
 ### Installation
 
@@ -199,6 +201,8 @@ results, _ := loadedIndex.Search(query, 10, 0)
 ---
 
 ## 📖 API Documentation
+
+<a name="api-documentation"></a>
 
 ### Creating an Index
 
@@ -357,6 +361,8 @@ Vego features a **custom-built columnar storage engine** specifically designed f
 
 ## 📊 Performance Benchmarks
 
+<a name="performance-benchmarks"></a>
+
 ### HNSW Index Performance
 
 **Test Environment:** Apple M3 Max, macOS ARM64, Go 1.23
@@ -457,6 +463,8 @@ The storage layer supports both synchronous and asynchronous I/O:
 
 ## ⚠️ Known Limitations
 
+<a name="known-limitations"></a>
+
 While Vego is production-ready for many use cases, please be aware of these current limitations:
 
 ### 1. Async I/O Concurrency
@@ -489,6 +497,8 @@ See [STORAGE.md](STORAGE.md) for storage-specific limitations and workarounds.
 ---
 
 ## 🗺️ Roadmap
+
+<a name="roadmap"></a>
 
 Vego is actively evolving. For the detailed development roadmap including:
 
