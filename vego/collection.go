@@ -60,7 +60,7 @@ func NewCollection(name, path string, config *Config) (*Collection, error) {
 
 	// Initialize document storage
 	storagePath := filepath.Join(path, "documents")
-	storage, err := NewDocumentStorage(storagePath, config)
+	storage, err := NewDocumentStorage(storagePath, config.Dimension)
 	if err != nil {
 		return nil, fmt.Errorf("init document storage: %w", err)
 	}
@@ -95,7 +95,7 @@ func (c *Collection) Insert(doc *Document) error {
 	}
 
 	// Store document
-	if err := c.storage.Put(doc.ID, doc); err != nil {
+	if err := c.storage.Put(doc); err != nil {
 		// TODO: Rollback index - HNSW Delete not implemented yet
 		// For now, we leave the orphan node in the index
 		return fmt.Errorf("store document: %w", err)
@@ -197,7 +197,7 @@ func (c *Collection) Update(doc *Document) error {
 	}
 
 	// Update storage first
-	if err := c.storage.Put(doc.ID, doc); err != nil {
+	if err := c.storage.Put(doc); err != nil {
 		return fmt.Errorf("update document: %w", err)
 	}
 
