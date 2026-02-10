@@ -1,9 +1,9 @@
-// adaptive_config.go - 自适应参数配置
+// adaptive_config.go - Adaptive parameter configuration
 package hnsw
 
 import "math"
 
-// AdaptiveConfig 根据数据特征生成最优 HNSW 参数
+// AdaptiveConfig generates optimal HNSW parameters based on data characteristics
 func AdaptiveConfig(dimension, expectedDatasetSize int) Config {
 	return Config{
 		Dimension:      dimension,
@@ -13,7 +13,7 @@ func AdaptiveConfig(dimension, expectedDatasetSize int) Config {
 	}
 }
 
-// calculateOptimalM - 维度越高，需要更多连接保持图连通性
+// calculateOptimalM - Higher dimensions require more connections to maintain graph connectivity
 func calculateOptimalM(dimension int) int {
 	switch {
 	case dimension <= 128:
@@ -27,17 +27,17 @@ func calculateOptimalM(dimension int) int {
 	}
 }
 
-// calculateOptimalEfConstruction - 随数据规模对数增长
+// calculateOptimalEfConstruction - Grows logarithmically with dataset size
 func calculateOptimalEfConstruction(dimension, datasetSize int) int {
 	baseEf := 200
 
-	// 数据规模因子: log10(N/10K)
+	// Dataset size factor: log10(N/10K)
 	if datasetSize > 10000 {
 		scaleFactor := math.Log10(float64(datasetSize) / 10000.0)
 		baseEf = int(200 + 100*scaleFactor)
 	}
 
-	// 高维需要更多探索
+	// High dimensions require more exploration
 	if dimension > 512 {
 		baseEf = int(float64(baseEf) * 1.5)
 	}
@@ -48,9 +48,9 @@ func calculateOptimalEfConstruction(dimension, datasetSize int) int {
 	return baseEf
 }
 
-// calculateOptimalQueryEf - 搜索时动态计算 ef
+// calculateOptimalQueryEf - Dynamically calculates ef at search time
 func calculateOptimalQueryEf(datasetSize, topK int) int {
-	// 经验公式: ef = 2*k + 50*log10(N/1000)
+	// Empirical formula: ef = 2*k + 50*log10(N/1000)
 	baseEf := 2 * topK
 	datasetScale := math.Log10(float64(datasetSize)/1000.0 + 1.0)
 	ef := int(float64(baseEf) * (1.0 + datasetScale*0.5))
@@ -64,7 +64,7 @@ func calculateOptimalQueryEf(datasetSize, topK int) int {
 	return ef
 }
 
-// SearchWithAdaptiveEf - 使用自适应 ef 的搜索
+// SearchWithAdaptiveEf - Search using adaptive ef
 func (h *HNSWIndex) SearchWithAdaptiveEf(query []float32, k int) ([]SearchResult, error) {
 	ef := calculateOptimalQueryEf(len(h.nodes), k)
 	return h.Search(query, k, ef)

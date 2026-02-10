@@ -201,12 +201,12 @@ func (h *HNSWIndex) searchLayer(query []float32, ep int, ef int, level int) []Se
 	for candidates.Len() > 0 {
 		current := heap.Pop(candidates).(*Item)
 
-		// 边界检查
+		// Boundary check
 		if current.value < 0 || current.value >= len(h.nodes) {
 			continue
 		}
 
-		// 保守的提前终止
+		// Conservative early termination
 		if results.Len() >= ef {
 			furthest := (*results)[0]
 			if current.priority > furthest.priority {
@@ -214,7 +214,7 @@ func (h *HNSWIndex) searchLayer(query []float32, ep int, ef int, level int) []Se
 			}
 		}
 
-		// 遍历邻居
+		// Iterate through neighbors
 		for _, neighborID := range h.nodes[current.value].connections[level] {
 			if visited[neighborID] {
 				continue
@@ -227,7 +227,7 @@ func (h *HNSWIndex) searchLayer(query []float32, ep int, ef int, level int) []Se
 			visited[neighborID] = true
 			dist := h.distFunc(query, h.nodes[neighborID].vector)
 
-			// 更精确的浮点容差
+			// More precise floating-point tolerance
 			shouldAdd := false
 			if results.Len() < ef {
 				shouldAdd = true
@@ -244,10 +244,10 @@ func (h *HNSWIndex) searchLayer(query []float32, ep int, ef int, level int) []Se
 			}
 
 			if shouldAdd {
-				// 移除 maxCandidates 限制
+				// Remove maxCandidates limit
 				heap.Push(candidates, &Item{value: neighborID, priority: dist})
 
-				// results 保持原有逻辑
+				// results maintain original logic
 				heap.Push(results, &Item{value: neighborID, priority: dist})
 				if results.Len() > ef {
 					heap.Pop(results)
@@ -256,7 +256,7 @@ func (h *HNSWIndex) searchLayer(query []float32, ep int, ef int, level int) []Se
 		}
 	}
 
-	// 转换为结果数组
+	// Convert to result array
 	resultArray := make([]SearchResult, results.Len())
 	for i := results.Len() - 1; i >= 0; i-- {
 		item := heap.Pop(results).(*Item)

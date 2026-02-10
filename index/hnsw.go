@@ -42,11 +42,11 @@ type Config struct {
 }
 
 func NewHNSW(config Config) *HNSWIndex {
-	// ========== 自适应配置逻辑 ==========
+	// ========== Adaptive Configuration Logic ==========
 	if config.Adaptive && config.Dimension > 0 {
 		adaptive := calculateAdaptiveParams(config.Dimension, config.ExpectedSize)
 
-		// 只覆盖用户未显式设置的值（<= 0 表示未设置）
+		// Only override values not explicitly set by user (<= 0 means unset)
 		if config.M <= 0 {
 			config.M = adaptive.M
 		}
@@ -191,63 +191,63 @@ func max(a, b int) int {
 	return b
 }
 
-// calculateAdaptiveParams 根据维度和预期数据规模计算最优参数
+// calculateAdaptiveParams calculates optimal parameters based on dimension and expected dataset size
 func calculateAdaptiveParams(dimension, expectedSize int) Config {
-	// 如果 expectedSize 未设置，使用默认值 10K
+	// If expectedSize is not set, use default value 10K
 	if expectedSize <= 0 {
 		expectedSize = 10000
 	}
 
-	// ========== 计算最优 M ==========
-	// 原则：维度越高，需要更多连接保持图连通性
+	// ========== Calculate Optimal M ==========
+	// Principle: Higher dimensions require more connections to maintain graph connectivity
 	m := 16 // 基础默认值
 
 	switch {
 	case dimension <= 128:
-		// 低维向量 (小型 embeddings)：标准配置
+		// Low-dimensional vectors (small embeddings): Standard configuration
 		m = 16
 	case dimension <= 512:
-		// 中维向量 (BERT base 等)：适当增加连接
+		// Medium-dimensional vectors (BERT base, etc.): Moderately increase connections
 		m = 24
 	case dimension <= 1024:
-		// 高维向量 (BERT large 等)：需要更多连接
+		// High-dimensional vectors (BERT large, etc.): Need more connections
 		m = 32
 	default:
-		// 超高维向量 (OpenAI text-embedding-3 1536 等)：最大连接
+		// Ultra-high-dimensional vectors (OpenAI text-embedding-3 1536, etc.): Maximum connections
 		m = 48
 	}
 
-	// ========== 计算最优 EfConstruction ==========
-	// 基础值
+	// ========== Calculate Optimal EfConstruction ==========
+	// Base value
 	efConstruction := 200
 
-	// 1. 基于数据规模的对数增长
-	// 修改：使用更强的缩放因子 200 (原来是 100)
-	// 公式：ef = 200 + 200 * log10(N/10000)
+	// 1. Logarithmic growth based on dataset size
+	// Modified: Use stronger scaling factor 200 (was 100)
+	// Formula: ef = 200 + 200 * log10(N/10000)
 	if expectedSize > 10000 {
 		scaleFactor := math.Log10(float64(expectedSize) / 10000.0)
-		efConstruction = int(200 + 200*scaleFactor) // 关键修改：100 → 200
+		efConstruction = int(200 + 200*scaleFactor) // Key modification: 100 → 200
 	}
 
-	// 2. 大规模数据集额外增强
-	// 对于 >50K 的数据集，再增加 30% 以确保构建质量
-	// 这对 100K 数据集至关重要 (400 * 1.3 = 520)
+	// 2. Extra boost for large-scale datasets
+	// For datasets >50K, add another 30% to ensure build quality
+	// This is critical for 100K datasets (400 * 1.3 = 520)
 	if expectedSize > 50000 {
 		efConstruction = int(float64(efConstruction) * 1.3)
 	}
 
-	// 3. 高维需要更多探索
-	// 维度 > 512 时，efConstruction 增加 50%
+	// 3. High dimensions require more exploration
+	// When dimension > 512, increase efConstruction by 50%
 	if dimension > 512 {
 		efConstruction = int(float64(efConstruction) * 1.5)
 	}
 
-	// ========== 设置上限保护 ==========
+	// ========== Set Upper Bound Protection ==========
 	if efConstruction > 800 {
-		efConstruction = 800 // 防止内存爆炸
+		efConstruction = 800 // Prevent memory explosion
 	}
 	if m > 64 {
-		m = 64 // 防止连接过多导致搜索变慢
+		m = 64 // Prevent too many connections from slowing down search
 	}
 
 	return Config{

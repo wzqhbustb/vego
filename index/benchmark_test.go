@@ -484,7 +484,7 @@ func BenchmarkHNSW_E2E_100K_D128(b *testing.B) {
 		Dimension:        128,
 		M:                0,
 		EfConstruction:   0,
-		QueryEf:          200,
+		QueryEf:          300,
 		TopK:             10,
 		NumQueries:       1000,
 		DistanceFunc:     L2Distance,
