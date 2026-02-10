@@ -130,7 +130,7 @@ func (h *HNSWIndex) Search(query []float32, k int, ef int) ([]SearchResult, erro
 	}
 
 	if ef == 0 {
-		ef = max(h.efConstruction, k)
+		ef = max(200, k*2)
 	}
 
 	h.globalLock.RLock()
@@ -222,22 +222,24 @@ func calculateAdaptiveParams(dimension, expectedSize int) Config {
 	efConstruction := 200
 
 	// 1. 基于数据规模的对数增长
-	// 公式：ef = 200 + 100 * log10(N/10000)
+	// 修改：使用更强的缩放因子 200 (原来是 100)
+	// 公式：ef = 200 + 200 * log10(N/10000)
 	if expectedSize > 10000 {
 		scaleFactor := math.Log10(float64(expectedSize) / 10000.0)
-		efConstruction = int(200 + 100*scaleFactor)
+		efConstruction = int(200 + 200*scaleFactor) // 关键修改：100 → 200
 	}
 
-	// 2. 高维需要更多探索
+	// 2. 大规模数据集额外增强
+	// 对于 >50K 的数据集，再增加 30% 以确保构建质量
+	// 这对 100K 数据集至关重要 (400 * 1.3 = 520)
+	if expectedSize > 50000 {
+		efConstruction = int(float64(efConstruction) * 1.3)
+	}
+
+	// 3. 高维需要更多探索
 	// 维度 > 512 时，efConstruction 增加 50%
 	if dimension > 512 {
 		efConstruction = int(float64(efConstruction) * 1.5)
-	}
-
-	// 3. 数据量特别大时需要更高 ef
-	// 超过 100万时，额外增加
-	if expectedSize > 1000000 {
-		efConstruction = int(float64(efConstruction) * 1.3)
 	}
 
 	// ========== 设置上限保护 ==========
