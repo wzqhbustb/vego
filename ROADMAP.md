@@ -5,7 +5,7 @@
 | Phase | Goal | Timeline | Key Deliverables |
 |-------|------|----------|------------------|
 | **Phase 0** | Unified API & Foundation | 1-2 weeks | User-friendly API, basic integration tests |
-| Phase 1 | Storage Engine Hardening | 4-6 weeks | Block Cache, Row Index, performance fix, async I/O |
+| Phase 1 | Storage Engine Hardening | 4-6 weeks | Row Index, Block Cache, Get() O(n) fix, async I/O |
 | Phase 2 | MVP | 6-8 weeks | CRUD operations, basic query, performance baseline |
 | Phase 3 | Beta | 8-10 weeks | CMO, projection pushdown, Zone Map |
 | Phase 4 | V1.0 Performance | 10-12 weeks | MiniBlock, prefetch, SIMD |
@@ -116,13 +116,31 @@ results, _ := coll.Search(queryVector, 10,
 Solidify the storage foundation, establish benchmarks, and ensure subsequent development doesn't require rework.
 
 ### Key Tasks
+
+#### Week 1-2: File Format Foundation
+- **File Version Management**: Add version fields to Header/Footer, compatibility checking framework
+- **Format Evolution Strategy**: Design forward/backward compatibility for future schema changes
+
+#### Week 2-4: Memory Index & Caching (Critical Path)
+- **Row Index Implementation**: idHash → rowIndex mapping to fix Get() O(n) complexity
+  - Build from vectors.lance on startup (in-memory, no persistence needed for <1M docs)
+  - O(1) lookup for document retrieval
+- **LRU Cache for Documents**: Hot document caching for frequently accessed vectors
+  - Cache Search results to avoid repeated disk reads
+  - Configurable capacity (default: 10K documents)
+- **GetBatch Optimization**: Batch loading to reduce I/O round trips for Search results
+
+#### Week 4-6: Storage Engine Hardening
+- **Block Cache Implementation**: 64KB blocks, LRU eviction, thread-safe page caching
+- **Writer Async Optimization**: Parallel encoding with guaranteed sequential writes
+- **Performance Baseline Establishment**: Comprehensive benchmark suite validating O(1) Get()
+- **End-to-End Integration Tests**: Full path coverage from Write → Read with cache validation
+
+#### Week 5-6: Storage Foundation (Non-blocking)
 - **Delta Encoding Implementation**: Variable-length integer encoding for time-series data
-- **End-to-End Integration Tests**: Full path coverage from Write → Read
-- **Performance Baseline Establishment**: Comprehensive benchmark suite
 - **Error Classification System**: `lance/errors` package with structured error handling
-- **Page-Level Statistics (Min/Max)**: Foundation for Phase 2 Zone Map
+- **Page-Level Statistics (Min/Max)**: Foundation for Phase 3 Zone Map
 - **Nullable Encoding Unified Handling**: Currently only Zstd supports null; unify null handling across all encoders
-- **File Version Management**: Prepare for format evolution
 
 ### Steps
 1. Error classification system ✅
@@ -137,10 +155,19 @@ Solidify the storage foundation, establish benchmarks, and ensure subsequent dev
 8. Nullable unified handling (most complex) - Requires modification of all encoders
 
 ### Definition of Done
+- [ ] File version management: Can detect and handle format version mismatches
+- [ ] Get() operation is O(1) average case (via Row Index + Cache)
+- [ ] Search(k=10) with 100K docs completes in < 100ms (vs current 10+ seconds)
 - [ ] All encoders pass round-trip tests (encode → decode → data integrity)
 - [ ] `go test -race` shows no race conditions
 - [ ] Benchmark targets: Write 100MB vector data < 5s, Read < 2s
 - [ ] Code test coverage > 60%
+
+### Dependencies
+- Week 1-2 (File Version) must complete before any disk format changes
+- Week 2-4 (Row Index + Cache) can start once File Version is stable
+- Week 4-6 (Block Cache) depends on Row Index for cache key management
+- Week 5-6 tasks are non-blocking and can proceed in parallel
 
 ---
 
@@ -150,15 +177,22 @@ Solidify the storage foundation, establish benchmarks, and ensure subsequent dev
 Enable the system to handle real-world data with basic CRUD and query capabilities.
 
 ### Key Tasks
-- **Block Cache Implementation**: 64KB blocks, LRU eviction, thread-safe
-- **Writer Async Optimization**: Parallel encoding with guaranteed sequential writes
+
+#### HNSW Index Hardening
+- **True Delete Support**: Remove node from HNSW index at all layers, reconnect neighbors to maintain graph connectivity
+- **Tombstone Mechanism**: Mark deleted nodes for lazy cleanup or immediate removal
+- **Orphan Prevention**: Update operation properly handles old nodes (reuse or delete)
+- **Index Compaction**: Background rebuild to remove deleted nodes and optimize graph structure
+
+#### Storage Engine Enhancements
 - **Accumulation Buffer**: Avoid small Pages (< 4KB)
 - **Basic Monitoring**: I/O count, cache hit rate, encoding latency
 - **Request Coalescing**: Merge adjacent I/O requests
 - **Table Abstraction Layer**: Higher-level API for users
 - **Manifest Basic Version**: File metadata management (foundation for Phase 5 MVCC)
 - **Column Pruning (Basic)**: Read only required columns
-- **Performance Optimization Based on Benchmarks**:
+
+#### Performance Optimization
   - Async I/O memory overhead
   - Multi-reader concurrency degradation (current: 4x concurrency = 4x slowdown!)
     ```
@@ -172,6 +206,9 @@ Enable the system to handle real-world data with basic CRUD and query capabiliti
 - [ ] Repeated query performance improved 5x+ (cache hit)
 - [ ] Write 1M vectors (768-dim) < 30s
 - [ ] Provide high-level APIs: `lance.Open()` / `lance.Write()` / `lance.Read()`
+- [ ] Delete operation truly removes nodes from HNSW index (no index bloat)
+- [ ] Update operation does not create orphan nodes (or reuses old node)
+- [ ] Index compaction reduces size after bulk deletes (>30% space reclaim)
 
 ---
 
