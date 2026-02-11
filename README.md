@@ -12,6 +12,7 @@
 ## 📑 Quick Links
 
 - [🚀 Quick Start](#quick-start) - Get started in 5 minutes
+- [📚 Examples](./examples/) - Runnable code examples
 - [📖 API Docs](#api-documentation) - Configuration & usage
 - [💾 Storage Engine](./STORAGE.md) - Deep dive into storage layer
 - [📊 Performance](#performance-benchmarks) - Benchmarks & comparisons
@@ -196,6 +197,22 @@ if err != nil {
 
 // Continue using loaded index
 results, _ := loadedIndex.Search(query, 10, 0)
+```
+
+### 📚 More Examples
+
+For more detailed usage examples, check out the [examples](./examples/) directory:
+
+- **[basic_usage](./examples/basic_usage/)** - Basic HNSW index operations
+- **[persistence](./examples/persistence/)** - Save and load index from disk
+- **[storage_demo](./examples/storage_demo/)** - Low-level columnar storage API
+- **[batch_insert](./examples/batch_insert/)** - Batch insertion performance tips
+- **[search_comparison](./examples/search_comparison/)** - Compare distance functions and EF parameters
+
+Each example is a standalone runnable program:
+```bash
+cd examples/basic_usage
+go run main.go
 ```
 
 ---

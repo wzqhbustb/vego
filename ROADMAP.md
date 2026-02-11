@@ -1,24 +1,117 @@
-# Lance in Go RoadMap V2
+# Vego Roadmap
 
 ## Overview
 
 | Phase | Goal | Timeline | Key Deliverables |
 |-------|------|----------|------------------|
-| Phase 0 | Architecture Hardening | 4-6 weeks | Foundation, benchmarks, error handling |
-| Phase 1 | MVP | 6-8 weeks | Block Cache, async I/O, Table abstraction |
-| Phase 2 | Beta | 8-10 weeks | CMO, projection pushdown, Zone Map |
-| Phase 3 | V1.0 Performance | 10-12 weeks | MiniBlock, prefetch, SIMD |
-| Phase 4 | V1.5 Extreme | 12-16 weeks | io_uring, vectorized execution |
-| Phase 5 | V2.0 Enterprise | 20-24 weeks | WAL, MVCC, indexing, partitioning |
+| **Phase 0** | Unified API & Foundation | 2-3 weeks | User-friendly API, integration tests |
+| Phase 1 | Storage Engine Hardening | 4-6 weeks | Block Cache, async I/O, Table abstraction |
+| Phase 2 | MVP | 6-8 weeks | CRUD operations, basic query, performance baseline |
+| Phase 3 | Beta | 8-10 weeks | CMO, projection pushdown, Zone Map |
+| Phase 4 | V1.0 Performance | 10-12 weeks | MiniBlock, prefetch, SIMD |
+| Phase 5 | V1.5 Extreme | 12-16 weeks | io_uring, vectorized execution |
+| Phase 6 | V2.0 Enterprise | 20-24 weeks | WAL, MVCC, indexing, partitioning |
 
-**Note**: The current Go implementation serves as an excellent lightweight alternative. The ultimate goal is to achieve production-grade performance comparable to LanceDB (Rust implementation), requiring significant engineering effort to port its core innovations (MiniBlock, Blob Layout, R/D Levels).
+**Current Focus**: Phase 0 - Building a unified, user-friendly API layer that seamlessly integrates HNSW vector search with columnar storage.
 
 ---
 
-## Phase 0: Architecture Hardening
+## Phase 0: Unified API & Foundation ⭐ CURRENT PRIORITY
 
 ### Goal
-Solidify the foundation, establish benchmarks, and ensure subsequent development doesn't require rework.
+Create a unified, intuitive API that combines HNSW vector search with columnar storage, making Vego accessible to users without requiring deep knowledge of the underlying components.
+
+### Vision
+```go
+// The Vego API should be this simple:
+db, _ := vego.Open("./mydb", vego.WithDimension(768))
+coll, _ := db.Collection("documents")
+
+// Insert with auto-generated embeddings
+coll.Insert(&vego.Document{
+    ID:       vego.DocumentID(),
+    Vector:   embedding,  // Your 768-dim vector
+    Metadata: map[string]any{"title": "Hello", "author": "Alice"},
+})
+
+// Vector search with metadata filter
+results, _ := coll.Search(queryVector, 10,
+    vego.WithFilter(vego.MetadataFilter{
+        Field: "author", Operator: "eq", Value: "Alice",
+    }),
+)
+```
+
+### Key Tasks
+
+#### 1. Unified DB/Collection API ✅
+- [x] `vego.Open()` - Open or create database
+- [x] `db.Collection()` - Get or create collection
+- [x] `db.DropCollection()` - Remove collection
+- [x] `db.Collections()` - List collections
+- [x] `db.Close()` - Graceful shutdown
+
+#### 2. Document-Centric Collection API ✅
+- [x] `coll.Insert(doc)` - Insert single document
+- [x] `coll.InsertBatch(docs)` - Batch insert
+- [x] `coll.Get(id)` - Retrieve by ID
+- [x] `coll.Delete(id)` - Delete document
+- [x] `coll.Update(doc)` - Update document
+- [x] `coll.Upsert(doc)` - Insert or update
+
+#### 3. Vector Search API ✅
+- [x] `coll.Search(query, k, opts...)` - Vector similarity search
+- [x] `coll.SearchWithFilter(query, k, filter)` - Search with metadata filter
+- [x] `coll.SearchBatch(queries, k, opts...)` - Batch search
+
+#### 4. Configuration API ✅
+- [x] `vego.WithDimension(d)` - Set vector dimension
+- [x] `vego.WithAdaptive(bool)` - Enable adaptive tuning
+- [x] `vego.WithExpectedSize(n)` - Expected dataset size
+- [x] `vego.WithDistanceFunc(fn)` - Distance metric (L2/Cosine/InnerProduct)
+- [x] `vego.WithM(m)` - HNSW M parameter
+- [x] `vego.WithEfConstruction(ef)` - HNSW build quality
+
+#### 5. Persistence API 🔄
+- [x] `coll.Save()` - Persist collection to disk
+- [x] `coll.Close()` - Auto-save on close
+- [ ] `coll.Load()` - Reload from disk (verify)
+- [ ] `db.Backup(path)` - Full database backup
+- [ ] `db.Restore(path)` - Restore from backup
+
+#### 6. Performance & Observability 📊
+- [ ] `coll.Stats()` - Collection statistics (fix orphan count)
+- [ ] `db.Stats()` - Database-wide statistics
+- [ ] Query latency metrics
+- [ ] Index build progress callback
+
+#### 7. Error Handling & Reliability 🔧
+- [ ] Structured error types
+- [ ] Partial failure handling in batch operations
+- [ ] Auto-retry for transient failures
+- [ ] Corruption detection on load
+
+### Definition of Done
+- [ ] User can perform all CRUD operations without touching `index` or `storage` packages directly
+- [ ] Examples demonstrate real-world use cases (RAG, semantic search, recommendations)
+- [ ] API documentation with usage patterns
+- [ ] Unit test coverage > 70% for vego package
+- [ ] Integration tests for full workflows
+
+### API Design Principles
+
+1. **Simplicity First**: Common operations should be one-liners
+2. **Sensible Defaults**: Adaptive configuration works out of the box
+3. **Progressive Disclosure**: Simple for beginners, powerful for experts
+4. **Consistency**: Similar patterns across DB, Collection, and Query APIs
+5. **Fail Fast**: Validation at API boundary, clear error messages
+
+---
+
+## Phase 1: Storage Engine Hardening
+
+### Goal
+Solidify the storage foundation, establish benchmarks, and ensure subsequent development doesn't require rework.
 
 ### Key Tasks
 - **Delta Encoding Implementation**: Variable-length integer encoding for time-series data
@@ -47,13 +140,9 @@ Solidify the foundation, establish benchmarks, and ensure subsequent development
 - [ ] Benchmark targets: Write 100MB vector data < 5s, Read < 2s
 - [ ] Code test coverage > 60%
 
-### Risks & Mitigation
-- **Risk**: Discovery of architectural flaws requiring refactoring
-- **Mitigation**: Small-scale refactoring now costs less than post-production discovery
-
 ---
 
-## Phase 1: MVP (Minimum Viable Product)
+## Phase 2: MVP (Minimum Viable Product)
 
 ### Goal
 Enable the system to handle real-world data with basic CRUD and query capabilities.
@@ -84,7 +173,7 @@ Enable the system to handle real-world data with basic CRUD and query capabiliti
 
 ---
 
-## Phase 2: Beta (Production-Ready)
+## Phase 3: Beta (Production-Ready)
 
 ### Goal
 Production-grade reliability, observability, and query optimization for confident deployment.
@@ -107,7 +196,7 @@ Production-grade reliability, observability, and query optimization for confiden
 
 ---
 
-## Phase 3: V1.0 (Performance Edition)
+## Phase 4: V1.0 (Performance Edition)
 
 ### Goal
 Achieve performance approaching 80% of Rust Lance.
@@ -129,7 +218,7 @@ Achieve performance approaching 80% of Rust Lance.
 
 ---
 
-## Phase 4: V1.5 (Extreme Edition)
+## Phase 5: V1.5 (Extreme Edition)
 
 ### Goal
 Outperform competitors, become the fastest Go columnar storage.
@@ -146,7 +235,7 @@ Outperform competitors, become the fastest Go columnar storage.
 
 ---
 
-## Phase 5: V2.0 (Enterprise Edition) - Long Term
+## Phase 6: V2.0 (Enterprise Edition) - Long Term
 
 ### Goal
 Evolve from "storage engine" to "database system".
@@ -187,32 +276,42 @@ Evolve from "storage engine" to "database system".
 
 ## Architecture Decision Records (ADR)
 
-### ADR 1: Abandon FSST, Adopt Snappy
+### ADR 1: API-First Design
+**Context**: Users should not need to understand HNSW or Lance internals to use Vego  
+**Decision**: Build unified `vego` package as primary API, `index` and `storage` as internal implementation  
+**Impact**: Simpler user experience, more maintainable codebase, easier testing
+
+### ADR 2: Document-Centric Model
+**Context**: Vector databases naturally fit document-oriented patterns  
+**Decision**: Primary API uses Document (ID + Vector + Metadata), not raw vectors  
+**Impact**: More intuitive for users, enables metadata filtering, aligns with use cases
+
+### ADR 3: Abandon FSST, Adopt Snappy
 **Context**: FSST implementation complexity requires 2-3 weeks dedicated effort  
 **Decision**: Use Snappy for v1.0, re-evaluate FSST for v1.5+  
 **Impact**: String compression ratio drops from 70% to 60%, development time saved: 2 weeks
 
-### ADR 2: MiniBlock Must Support Backward Compatibility
+### ADR 4: MiniBlock Must Support Backward Compatibility
 **Context**: Once file format is released, long-term maintenance is required  
 **Decision**: Reader supports both old and new formats; Writer defaults to new format  
 **Impact**: Increased Reader code complexity, but avoids painful user data migration
 
-### ADR 3: Optimistic Concurrency Control for Transactions
+### ADR 5: Optimistic Concurrency Control for Transactions
 **Context**: Lance is primarily used for analytics with rare write-write conflicts  
 **Decision**: Abandon pessimistic locks, adopt MVCC + optimistic conflict detection  
 **Impact**: Extremely high read performance; write conflicts return errors for application-level retry
 
-### ADR 4: Prioritize Block Cache Over OS Page Cache
+### ADR 6: Prioritize Block Cache Over OS Page Cache
 **Context**: Go has weak control over OS Page Cache  
 **Decision**: User-space Block Cache for precise memory and prefetch control  
 **Impact**: Slightly higher memory usage, but more predictable performance
 
-### ADR 5: Async I/O Strategy Adjustment
+### ADR 7: Async I/O Strategy Adjustment
 **Context**: Current AsyncIO implementation performs worse than synchronous I/O  
 **Decision**: Default to Sync I/O for Phase 1, Async I/O as experimental feature  
 **Impact**: API must support both modes; users can explicitly choose
 
-### ADR 6: Compression Strategy
+### ADR 8: Compression Strategy
 **Context**: Small file compression overhead > benefits  
 **Decision**: < 1MB files use Plain encoding, > 1MB use ZSTD  
 **Impact**: Slightly lower compression ratio, significantly faster speed
@@ -228,7 +327,7 @@ Evolve from "storage engine" to "database system".
 - [ ] Performance regression testing in CI
 
 ### Documentation
-- [ ] API reference documentation
+- [x] API reference documentation (examples/README.md)
 - [ ] Performance tuning guide
 - [ ] Deployment and operations guide
 - [ ] Migration guide from other formats (Parquet, etc.)
@@ -250,4 +349,3 @@ This roadmap is a living document. We welcome:
 - Feedback on feasibility of specific phases
 
 Please open an issue to discuss any roadmap changes before submitting PRs.
-
