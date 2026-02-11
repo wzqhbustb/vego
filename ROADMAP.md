@@ -4,8 +4,8 @@
 
 | Phase | Goal | Timeline | Key Deliverables |
 |-------|------|----------|------------------|
-| **Phase 0** | Unified API & Foundation | 2-3 weeks | User-friendly API, integration tests |
-| Phase 1 | Storage Engine Hardening | 4-6 weeks | Block Cache, async I/O, Table abstraction |
+| **Phase 0** | Unified API & Foundation | 1-2 weeks | User-friendly API, basic integration tests |
+| Phase 1 | Storage Engine Hardening | 4-6 weeks | Block Cache, Row Index, performance fix, async I/O |
 | Phase 2 | MVP | 6-8 weeks | CRUD operations, basic query, performance baseline |
 | Phase 3 | Beta | 8-10 weeks | CMO, projection pushdown, Zone Map |
 | Phase 4 | V1.0 Performance | 10-12 weeks | MiniBlock, prefetch, SIMD |
@@ -13,6 +13,8 @@
 | Phase 6 | V2.0 Enterprise | 20-24 weeks | WAL, MVCC, indexing, partitioning |
 
 **Current Focus**: Phase 0 - Building a unified, user-friendly API layer that seamlessly integrates HNSW vector search with columnar storage.
+
+> **Note on Phase 0 Scope Adjustment**: Several non-critical tasks (Backup/Restore, advanced observability, structured errors) have been deferred to Phase 6 to prioritize fixing the critical Get() O(n) performance issue in Phase 1. See Phase 6 "Tier 5" for deferred tasks.
 
 ---
 
@@ -75,28 +77,28 @@ results, _ := coll.Search(queryVector, 10,
 #### 5. Persistence API 🔄
 - [x] `coll.Save()` - Persist collection to disk
 - [x] `coll.Close()` - Auto-save on close
-- [ ] `coll.Load()` - Reload from disk (verify)
-- [ ] `db.Backup(path)` - Full database backup
-- [ ] `db.Restore(path)` - Restore from backup
+- [x] `coll.Load()` - Reload from disk (verify on init)
+- [~] `db.Backup(path)` - Full database backup (deferred to Phase 6)
+- [~] `db.Restore(path)` - Restore from backup (deferred to Phase 6)
 
 #### 6. Performance & Observability 📊
 - [ ] `coll.Stats()` - Collection statistics (fix orphan count)
-- [ ] `db.Stats()` - Database-wide statistics
-- [ ] Query latency metrics
-- [ ] Index build progress callback
+- [~] `db.Stats()` - Database-wide statistics (deferred to Phase 6)
+- [~] Query latency metrics (deferred to Phase 6)
+- [~] Index build progress callback (deferred to Phase 6)
 
 #### 7. Error Handling & Reliability 🔧
-- [ ] Structured error types
-- [ ] Partial failure handling in batch operations
-- [ ] Auto-retry for transient failures
-- [ ] Corruption detection on load
+- [~] Structured error types (deferred to Phase 6)
+- [~] Partial failure handling in batch operations (deferred to Phase 6)
+- [~] Auto-retry for transient failures (deferred to Phase 6)
+- [x] Corruption detection on load (basic validation exists)
 
 ### Definition of Done
-- [ ] User can perform all CRUD operations without touching `index` or `storage` packages directly
+- [x] User can perform all CRUD operations without touching `index` or `storage` packages directly
 - [ ] Examples demonstrate real-world use cases (RAG, semantic search, recommendations)
-- [ ] API documentation with usage patterns
-- [ ] Unit test coverage > 70% for vego package
-- [ ] Integration tests for full workflows
+- [x] API documentation with usage patterns
+- [~] Unit test coverage > 70% for vego package (target moved to Phase 1)
+- [ ] Integration tests for full workflows (basic coverage)
 
 ### API Design Principles
 
@@ -266,6 +268,14 @@ Evolve from "storage engine" to "database system".
 #### Tier 4: Query Engine (Pending Planning)
 - **Expression System (Basic)**: Simple filtering
 - **Row-Level Filtering**: Execute filters on RecordBatch
+
+#### Tier 5: Phase 0 Deferred Tasks (Moved from Phase 0)
+The following tasks were intentionally deferred from Phase 0 to focus on core performance:
+
+- **Database Backup/Restore**: `db.Backup(path)`, `db.Restore(path)` for disaster recovery
+- **Advanced Observability**: `db.Stats()`, query latency metrics, index build progress callbacks
+- **Enhanced Error Handling**: Structured error types, partial failure handling in batch operations, auto-retry for transient failures
+- **Testing Coverage**: Unit test coverage > 70% for vego package
 
 ### Definition of Done
 - [ ] 100% data recovery after crash
