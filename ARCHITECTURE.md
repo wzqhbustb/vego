@@ -137,6 +137,17 @@ Step 6: 写入 Lance 格式文件
 │      └── 重写 Header (更新 NumRows)                         │
 └─────────────────────────────────────────────────────────────┘
 
+Step 7: 保存 HNSW 索引 (调用 Save() 或 Close() 时)
+┌─────────────────────────────────────────────────────────────┐
+│  collection.Save()                                           │
+│  ├── index.SaveToLance(indexPath)                           │
+│  │   ├── saveNodes()        // 写入 nodes.lance             │
+│  │   ├── saveConnections()  // 写入 connections.lance       │
+│  │   └── saveMetadata()     // 写入 metadata.lance          │
+│  ├── saveMappings()         // 写入 mappings.json           │
+│  └── storage.Flush()        // 写入 vectors.lance           │
+└─────────────────────────────────────────────────────────────┘
+
 Disk Layout (单 Collection):
 collection_path/
 ├── vectors.lance          # Lance 格式列存储
@@ -146,8 +157,23 @@ collection_path/
 ├── metadata.json          # ID 映射和元数据
 │   ├── entries: {id_hash -> {id, metadata}}
 │   └── id_to_hash: {id_string -> id_hash}
-└── index/                 # HNSW 索引持久化
-    └── (待实现)
+├── mappings.json          # HNSW 节点映射
+│   ├── docToNode: {doc_id -> node_id}
+│   └── nodeToDoc: {node_id -> doc_id}
+└── index/                 # HNSW 索引持久化 (Lance 格式)
+    ├── metadata.lance     # HNSW 配置参数
+    │   ├── M, Mmax, Mmax0
+    │   ├── efConstruction, dimension
+    │   ├── entryPoint, maxLevel
+    │   └── numNodes
+    ├── nodes.lance        # 节点数据
+    │   ├── id (Int32)
+    │   ├── vector (FixedSizeList<Float32>)
+    │   └── level (Int32)
+    └── connections.lance  # 层级连接关系
+        ├── node_id (Int32)
+        ├── layer (Int32)
+        └── neighbor_id (Int32)
 ```
 
 ---
@@ -325,6 +351,58 @@ Step 5: 返回结果
 }
 ```
 
+### 4.3 HNSW 索引持久化格式
+
+HNSW 索引使用 Lance 格式存储三个文件：
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         metadata.lance (单条记录)                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  Column 0: M (Int32)              │  Maximum connections per level          │
+│  Column 1: Mmax (Int32)           │  Real value of M                        │
+│  Column 2: Mmax0 (Int32)          │  Max connections at level 0 (2*M)       │
+│  Column 3: efConstruction (Int32) │  Search scope during construction       │
+│  Column 4: dimension (Int32)      │  Vector dimensionality                  │
+│  Column 5: entryPoint (Int32)     │  Entry point node ID                    │
+│  Column 6: maxLevel (Int32)       │  Maximum level in hierarchy             │
+│  Column 7: numNodes (Int32)       │  Total number of nodes                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           nodes.lance (N条记录)                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  Column 0: id (Int32)             │  Node ID (0..N-1)                       │
+│  Column 1: vector (FixedSizeList) │  Vector embedding [dimension]float32    │
+│  Column 2: level (Int32)          │  Layer level of the node                │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                       connections.lance (M条记录)                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  Column 0: node_id (Int32)        │  Source node ID                         │
+│  Column 1: layer (Int32)          │  Layer (0..node.level)                  │
+│  Column 2: neighbor_id (Int32)    │  Target node ID (connection)            │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 4.4 Mappings JSON 格式
+
+```json
+{
+  "docToNode": {
+    "doc-uuid-1": 0,
+    "doc-uuid-2": 1,
+    "doc-uuid-3": 2
+  },
+  "nodeToDoc": {
+    "0": "doc-uuid-1",
+    "1": "doc-uuid-2",
+    "2": "doc-uuid-3"
+  }
+}
+```
+
 ---
 
 ## 5. 关键问题分析
@@ -432,13 +510,15 @@ Flush()
 ### 架构优点
 1. **分层清晰**: API → Collection → Index/Storage 职责明确
 2. **格式先进**: Lance 列存储支持高效压缩和向量化读取
-3. **功能完整**: 支持 CRUD、向量搜索、元数据过滤
+3. **功能完整**: 支持 CRUD、向量搜索、元数据过滤、HNSW 索引持久化
 4. **并发安全**: 多层锁保护，无 race condition
+5. **快速恢复**: HNSW 索引持久化到磁盘，重启后无需重建
 
 ### 关键问题
 1. **性能**: Get() O(n) 复杂度和 Search 多次磁盘读取
-2. **存储**: Delete 不物理删除，Flush 全量重写
+2. **存储**: Delete 不物理删除，Flush 全量重写；HNSW 更新产生孤儿节点
 3. **扩展**: 缺少缓存层和索引层
+4. **持久化**: HNSW 索引只在调用 Save()/Close() 时写入，程序崩溃会丢失未保存的索引数据
 
 ### 下一步优化方向
 1. 添加 LRU 缓存解决 Get() 性能问题
