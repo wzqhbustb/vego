@@ -1,8 +1,9 @@
 # Vego Project Root Makefile
-# Unified interface for testing index (HNSW) and storage modules
+# Unified interface for testing vego, index (HNSW), and storage modules
 
 .PHONY: all test test-race test-v test-coverage help
-.PHONY: test-index test-storage
+.PHONY: test-vego test-index test-storage
+.PHONY: test-vego-race test-index-race test-storage-race
 .PHONY: bench bench-quick bench-all bench-compare
 .PHONY: ci pre-commit clean
 
@@ -13,16 +14,19 @@ all: test
 # All-in-One Test Commands
 # =============================================================================
 
-# Run all tests across all modules (index + storage)
+# Run all tests across all modules (vego + index + storage)
 test:
 	@echo "========================================"
-	@echo "Running all tests (index + storage)..."
+	@echo "Running all tests (vego + index + storage)..."
 	@echo "========================================"
 	@echo ""
-	@echo "[1/2] Running index tests..."
+	@echo "[1/3] Running vego tests..."
+	@$(MAKE) -C vego test
+	@echo ""
+	@echo "[2/3] Running index tests..."
 	@$(MAKE) -C index test
 	@echo ""
-	@echo "[2/2] Running storage tests..."
+	@echo "[3/3] Running storage tests..."
 	@$(MAKE) -C storage test
 	@echo ""
 	@echo "========================================"
@@ -35,10 +39,13 @@ test-v:
 	@echo "Running all tests with verbose output..."
 	@echo "========================================"
 	@echo ""
-	@echo "[1/2] Running index tests (verbose)..."
+	@echo "[1/3] Running vego tests (verbose)..."
+	@$(MAKE) -C vego test-v
+	@echo ""
+	@echo "[2/3] Running index tests (verbose)..."
 	@$(MAKE) -C index test-v
 	@echo ""
-	@echo "[2/2] Running storage tests (verbose)..."
+	@echo "[3/3] Running storage tests (verbose)..."
 	@$(MAKE) -C storage test-v
 	@echo ""
 	@echo "========================================"
@@ -51,10 +58,13 @@ test-race:
 	@echo "Running all tests with race detector..."
 	@echo "========================================"
 	@echo ""
-	@echo "[1/2] Running index tests (race)..."
+	@echo "[1/3] Running vego tests (race)..."
+	@$(MAKE) -C vego test-race
+	@echo ""
+	@echo "[2/3] Running index tests (race)..."
 	@$(MAKE) -C index test-race
 	@echo ""
-	@echo "[2/2] Running storage tests (race)..."
+	@echo "[3/3] Running storage tests (race)..."
 	@$(MAKE) -C storage test-race
 	@echo ""
 	@echo "========================================"
@@ -67,10 +77,13 @@ test-coverage:
 	@echo "Running all tests with coverage..."
 	@echo "========================================"
 	@echo ""
-	@echo "[1/2] Running index tests..."
+	@echo "[1/3] Running vego tests with coverage..."
+	@$(MAKE) -C vego test-cover
+	@echo ""
+	@echo "[2/3] Running index tests..."
 	@$(MAKE) -C index test || true
 	@echo ""
-	@echo "[2/2] Running storage tests with coverage..."
+	@echo "[3/3] Running storage tests with coverage..."
 	@$(MAKE) -C storage test-coverage
 	@echo ""
 	@echo "========================================"
@@ -80,6 +93,13 @@ test-coverage:
 # =============================================================================
 # Module-Specific Test Commands
 # =============================================================================
+
+# Run only vego (Collection API) tests
+test-vego:
+	@echo "========================================"
+	@echo "Running vego (Collection API) tests..."
+	@echo "========================================"
+	@$(MAKE) -C vego test
 
 # Run only index (HNSW) tests
 test-index:
@@ -94,6 +114,10 @@ test-storage:
 	@echo "Running storage tests..."
 	@echo "========================================"
 	@$(MAKE) -C storage test
+
+# Run vego tests with race detector
+test-vego-race:
+	@$(MAKE) -C vego test-race
 
 # Run index tests with race detector
 test-index-race:
@@ -113,10 +137,13 @@ bench-quick:
 	@echo "Running quick benchmarks..."
 	@echo "========================================"
 	@echo ""
-	@echo "[1/2] Running index quick benchmark (1K vectors)..."
+	@echo "[1/3] Running vego quick benchmark..."
+	@$(MAKE) -C vego benchmark-fast
+	@echo ""
+	@echo "[2/3] Running index quick benchmark (1K vectors)..."
 	@$(MAKE) -C index bench-quick
 	@echo ""
-	@echo "[2/2] Running storage quick benchmark..."
+	@echo "[3/3] Running storage quick benchmark..."
 	@$(MAKE) -C storage bench-quick
 	@echo ""
 	@echo "========================================"
@@ -130,10 +157,13 @@ bench-all:
 	@echo "⚠️  This will take 60-120 minutes"
 	@echo "========================================"
 	@echo ""
-	@echo "[1/2] Running index benchmarks..."
+	@echo "[1/3] Running vego benchmarks..."
+	@$(MAKE) -C vego benchmark
+	@echo ""
+	@echo "[2/3] Running index benchmarks..."
 	@$(MAKE) -C index bench-all
 	@echo ""
-	@echo "[2/2] Running storage benchmarks..."
+	@echo "[3/3] Running storage benchmarks..."
 	@$(MAKE) -C storage bench-full
 	@echo ""
 	@echo "========================================"
@@ -216,6 +246,7 @@ deps:
 # Clean all test cache and artifacts
 clean:
 	@echo "Cleaning all test cache and artifacts..."
+	@$(MAKE) -C vego clean
 	@$(MAKE) -C index clean
 	@$(MAKE) -C storage clean
 	@go clean -testcache
@@ -257,7 +288,7 @@ help:
 	@echo "═══════════════════════════════════════════════════════════════"
 	@echo "All-in-One Commands (Recommended)"
 	@echo "═══════════════════════════════════════════════════════════════"
-	@echo "  make test              - Run all tests (index + storage)"
+	@echo "  make test              - Run all tests (vego + index + storage)"
 	@echo "  make test-v            - Run all tests with verbose output"
 	@echo "  make test-race         - Run all tests with race detector"
 	@echo "  make test-coverage     - Run all tests with coverage report"
@@ -267,6 +298,10 @@ help:
 	@echo "═══════════════════════════════════════════════════════════════"
 	@echo "Module-Specific Commands"
 	@echo "═══════════════════════════════════════════════════════════════"
+	@echo "Vego (Collection API) Tests:"
+	@echo "  make test-vego         - Run only vego tests"
+	@echo "  make test-vego-race    - Run vego tests with race detector"
+	@echo ""
 	@echo "Index (HNSW) Tests:"
 	@echo "  make test-index        - Run only index tests"
 	@echo "  make test-index-race   - Run index tests with race detector"
@@ -312,7 +347,9 @@ help:
 	@echo "Examples"
 	@echo "═══════════════════════════════════════════════════════════════"
 	@echo "  make test              # Run everything"
+	@echo "  make test-vego         # Test only Collection API"
 	@echo "  make test-index        # Test only HNSW index"
+	@echo "  make test-storage      # Test only storage"
 	@echo "  make bench-quick       # Quick smoke test"
 	@echo "  make ci                # Full CI validation"
 	@echo ""
