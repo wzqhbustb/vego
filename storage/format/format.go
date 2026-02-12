@@ -12,11 +12,11 @@ const (
 	// MagicNumber identifies a Lance file (ASCII "LANC")
 	MagicNumber uint32 = 0x4C414E43
 
-	// CurrentVersion is the current file format version
-	CurrentVersion uint16 = 1
+	// CurrentVersion is the current file format version (V1.2)
+	CurrentVersion uint16 = 0x0102
 
-	// MinSupportedVersion is the minimum version this implementation can read
-	MinSupportedVersion uint16 = 1
+	// MinSupportedVersion is the minimum version this implementation can read (V1.0)
+	MinSupportedVersion uint16 = 0x0100
 
 	// MaxPageSize is the maximum size of a single page (64 MB)
 	MaxPageSize = 64 * 1024 * 1024
