@@ -596,15 +596,15 @@ func (r *Reader) readHeader() error {
 - [x] 旧版本映射测试（version_legacy_test.go，8个函数）
 - [x] 总计：72个测试函数，331个测试用例，核心功能覆盖率100%
 
-### Phase 1, 第 3-4 周：行索引集成
+### Phase 1, 第 3-4 周：行索引集成 ✅ 已完成
 
-**依赖：** 版本管理必须完成
+**依赖：** 版本管理必须完成 ✅
 
-- [ ] 实现 `RowIndex` 结构（作为独立 Page）
-- [ ] 添加 `FeatureRowIndex` 标志
-- [ ] 更新 `Writer` 为 V1.1+ 写入 RowIndex Page 和 Footer.Metadata
-- [ ] 更新 `Reader` 从 Footer 读取 RowIndex 偏移并加载
-- [ ] 为 V1.0 文件实现 `ReadStrategyFallbackLinearScan`
+- [x] 实现 `RowIndex` 结构（作为独立 Page）- `storage/format/rowindex.go`
+- [x] 添加 `FeatureRowIndex` 标志 - 已在 `version.go` 中定义
+- [x] 更新 `Writer` 为 V1.1+ 写入 RowIndex Page 和 Footer.Metadata - `storage/column/rowindex_writer.go`
+- [x] 更新 `Reader` 从 Footer 读取 RowIndex 偏移并加载 - `storage/column/rowindex_reader.go`
+- [x] 为 V1.0 文件实现 `ReadStrategyFallbackLinearScan` - 已在 `version.go` 中实现
 
 ### Phase 1, 第 5-6 周：块缓存集成
 
