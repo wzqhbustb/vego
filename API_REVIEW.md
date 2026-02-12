@@ -82,111 +82,13 @@ Only `InsertBatch` is exposed. Other batch operations are implemented internally
 // Returns a map of id -> document (missing documents are omitted)
 func (c *Collection) GetBatch(ids []string) (map[string]*Document, error)
 func (c *Collection) GetBatchContext(ctx context.Context, ids []string) (map[string]*Document, error)
-
-// DeleteBatch removes multiple documents
-// Returns the number of documents actually deleted
-func (c *Collection) DeleteBatch(ids []string) (int, error)
-func (c *Collection) DeleteBatchContext(ctx context.Context, ids []string) (int, error)
-
-// UpsertBatch inserts or updates multiple documents
-func (c *Collection) UpsertBatch(docs []*Document) error
-func (c *Collection) UpsertBatchContext(ctx context.Context, docs []*Document) error
 ```
 
 ### Use Cases
 - **GetBatch**: Loading search results efficiently (Phase 1 optimization)
-- **DeleteBatch**: Bulk cleanup of expired documents
-- **UpsertBatch**: Bulk import with idempotency guarantees
 
 ### Atomicity Note
 Batch operations should be atomic where possible. If any operation fails, partial results may remain. For full atomicity, use Batch transaction API (see Section 9).
-
----
-
-## 3. Cache Configuration Missing ⭐ P0
-
-### Problem
-Phase 1 will implement Row Index and LRU Cache, but `Config` lacks corresponding configuration options.
-
-### Current Config
-```go
-type Config struct {
-    Dimension        int
-    M                int
-    EfConstruction   int
-    DistanceFunc     hnsw.DistanceFunc
-    Adaptive         bool
-    ExpectedSize     int
-    CompressionLevel int
-    PageSize         int
-    AutoSaveInterval int
-}
-```
-
-### Recommended Config (Structured)
-```go
-type CacheConfig struct {
-    Enabled     bool          // Enable document cache (default: true)
-    Size        int           // Max cached documents (default: 10000)
-    MemoryLimit int64         // Max memory in bytes (optional, overrides Size)
-    TTL         time.Duration // Cache entry TTL (0 = no expiration)
-}
-
-type IndexConfig struct {
-    RowIndexEnabled bool // Build in-memory row index (default: auto)
-    AutoBuildThreshold int // Build row index if doc count < this (default: 100000)
-}
-
-type IOConfig struct {
-    MaxOpenFiles   int  // File descriptor limit (default: 1024)
-    AsyncIOEnabled bool // Enable async I/O (default: false)
-}
-
-type Config struct {
-    // Vector configuration (existing)
-    Dimension        int
-    M                int
-    EfConstruction   int
-    DistanceFunc     hnsw.DistanceFunc
-    Adaptive         bool
-    ExpectedSize     int
-    
-    // Storage configuration (existing)
-    CompressionLevel int
-    PageSize         int
-    
-    // Cache configuration (NEW - Phase 1)
-    Cache CacheConfig
-    Index IndexConfig
-    IO    IOConfig
-    
-    // Persistence configuration (existing)
-    AutoSaveInterval int
-}
-
-// Validation
-func (c *Config) Validate() error {
-    if c.Dimension <= 0 {
-        return fmt.Errorf("dimension must be positive, got %d", c.Dimension)
-    }
-    if c.Cache.Size < 0 {
-        return fmt.Errorf("cache size cannot be negative")
-    }
-    if c.Cache.MemoryLimit < 0 {
-        return fmt.Errorf("cache memory limit cannot be negative")
-    }
-    // ... more validation
-    return nil
-}
-```
-
-### Auto-Detection for RowIndex
-```go
-// RowIndexEnabled = false OR doc count > AutoBuildThreshold:
-//     Use LRU Cache only
-// RowIndexEnabled = true AND doc count <= AutoBuildThreshold:
-//     Use Row Index + LRU Cache (hybrid)
-```
 
 ---
 
