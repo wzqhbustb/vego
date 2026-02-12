@@ -1,6 +1,7 @@
 package vego
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -75,13 +76,26 @@ func NewCollection(name, path string, config *Config) (*Collection, error) {
 }
 
 // Insert adds a document to the collection
+// Deprecated: Use InsertContext instead
 func (c *Collection) Insert(doc *Document) error {
+	return c.InsertContext(context.Background(), doc)
+}
+
+// InsertContext adds a document to the collection with context support
+func (c *Collection) InsertContext(ctx context.Context, doc *Document) error {
 	if err := doc.Validate(c.dimension); err != nil {
 		return err
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// Check context cancellation
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 
 	// Check if document already exists
 	if _, exists := c.docToNode[doc.ID]; exists {
@@ -152,17 +166,43 @@ func (c *Collection) InsertBatch(docs []*Document) error {
 }
 
 // Get retrieves a document by ID
+// Deprecated: Use GetContext instead
 func (c *Collection) Get(id string) (*Document, error) {
+	return c.GetContext(context.Background(), id)
+}
+
+// GetContext retrieves a document by ID with context support
+func (c *Collection) GetContext(ctx context.Context, id string) (*Document, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+
+	// Check context cancellation
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
 
 	return c.storage.Get(id)
 }
 
 // Delete removes a document from the collection
+// Deprecated: Use DeleteContext instead
 func (c *Collection) Delete(id string) error {
+	return c.DeleteContext(context.Background(), id)
+}
+
+// DeleteContext removes a document from the collection with context support
+func (c *Collection) DeleteContext(ctx context.Context, id string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// Check context cancellation
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 
 	nodeID, exists := c.docToNode[id]
 	if !exists {
@@ -185,13 +225,26 @@ func (c *Collection) Delete(id string) error {
 // Update updates a document's metadata and vector
 // WARNING: This creates a new node in the index. The old node remains (HNSW doesn't support delete).
 // For production use, consider: 1) Periodic index rebuild, 2) Or use Delete + Insert pattern
+// Deprecated: Use UpdateContext instead
 func (c *Collection) Update(doc *Document) error {
+	return c.UpdateContext(context.Background(), doc)
+}
+
+// UpdateContext updates a document with context support
+func (c *Collection) UpdateContext(ctx context.Context, doc *Document) error {
 	if err := doc.Validate(c.dimension); err != nil {
 		return err
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// Check context cancellation
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 
 	oldNodeID, exists := c.docToNode[doc.ID]
 	if !exists {
@@ -219,19 +272,31 @@ func (c *Collection) Update(doc *Document) error {
 }
 
 // Upsert inserts or updates a document
+// Deprecated: Use UpsertContext instead
 func (c *Collection) Upsert(doc *Document) error {
+	return c.UpsertContext(context.Background(), doc)
+}
+
+// UpsertContext inserts or updates a document with context support
+func (c *Collection) UpsertContext(ctx context.Context, doc *Document) error {
 	c.mu.RLock()
 	_, exists := c.docToNode[doc.ID]
 	c.mu.RUnlock()
 
 	if exists {
-		return c.Update(doc)
+		return c.UpdateContext(ctx, doc)
 	}
-	return c.Insert(doc)
+	return c.InsertContext(ctx, doc)
 }
 
 // Search performs vector similarity search
+// Deprecated: Use SearchContext instead
 func (c *Collection) Search(query []float32, k int, opts ...SearchOption) ([]SearchResult, error) {
+	return c.SearchContext(context.Background(), query, k, opts...)
+}
+
+// SearchContext performs vector similarity search with context support
+func (c *Collection) SearchContext(ctx context.Context, query []float32, k int, opts ...SearchOption) ([]SearchResult, error) {
 	if len(query) != c.dimension {
 		return nil, fmt.Errorf("query dimension mismatch: expected %d, got %d", c.dimension, len(query))
 	}
@@ -246,6 +311,13 @@ func (c *Collection) Search(query []float32, k int, opts ...SearchOption) ([]Sea
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
+	// Check context cancellation
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
 	// Search HNSW index
 	hnswResults, err := c.index.Search(query, k, options.EF)
 	if err != nil {
@@ -255,6 +327,13 @@ func (c *Collection) Search(query []float32, k int, opts ...SearchOption) ([]Sea
 	// Map to documents
 	results := make([]SearchResult, 0, len(hnswResults))
 	for _, hr := range hnswResults {
+		// Check context cancellation periodically
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
 		docID, exists := c.nodeToDoc[hr.ID]
 		if !exists {
 			log.Printf("Warning: node %d has no document mapping (orphaned)", hr.ID)

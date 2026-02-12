@@ -124,7 +124,7 @@ func (s *DocumentStorage) Put(doc *Document) error {
 		return fmt.Errorf("storage is closed")
 	}
 
-	// Check if document already exists
+	// Check if document already exists in metadata store
 	s.metaStore.mu.RLock()
 	_, exists := s.metaStore.idToHash[doc.ID]
 	s.metaStore.mu.RUnlock()
@@ -133,6 +133,16 @@ func (s *DocumentStorage) Put(doc *Document) error {
 		// Update existing - remove old entry first
 		if err := s.deleteFromStorage(doc.ID); err != nil {
 			return fmt.Errorf("delete old document: %w", err)
+		}
+	}
+
+	// Remove from buffer if present (for updates)
+	for i, bufDoc := range s.writeBuffer {
+		if bufDoc.ID == doc.ID {
+			// Remove from buffer by replacing with last element and truncating
+			s.writeBuffer = append(s.writeBuffer[:i], s.writeBuffer[i+1:]...)
+			s.bufferSize--
+			break
 		}
 	}
 

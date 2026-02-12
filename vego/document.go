@@ -25,6 +25,9 @@ func (d *Document) Validate(dimension int) error {
 	if d.ID == "" {
 		return fmt.Errorf("document ID is required")
 	}
+	if dimension <= 0 {
+		return fmt.Errorf("invalid dimension: %d", dimension)
+	}
 	if len(d.Vector) != dimension {
 		return fmt.Errorf("vector dimension mismatch: expected %d, got %d", dimension, len(d.Vector))
 	}
@@ -36,13 +39,17 @@ func (d *Document) Clone() *Document {
 	clone := &Document{
 		ID:        d.ID,
 		Vector:    make([]float32, len(d.Vector)),
-		Metadata:  make(map[string]interface{}, len(d.Metadata)),
+		Metadata:  nil,
 		Timestamp: d.Timestamp,
 	}
 	copy(clone.Vector, d.Vector)
 
-	for k, v := range d.Metadata {
-		clone.Metadata[k] = v
+	// Only copy metadata if it's not nil
+	if d.Metadata != nil {
+		clone.Metadata = make(map[string]interface{}, len(d.Metadata))
+		for k, v := range d.Metadata {
+			clone.Metadata[k] = v
+		}
 	}
 
 	return clone
