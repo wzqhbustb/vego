@@ -13,7 +13,8 @@
 
 - [🚀 Quick Start](#quick-start) - Get started in 5 minutes
 - [📚 Examples](./examples/) - Runnable code examples
-- [📖 API Docs](#api-documentation) - Configuration & usage
+- [📖 API Docs](#api-documentation) - Collection API & configuration
+- [🔧 Collection API](#collection-api-high-level) - Document-oriented interface
 - [💾 Storage Engine](./STORAGE.md) - Deep dive into storage layer
 - [📊 Performance](#performance-benchmarks) - Benchmarks & comparisons
 - [⚠️ Known Limitations](#known-limitations) - Current constraints
@@ -43,7 +44,10 @@
    - [📖 Learn more about the storage engine](STORAGE.md)
 
 4. **🔧 Simple & Easy to Use**
-   - Clean API design
+   - **Two-layer API design**: High-level Collection API for documents, low-level Index API for vectors
+   - Full Context support (timeout, cancellation) for all operations
+   - Batch operations for better performance
+   - Structured error handling with helper functions
    - Supports L2, Cosine, InnerProduct distance metrics
    - Automatic memory management, no complex configuration
 
@@ -86,53 +90,105 @@ Provide knowledge base retrieval capabilities for local LLMs:
 go get github.com/wzqhbustb/vego
 ```
 
-### Complete Working Example
+### Complete Working Example (Collection API - Recommended)
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "time"
+    
+    "github.com/wzqhbustb/vego/vego"
+)
+
+func main() {
+    // Step 1: Open database
+    db, err := vego.Open("./my_db", vego.WithDimension(128))
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer db.Close()
+
+    // Step 2: Get or create collection
+    coll, err := db.Collection("documents")
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // Step 3: Insert documents with metadata
+    ctx := context.Background()
+    doc := &vego.Document{
+        ID:     "doc-001",
+        Vector: make([]float32, 128), // Your embedding here
+        Metadata: map[string]interface{}{
+            "title":  "Introduction to AI",
+            "author": "Alice",
+            "tags":   []string{"ai", "ml"},
+        },
+    }
+    
+    if err := coll.InsertContext(ctx, doc); err != nil {
+        log.Fatal(err)
+    }
+    fmt.Println("Document inserted successfully")
+
+    // Step 4: Search similar documents
+    query := make([]float32, 128) // Your query embedding
+    results, err := coll.SearchContext(ctx, query, 10)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    fmt.Printf("Found %d similar documents:\n", len(results))
+    for i, r := range results {
+        fmt.Printf("  %d. %s (distance: %.4f)\n", 
+            i+1, r.Document.ID, r.Distance)
+    }
+}
+```
+
+### Basic Usage (Low-level Index API)
 
 ```go
 package main
 
 import (
     "fmt"
-    "math/rand"
     hnsw "github.com/wzqhbustb/vego/index"
 )
 
 func main() {
-    // Step 1: Create index with adaptive configuration
+    // 1. Create index (using adaptive configuration)
     config := hnsw.Config{
-        Dimension:    128,      // Vector dimension
-        Adaptive:     true,     // Auto-tune parameters
-        ExpectedSize: 10000,    // Expected dataset size
+        Dimension:      128,        // Vector dimension
+        Adaptive:       true,       // Auto-tune M and EfConstruction
+        ExpectedSize:   10000,      // Expected number of vectors
+        DistanceFunc:   hnsw.L2Distance,
     }
     index := hnsw.NewHNSW(config)
-    
-    // Step 2: Add random vectors
-    fmt.Println("Adding 1000 vectors...")
-    for i := 0; i < 1000; i++ {
-        vec := make([]float32, 128)
-        for j := range vec {
-            vec[j] = rand.Float32()
-        }
-        id, _ := index.Add(vec)
-        if i%100 == 0 {
-            fmt.Printf("Added %d vectors, latest ID: %d\n", i+1, id)
-        }
-    }
-    
-    // Step 3: Search nearest neighbors
-    query := make([]float32, 128)
-    for j := range query {
-        query[j] = rand.Float32()
-    }
-    
-    results, err := index.Search(query, 10, 0)
+
+    // 2. Add vectors
+    vector := make([]float32, 128)
+    // ... fill vector data ...
+    id, err := index.Add(vector)
     if err != nil {
         panic(err)
     }
-    
-    fmt.Printf("Query returned %d neighbors:\n", len(results))
-    for i, r := range results {
-        fmt.Printf("  %d. ID: %d, Distance: %.4f\n", i+1, r.ID, r.Distance)
+    fmt.Printf("Added vector with ID: %d\n", id)
+
+    // 3. Search nearest neighbors
+    query := make([]float32, 128)
+    // ... fill query vector ...
+    results, err := index.Search(query, 10, 0) // Return Top-10
+    if err != nil {
+        panic(err)
+    }
+
+    for _, r := range results {
+        fmt.Printf("ID: %d, Distance: %.4f\n", r.ID, r.Distance)
     }
 }
 ```
@@ -180,7 +236,142 @@ func main() {
 }
 ```
 
-### Persistence Example
+### Collection API Examples
+
+#### Batch Operations
+
+```go
+// Batch insert (more efficient)
+docs := []*vego.Document{
+    {ID: "doc-1", Vector: vec1, Metadata: map[string]interface{}{"tag": "a"}},
+    {ID: "doc-2", Vector: vec2, Metadata: map[string]interface{}{"tag": "b"}},
+    {ID: "doc-3", Vector: vec3, Metadata: map[string]interface{}{"tag": "c"}},
+}
+if err := coll.InsertBatch(docs); err != nil {
+    log.Fatal(err)
+}
+
+// Batch get
+ids := []string{"doc-1", "doc-2", "doc-3"}
+results, err := coll.GetBatch(ids)
+if err != nil {
+    log.Fatal(err)
+}
+for id, doc := range results {
+    fmt.Printf("Got %s: %v\n", id, doc.Metadata)
+}
+
+// Batch delete
+if err := coll.DeleteBatch([]string{"doc-1", "doc-2"}); err != nil {
+    log.Fatal(err)
+}
+```
+
+#### Context Support (Timeout & Cancellation)
+
+```go
+// Search with timeout
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+
+results, err := coll.SearchContext(ctx, query, 10)
+if err == context.DeadlineExceeded {
+    fmt.Println("Search timed out")
+}
+
+// Insert with cancellation
+ctx, cancel = context.WithCancel(context.Background())
+go func() {
+    time.Sleep(100 * time.Millisecond)
+    cancel() // Cancel operation
+}()
+
+err := coll.InsertContext(ctx, doc)
+if err == context.Canceled {
+    fmt.Println("Insert was cancelled")
+}
+```
+
+#### Error Handling
+
+```go
+doc, err := coll.Get("doc-123")
+if err != nil {
+    if vego.IsNotFound(err) {
+        // Handle not found gracefully
+        fmt.Println("Document not found")
+        return
+    }
+    // Handle other errors
+    log.Fatal(err)
+}
+
+// Check for duplicate
+err = coll.Insert(doc)
+if err != nil {
+    if vego.IsDuplicate(err) {
+        fmt.Println("Document already exists")
+        return
+    }
+}
+
+// Check dimension mismatch
+results, err := coll.Search(queryWithWrongDim, 10)
+if err != nil {
+    if vego.IsDimensionMismatch(err) {
+        fmt.Println("Vector dimension mismatch")
+        return
+    }
+}
+```
+
+#### Search with Metadata Filter
+
+```go
+// Search only within specific category
+filter := &vego.MetadataFilter{
+    Field:    "category",
+    Operator: "eq",
+    Value:    "technology",
+}
+
+results, err := coll.SearchWithFilter(query, 10, filter)
+if err != nil {
+    log.Fatal(err)
+}
+
+// Complex filter (AND)
+andFilter := &vego.AndFilter{
+    Filters: []vego.Filter{
+        &vego.MetadataFilter{Field: "author", Operator: "eq", Value: "Alice"},
+        &vego.MetadataFilter{Field: "views", Operator: "gt", Value: 100},
+    },
+}
+results, err = coll.SearchWithFilter(query, 10, andFilter)
+```
+
+#### Persistence
+
+```go
+// Save collection to disk
+if err := coll.Save(); err != nil {
+    log.Fatal(err)
+}
+
+// Auto-save on close
+if err := coll.Close(); err != nil {
+    log.Fatal(err)
+}
+
+// Data is automatically loaded when reopening the database
+db2, _ := vego.Open("./my_db", vego.WithDimension(128))
+coll2, _ := db2.Collection("documents")
+// Documents are still there!
+```
+
+### Low-level Index API
+
+For direct HNSW index access (advanced use cases):
 
 ```go
 // Save index to disk
@@ -221,7 +412,263 @@ go run main.go
 
 <a name="api-documentation"></a>
 
-### Creating an Index
+### Collection API (High-Level)
+
+The Collection API provides a document-oriented interface with metadata support, perfect for RAG applications and semantic search.
+
+#### Opening a Database
+
+```go
+db, err := vego.Open("./db_path", 
+    vego.WithDimension(128),           // Vector dimension (required)
+    vego.WithM(16),                    // HNSW M parameter
+    vego.WithEfConstruction(200),      // HNSW efConstruction
+    vego.WithAdaptive(true),           // Auto-tune parameters
+    vego.WithDistanceFunc(vego.CosineDistance), // Distance function
+)
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close()
+```
+
+**Configuration Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `WithDimension` | int | 128 | Vector dimension (required) |
+| `WithM` | int | 16 | Max connections per layer |
+| `WithEfConstruction` | int | 200 | Search scope during build |
+| `WithAdaptive` | bool | true | Auto-tune parameters |
+| `WithExpectedSize` | int | 10000 | Expected dataset size |
+| `WithDistanceFunc` | DistanceFunc | L2Distance | Distance metric |
+
+**Distance Functions:**
+- `vego.L2Distance` - Euclidean distance (general purpose)
+- `vego.CosineDistance` - Cosine distance (text embeddings)
+- `vego.InnerProductDistance` - Inner product (semantic search)
+
+#### Managing Collections
+
+```go
+// Get or create collection
+coll, err := db.Collection("my_collection")
+if err != nil {
+    log.Fatal(err)
+}
+
+// List all collections
+names := db.Collections()
+fmt.Println("Collections:", names)
+
+// Drop collection
+if err := db.DropCollection("old_collection"); err != nil {
+    log.Fatal(err)
+}
+```
+
+#### Document Operations
+
+**Insert Documents:**
+
+```go
+// Single document
+doc := &vego.Document{
+    ID:     "unique-id",  // Optional: auto-generated if empty
+    Vector: []float32{...}, // Your embedding
+    Metadata: map[string]interface{}{
+        "title": "Document Title",
+        "tags":  []string{"tag1", "tag2"},
+        "views": 100,
+    },
+}
+
+if err := coll.Insert(doc); err != nil {
+    log.Fatal(err)
+}
+
+// With context (timeout/cancellation)
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+
+if err := coll.InsertContext(ctx, doc); err != nil {
+    log.Fatal(err)
+}
+```
+
+**Batch Insert:**
+
+```go
+docs := []*vego.Document{doc1, doc2, doc3}
+
+// Standard batch insert
+if err := coll.InsertBatch(docs); err != nil {
+    log.Fatal(err)
+}
+
+// With context
+ctx := context.Background()
+if err := coll.InsertBatchContext(ctx, docs); err != nil {
+    log.Fatal(err)
+}
+```
+
+**Retrieve Documents:**
+
+```go
+// Get single document
+doc, err := coll.Get("doc-id")
+if err != nil {
+    if vego.IsNotFound(err) {
+        fmt.Println("Document not found")
+        return
+    }
+    log.Fatal(err)
+}
+fmt.Printf("Got: %s with metadata: %v\n", doc.ID, doc.Metadata)
+
+// Batch get (returns map of found documents)
+ids := []string{"id1", "id2", "id3"}
+results, err := coll.GetBatch(ids)
+if err != nil {
+    log.Fatal(err)
+}
+for id, doc := range results {
+    fmt.Printf("Found: %s\n", id)
+}
+```
+
+**Update Documents:**
+
+```go
+// Get document
+doc, _ := coll.Get("doc-id")
+
+// Modify
+doc.Metadata["views"] = doc.Metadata["views"].(int) + 1
+doc.Vector = newVector // New embedding
+
+// Save
+if err := coll.Update(doc); err != nil {
+    log.Fatal(err)
+}
+
+// Upsert (insert or update)
+if err := coll.Upsert(doc); err != nil {
+    log.Fatal(err)
+}
+```
+
+**Delete Documents:**
+
+```go
+// Delete single
+if err := coll.Delete("doc-id"); err != nil {
+    if vego.IsNotFound(err) {
+        fmt.Println("Document not found")
+        return
+    }
+    log.Fatal(err)
+}
+
+// Batch delete
+ids := []string{"id1", "id2", "id3"}
+if err := coll.DeleteBatch(ids); err != nil {
+    log.Fatal(err)
+}
+```
+
+#### Search Operations
+
+**Basic Search:**
+
+```go
+query := make([]float32, 128) // Your query embedding
+
+// Search top-10 similar documents
+results, err := coll.Search(query, 10)
+if err != nil {
+    log.Fatal(err)
+}
+
+for _, r := range results {
+    fmt.Printf("ID: %s, Distance: %.4f, Metadata: %v\n",
+        r.Document.ID, r.Distance, r.Document.Metadata)
+}
+
+// With context
+ctx := context.Background()
+results, err = coll.SearchContext(ctx, query, 10)
+```
+
+**Filtered Search:**
+
+```go
+// Simple filter
+filter := &vego.MetadataFilter{
+    Field:    "category",
+    Operator: "eq",        // Operators: eq, ne, gt, gte, lt, lte, contains
+    Value:    "technology",
+}
+
+results, err := coll.SearchWithFilter(query, 10, filter)
+
+// AND filter
+andFilter := &vego.AndFilter{
+    Filters: []vego.Filter{
+        &vego.MetadataFilter{Field: "author", Operator: "eq", Value: "Alice"},
+        &vego.MetadataFilter{Field: "views", Operator: "gt", Value: 100},
+    },
+}
+
+// OR filter
+orFilter := &vego.OrFilter{
+    Filters: []vego.Filter{
+        &vego.MetadataFilter{Field: "tag", Operator: "eq", Value: "important"},
+        &vego.MetadataFilter{Field: "priority", Operator: "eq", Value: "high"},
+    },
+}
+```
+
+**Batch Search:**
+
+```go
+queries := [][]float32{query1, query2, query3}
+results, err := coll.SearchBatch(queries, 10)
+if err != nil {
+    log.Fatal(err)
+}
+// results[i] contains top-10 matches for queries[i]
+```
+
+#### Error Handling
+
+Vego provides structured errors with helper functions:
+
+```go
+// Sentinel errors
+var (
+    vego.ErrDocumentNotFound   = errors.New("document not found")
+    vego.ErrDuplicateID        = errors.New("document already exists")
+    vego.ErrDimensionMismatch  = errors.New("vector dimension mismatch")
+    vego.ErrCollectionNotFound = errors.New("collection not found")
+    vego.ErrCollectionClosed   = errors.New("collection is closed")
+)
+
+// Helper functions
+if vego.IsNotFound(err) { ... }
+if vego.IsDuplicate(err) { ... }
+if vego.IsDimensionMismatch(err) { ... }
+
+// The error includes operation context
+// Output: "vego: Get on collection my_collection (doc doc-123) failed: document not found"
+```
+
+### Low-Level Index API (HNSW)
+
+For direct HNSW index access:
+
+#### Creating an Index
 
 #### Option 1: Adaptive Configuration (Recommended)
 
@@ -496,9 +943,9 @@ While Vego is production-ready for many use cases, please be aware of these curr
 - **Status**: Optimization in progress
 
 ### 3. Vector Update/Delete
-- **Issue**: No support for updating or deleting vectors after insertion
-- **Workaround**: Rebuild index with updated data
-- **Status**: Planned for v0.5
+- **Status**: ✅ **Available in Collection API** - `Update()`, `Delete()`, `Upsert()` methods
+- **Note**: Updates create new HNSW nodes; old nodes become orphaned until index rebuild
+- **Low-level API**: Update/Delete planned for v0.5 in index package
 
 ### 4. Incremental Persistence
 - **Issue**: `SaveToLance` performs full export; no incremental save
@@ -533,6 +980,11 @@ Vego is actively evolving. For the detailed development roadmap including:
 | Feature | Status | Milestone |
 |---------|--------|-----------|
 | HNSW index with configurable parameters | ✅ Available | v0.1 |
+| Collection API (document-oriented) | ✅ Available | v0.1 |
+| Context support (timeout/cancellation) | ✅ Available | v0.1 |
+| Batch operations (Insert/Get/Delete) | ✅ Available | v0.1 |
+| Structured error handling | ✅ Available | v0.1 |
+| Metadata filtering | ✅ Available | v0.1 |
 | Lance-compatible columnar storage | ✅ Available | v0.1 |
 | ZSTD, BitPacking, RLE encoding | ✅ Available | v0.1 |
 | Quantization support (PQ/SQ) | 🚧 Planned | v0.5 |
@@ -559,9 +1011,17 @@ cd vego
 
 # Run tests
 go test ./...
+# Or use the Makefile
+cd vego && make test
 
 # Run benchmarks
-go test -bench=. ./index/
+cd vego && make benchmark
+
+# Run specific benchmark
+cd vego && make benchmark-run PATTERN=Insert
+
+# Run tests with coverage
+cd vego && make test-cover
 
 # Run recall test
 go test -run TestRecall -v ./index/
