@@ -194,6 +194,7 @@ results, _ := coll.Search(queryVector, 10,
 
 #### 性能优化
   - 异步 I/O 内存开销
+  - Page Writer 支持异步 IO
   - 多读取器并发退化（当前：4x 并发 = 4x  slowdown！）
     ```
     并发 1:  2.3 ms
