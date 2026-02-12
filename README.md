@@ -351,6 +351,15 @@ results, _ := loadedIndex.Search(query, 10, 0)
 
 For more detailed usage examples, check out the [examples](./examples/) directory:
 
+#### Collection API Examples (High-Level)
+
+- **[collection_basic](./examples/collection_basic/)** - Basic Collection API usage with CRUD operations
+- **[collection_rag](./examples/collection_rag/)** - RAG (Retrieval-Augmented Generation) system demo
+- **[collection_metadata](./examples/collection_metadata/)** - Metadata filtering and advanced search
+- **[collection_batch](./examples/collection_batch/)** - Batch operations for performance
+
+#### Index API Examples (Low-Level)
+
 - **[basic_usage](./examples/basic_usage/)** - Basic HNSW index operations
 - **[persistence](./examples/persistence/)** - Save and load index from disk
 - **[storage_demo](./examples/storage_demo/)** - Low-level columnar storage API
@@ -359,6 +368,14 @@ For more detailed usage examples, check out the [examples](./examples/) director
 
 Each example is a standalone runnable program:
 ```bash
+# Collection API examples
+cd examples/collection_basic
+go run main.go
+
+cd examples/collection_rag
+go run main.go
+
+# Index API examples
 cd examples/basic_usage
 go run main.go
 ```
