@@ -581,11 +581,12 @@ func (r *Reader) readHeader() error {
 - [x] 保持 Header 不变（向后兼容）
 - [x] 更新 CurrentVersion 到 0x0102 (V1.2)
 
-**第 5-6 天：兼容性框架**
-- [ ] 实现 `VersionChecker.CheckReadCompatibility()`
-- [ ] 实现 `GetReadStrategy()`
-- [ ] 添加特性检测方法
-- [ ] 创建版本问题的错误类型（含 Suggestion）
+**第 5-6 天：兼容性框架** ✅ 已完成
+- [x] 实现 `VersionChecker.CheckReadCompatibility()`
+- [x] 实现 `GetReadStrategy()`
+- [x] 添加特性检测方法 (`CanUseFeature`)
+- [x] 创建版本问题的错误类型（含 `VersionError.Suggestion`）
+- [x] 编写集成示例和测试
 
 **第 7 天：测试**
 - [ ] 版本编码的单元测试
