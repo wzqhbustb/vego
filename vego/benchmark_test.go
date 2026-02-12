@@ -329,10 +329,7 @@ func BenchmarkGet(b *testing.B) {
 }
 
 // BenchmarkGetBatch benchmarks batch retrieval with different batch sizes
-// Note: GetBatch is not yet implemented, this serves as a placeholder
 func BenchmarkGetBatch(b *testing.B) {
-	b.Skip("GetBatch not yet implemented")
-	/*
 	batchSizes := []int{10, 50, 100, 500}
 
 	for _, size := range batchSizes {
@@ -365,7 +362,6 @@ func BenchmarkGetBatch(b *testing.B) {
 			b.ReportMetric(float64(size), "docs/op")
 		})
 	}
-	*/
 }
 
 // ==================== 更新和删除性能基准测试 ====================

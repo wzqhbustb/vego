@@ -394,6 +394,101 @@ func TestCollectionBatchOperations(t *testing.T) {
 			t.Errorf("InsertBatch with empty slice failed: %v", err)
 		}
 	})
+	
+	t.Run("InsertBatchContext with cancellation", func(t *testing.T) {
+		docs := []*Document{
+			createTestDocument("ctx_batch1", 64, nil),
+			createTestDocument("ctx_batch2", 64, nil),
+		}
+		
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel() // Cancel immediately
+		
+		err := coll.InsertBatchContext(ctx, docs)
+		if err != context.Canceled {
+			t.Errorf("Expected context.Canceled, got %v", err)
+		}
+	})
+	
+	t.Run("GetBatch", func(t *testing.T) {
+		// First insert some documents
+		docs := []*Document{
+			createTestDocument("getbatch1", 64, map[string]interface{}{"key": "val1"}),
+			createTestDocument("getbatch2", 64, map[string]interface{}{"key": "val2"}),
+			createTestDocument("getbatch3", 64, map[string]interface{}{"key": "val3"}),
+		}
+		coll.InsertBatch(docs)
+		
+		// Get batch
+		results, err := coll.GetBatch([]string{"getbatch1", "getbatch2", "non_existent"})
+		if err != nil {
+			t.Errorf("GetBatch failed: %v", err)
+		}
+		if len(results) != 2 {
+			t.Errorf("Expected 2 results, got %d", len(results))
+		}
+		if _, ok := results["getbatch1"]; !ok {
+			t.Error("Expected getbatch1 in results")
+		}
+		if _, ok := results["getbatch2"]; !ok {
+			t.Error("Expected getbatch2 in results")
+		}
+	})
+	
+	t.Run("GetBatchContext with cancellation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel() // Cancel immediately
+		
+		_, err := coll.GetBatchContext(ctx, []string{"getbatch1"})
+		if err != context.Canceled {
+			t.Errorf("Expected context.Canceled, got %v", err)
+		}
+	})
+	
+	t.Run("DeleteBatch", func(t *testing.T) {
+		// Insert documents to delete
+		docs := []*Document{
+			createTestDocument("delbatch1", 64, nil),
+			createTestDocument("delbatch2", 64, nil),
+			createTestDocument("delbatch3", 64, nil),
+		}
+		coll.InsertBatch(docs)
+		
+		// Delete batch
+		if err := coll.DeleteBatch([]string{"delbatch1", "delbatch2", "non_existent"}); err != nil {
+			t.Errorf("DeleteBatch failed: %v", err)
+		}
+		
+		// Verify deletion
+		_, err1 := coll.Get("delbatch1")
+		_, err2 := coll.Get("delbatch2")
+		if err1 == nil || err2 == nil {
+			t.Error("Expected documents to be deleted")
+		}
+		
+		// Verify delbatch3 still exists
+		_, err3 := coll.Get("delbatch3")
+		if err3 != nil {
+			t.Error("Expected delbatch3 to still exist")
+		}
+	})
+	
+	t.Run("DeleteBatchContext with cancellation", func(t *testing.T) {
+		// Insert documents to delete
+		docs := []*Document{
+			createTestDocument("delctx1", 64, nil),
+			createTestDocument("delctx2", 64, nil),
+		}
+		coll.InsertBatch(docs)
+		
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel() // Cancel immediately
+		
+		err := coll.DeleteBatchContext(ctx, []string{"delctx1", "delctx2"})
+		if err != context.Canceled {
+			t.Errorf("Expected context.Canceled, got %v", err)
+		}
+	})
 }
 
 // TestCollectionContextCancellation tests various context cancellation scenarios

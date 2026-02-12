@@ -162,7 +162,7 @@ func BenchmarkSearchBatch(b *testing.B)               // 批量搜索
 
 // 获取性能
 func BenchmarkGet(b *testing.B)                       // 单条获取
-func BenchmarkGetBatch(b *testing.B)                  // 批量获取 (TODO - method not implemented)
+func BenchmarkGetBatch(b *testing.B)                  // 批量获取 ✅
 
 // 不同规模
 func BenchmarkSearch1K(b *testing.B)                  // 1K 文档

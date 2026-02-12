@@ -128,13 +128,26 @@ func (c *Collection) InsertContext(ctx context.Context, doc *Document) error {
 }
 
 // InsertBatch adds multiple documents in batch (more efficient)
+// Deprecated: Use InsertBatchContext instead
 func (c *Collection) InsertBatch(docs []*Document) error {
+	return c.InsertBatchContext(context.Background(), docs)
+}
+
+// InsertBatchContext adds multiple documents with context support
+func (c *Collection) InsertBatchContext(ctx context.Context, docs []*Document) error {
 	if len(docs) == 0 {
 		return nil
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// Check context cancellation
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 
 	// Validate all documents first
 	for i, doc := range docs {
@@ -148,6 +161,13 @@ func (c *Collection) InsertBatch(docs []*Document) error {
 
 	// Insert into HNSW
 	for _, doc := range docs {
+		// Check context cancellation periodically
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		nodeID, err := c.index.Add(doc.Vector)
 		if err != nil {
 			return fmt.Errorf("add to index: %w", err)
@@ -163,6 +183,89 @@ func (c *Collection) InsertBatch(docs []*Document) error {
 	}
 
 	return nil
+}
+
+// GetBatch retrieves multiple documents by IDs
+// Returns a map of id -> document (missing documents are omitted)
+func (c *Collection) GetBatch(ids []string) (map[string]*Document, error) {
+	return c.GetBatchContext(context.Background(), ids)
+}
+
+// GetBatchContext retrieves multiple documents with context support
+func (c *Collection) GetBatchContext(ctx context.Context, ids []string) (map[string]*Document, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	// Check context cancellation
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	results := make(map[string]*Document, len(ids))
+	for _, id := range ids {
+		// Check context cancellation periodically
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		doc, err := c.storage.Get(id)
+		if err != nil {
+			// Skip not found documents
+			continue
+		}
+		results[id] = doc
+	}
+
+	return results, nil
+}
+
+// DeleteBatch removes multiple documents from the collection
+func (c *Collection) DeleteBatch(ids []string) error {
+	return c.DeleteBatchContext(context.Background(), ids)
+}
+
+// DeleteBatchContext removes multiple documents with context support
+func (c *Collection) DeleteBatchContext(ctx context.Context, ids []string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Check context cancellation
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	var lastErr error
+	for _, id := range ids {
+		// Check context cancellation periodically
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		nodeID, exists := c.docToNode[id]
+		if !exists {
+			continue // Skip non-existent documents
+		}
+
+		// Delete from storage
+		if err := c.storage.Delete(id); err != nil {
+			lastErr = err
+			continue // Continue with other deletions even if one fails
+		}
+
+		// Delete from index mapping
+		delete(c.docToNode, id)
+		delete(c.nodeToDoc, nodeID)
+	}
+
+	return lastErr
 }
 
 // Get retrieves a document by ID
