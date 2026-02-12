@@ -10,12 +10,13 @@ import (
 	lerrors "github.com/wzqhbustb/vego/storage/errors"
 )
 
-// RowIndexWriter extends Writer with RowIndex support for V1.1+ files
+// RowIndexWriter extends Writer with RowIndex and BlockCache support for V1.1+ files
 type RowIndexWriter struct {
 	*Writer
 	rowIndex      *format.RowIndex
 	version       format.VersionPolicy
 	writeRowIndex bool
+	blockSize     int32
 	schema        *arrow.Schema
 }
 
@@ -36,8 +37,15 @@ func NewRowIndexWriter(filename string, schema *arrow.Schema, version format.Ver
 		version:    version,
 		rowIndex:   format.NewRowIndex(1000), // Default capacity
 		writeRowIndex: version.HasFeature(format.FeatureRowIndex),
+		blockSize:  format.DefaultBlockSize,
 		schema:     schema,
 	}, nil
+}
+
+// SetBlockSize sets the block size hint for BlockCache
+// Only meaningful for V1.2+ files
+func (w *RowIndexWriter) SetBlockSize(blockSize int32) {
+	w.blockSize = blockSize
 }
 
 // AddRowID adds a document ID -> row index mapping
@@ -49,7 +57,7 @@ func (w *RowIndexWriter) AddRowID(docID string, rowIndex int64) error {
 	return w.rowIndex.Insert(docID, rowIndex)
 }
 
-// Close finalizes the file, including RowIndex if applicable
+// Close finalizes the file, including RowIndex and BlockCache info if applicable
 func (w *RowIndexWriter) Close() error {
 	if w.closed {
 		return lerrors.New(lerrors.ErrInvalidArgument).
@@ -67,6 +75,11 @@ func (w *RowIndexWriter) Close() error {
 
 	// Update footer with version info
 	w.footer.SetFormatVersion(w.version)
+
+	// Set BlockCache info for V1.2+ files
+	if w.version.HasFeature(format.FeatureBlockCache) {
+		w.footer.SetBlockCacheInfo(w.blockSize)
+	}
 
 	// Call parent Close
 	return w.Writer.Close()

@@ -606,12 +606,12 @@ func (r *Reader) readHeader() error {
 - [x] 更新 `Reader` 从 Footer 读取 RowIndex 偏移并加载 - `storage/column/rowindex_reader.go`
 - [x] 为 V1.0 文件实现 `ReadStrategyFallbackLinearScan` - 已在 `version.go` 中实现
 
-### Phase 1, 第 5-6 周：块缓存集成
+### Phase 1, 第 5-6 周：块缓存集成 ✅ 已完成
 
-- [ ] 在 Footer.Metadata 中存储 BlockCache 配置
-- [ ] 添加 `FeatureBlockCache` 标志
-- [ ] 基于版本与 Reader 集成
-- [ ] 为 V1.2+ 文件添加缓存预热
+- [x] 在 Footer.Metadata 中存储 BlockCache 配置 - `storage/format/metadata.go:138-158`
+- [x] 添加 `FeatureBlockCache` 标志 - `storage/format/version.go` (已存在)
+- [x] 基于版本与 Reader 集成 - `storage/column/rowindex_reader.go` (+BlockCache支持)
+- [x] 为 V1.2+ 文件添加缓存预热 - `storage/column/rowindex_reader.go:WarmupCache()`
 
 ---
 

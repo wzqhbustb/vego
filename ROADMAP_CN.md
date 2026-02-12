@@ -129,6 +129,7 @@ results, _ := coll.Search(queryVector, 10,
   - 缓存搜索结果以避免重复磁盘读取
   - 可配置容量（默认：1万文档）
 - **GetBatch 优化**：批量加载以减少搜索结果的 I/O 往返
+- **rowIndex 和 BlockCache 的使用，Column Reader，AsyncIO 中也能用到 BlockCache**
 
 #### 第 4-6 周：存储引擎加固
 - **块缓存实现**：64KB 块、LRU 淘汰、线程安全的页面缓存

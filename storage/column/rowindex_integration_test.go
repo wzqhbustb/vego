@@ -391,3 +391,138 @@ func TestRowIndexUpdate(t *testing.T) {
 		t.Errorf("LookupRowID(doc1) = %d, want 100 (updated value)", rowIdx)
 	}
 }
+
+// TestBlockCache_V12Integration tests BlockCache with V1.2 files
+func TestBlockCache_V12Integration(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "test_blockcache_v12.lance")
+
+	fields := []arrow.Field{
+		arrow.NewField("id", arrow.PrimInt64(), false),
+		arrow.NewField("vector", arrow.VectorType(64), false),
+	}
+	schema := arrow.NewSchema(fields, nil)
+
+	// Write V1.2 file with custom block size
+	writer, err := NewRowIndexWriter(filename, schema, format.V1_2, nil)
+	if err != nil {
+		t.Fatalf("Failed to create writer: %v", err)
+	}
+
+	// Set custom block size
+	writer.SetBlockSize(32 * 1024) // 32 KB
+
+	builder := arrow.NewRecordBatchBuilder(schema)
+	idBuilder := builder.Field(0).(*arrow.Int64Builder)
+	idBuilder.Append(1)
+	idBuilder.Append(2)
+
+	vecBuilder := builder.Field(1).(*arrow.FixedSizeListBuilder)
+	vecBuilder.AppendValues(make([]float32, 64))
+	vecBuilder.AppendValues(make([]float32, 64))
+
+	batch, err := builder.NewBatch()
+	if err != nil {
+		t.Fatalf("Failed to create record batch: %v", err)
+	}
+
+	if err := writer.WriteRecordBatch(batch); err != nil {
+		t.Fatalf("Failed to write batch: %v", err)
+	}
+
+	// Add row indices
+	writer.AddRowID("doc1", 0)
+	writer.AddRowID("doc2", 1)
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Failed to close writer: %v", err)
+	}
+
+	// Read with BlockCache
+	cache := format.NewBlockCache(1024 * 1024) // 1 MB cache
+	reader, err := NewRowIndexReaderWithCache(filename, cache)
+	if err != nil {
+		t.Fatalf("Failed to create reader: %v", err)
+	}
+	defer reader.Close()
+
+	// Check version
+	if reader.GetVersion().String() != "1.2" {
+		t.Errorf("Version = %s, want 1.2", reader.GetVersion().String())
+	}
+
+	// Check has BlockCache
+	if !reader.HasBlockCache() {
+		t.Error("HasBlockCache() = false for V1.2 file, want true")
+	}
+
+	// Check block size
+	if reader.GetBlockSize() != 32*1024 {
+		t.Errorf("BlockSize = %d, want %d", reader.GetBlockSize(), 32*1024)
+	}
+
+	// Warmup cache
+	if err := reader.WarmupCache(); err != nil {
+		t.Errorf("WarmupCache() failed: %v", err)
+	}
+
+	// Lookup (should use cache)
+	rowIdx, err := reader.LookupRowID("doc1")
+	if err != nil {
+		t.Errorf("LookupRowID(doc1) failed: %v", err)
+	}
+	if rowIdx != 0 {
+		t.Errorf("LookupRowID(doc1) = %d, want 0", rowIdx)
+	}
+
+	// Check cache stats
+	stats := reader.BlockCacheStats()
+	if stats.ItemCount == 0 {
+		t.Error("Cache should have items after warmup/lookup")
+	}
+}
+
+// TestBlockCache_NoCacheV10 tests that V1.0 files don't use BlockCache
+func TestBlockCache_NoCacheV10(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "test_no_cache_v10.lance")
+
+	fields := []arrow.Field{
+		arrow.NewField("id", arrow.PrimInt64(), false),
+	}
+	schema := arrow.NewSchema(fields, nil)
+
+	writer, err := NewRowIndexWriter(filename, schema, format.V1_0, nil)
+	if err != nil {
+		t.Fatalf("Failed to create writer: %v", err)
+	}
+
+	builder := arrow.NewRecordBatchBuilder(schema)
+	idBuilder := builder.Field(0).(*arrow.Int64Builder)
+	idBuilder.Append(1)
+
+	batch, err := builder.NewBatch()
+	if err != nil {
+		t.Fatalf("Failed to create record batch: %v", err)
+	}
+
+	if err := writer.WriteRecordBatch(batch); err != nil {
+		t.Fatalf("Failed to write batch: %v", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Failed to close writer: %v", err)
+	}
+
+	// Read and verify no BlockCache
+	reader, err := NewRowIndexReader(filename)
+	if err != nil {
+		t.Fatalf("Failed to create reader: %v", err)
+	}
+	defer reader.Close()
+
+	// V1.0 should not have BlockCache
+	if reader.HasBlockCache() {
+		t.Error("HasBlockCache() = true for V1.0 file, want false")
+	}
+}

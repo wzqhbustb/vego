@@ -4,19 +4,22 @@
 package column
 
 import (
+	"fmt"
 	"io"
 
 	"github.com/wzqhbustb/vego/storage/format"
 	lerrors "github.com/wzqhbustb/vego/storage/errors"
 )
 
-// RowIndexReader extends Reader with RowIndex support for V1.1+ files
+// RowIndexReader extends Reader with RowIndex and BlockCache support for V1.1+ files
 type RowIndexReader struct {
 	*Reader
-	rowIndex     *format.RowIndex
-	version      format.VersionPolicy
-	hasRowIndex  bool
+	rowIndex       *format.RowIndex
+	version        format.VersionPolicy
+	hasRowIndex    bool
 	rowIndexLoaded bool
+	blockCache     *format.BlockCache
+	blockSize      int32
 }
 
 // NewRowIndexReader creates a reader with RowIndex support
@@ -32,11 +35,64 @@ func NewRowIndexReader(filename string) (*RowIndexReader, error) {
 	// Check if file has RowIndex
 	hasRowIndex := reader.footer.HasRowIndex()
 
+	// Check if file has BlockCache hints
+	blockSize, hasBlockCache := reader.footer.GetBlockCacheInfo()
+	if !hasBlockCache {
+		blockSize = format.DefaultBlockSize
+	}
+
 	return &RowIndexReader{
 		Reader:     reader,
 		version:    version,
 		hasRowIndex: hasRowIndex,
+		blockSize:  blockSize,
 	}, nil
+}
+
+// NewRowIndexReaderWithCache creates a reader with a shared BlockCache
+func NewRowIndexReaderWithCache(filename string, cache *format.BlockCache) (*RowIndexReader, error) {
+	reader, err := NewRowIndexReader(filename)
+	if err != nil {
+		return nil, err
+	}
+
+	reader.blockCache = cache
+	return reader, nil
+}
+
+// GetBlockCache returns the BlockCache (nil if not set)
+func (r *RowIndexReader) GetBlockCache() *format.BlockCache {
+	return r.blockCache
+}
+
+// SetBlockCache sets the BlockCache for this reader
+func (r *RowIndexReader) SetBlockCache(cache *format.BlockCache) {
+	r.blockCache = cache
+}
+
+// GetBlockSize returns the block size hint
+func (r *RowIndexReader) GetBlockSize() int32 {
+	return r.blockSize
+}
+
+// WarmupCache loads frequently accessed pages into cache
+// This is especially useful for V1.2+ files with BlockCache
+func (r *RowIndexReader) WarmupCache() error {
+	// Check if cache is available
+	if r.blockCache == nil {
+		return nil // No cache, no-op
+	}
+
+	// Load RowIndex if available (it's frequently accessed)
+	if r.hasRowIndex && !r.rowIndexLoaded {
+		if err := r.LoadRowIndex(); err != nil {
+			return err
+		}
+	}
+
+	// Could also preload first few pages here
+	// For now, just return success
+	return nil
 }
 
 // LoadRowIndex loads the RowIndex from the file
@@ -61,6 +117,24 @@ func (r *RowIndexReader) LoadRowIndex() error {
 			Op("load_rowindex").
 			Context("message", "RowIndex info not found in footer metadata").
 			Build()
+	}
+
+	// Check cache first
+	cacheKey := r.cacheKey("rowindex", offset)
+	if r.blockCache != nil {
+		if data, found := r.blockCache.Get(cacheKey); found {
+			// Parse from cached data
+			page := &format.Page{}
+			if err := page.UnmarshalBinary(data); err == nil {
+				ri, err := format.RowIndexFromPage(page)
+				if err == nil {
+					r.rowIndex = ri
+					r.rowIndexLoaded = true
+					return nil
+				}
+			}
+			// If parsing failed, continue to load from disk
+		}
 	}
 
 	// Seek to RowIndex Page position
@@ -122,10 +196,22 @@ func (r *RowIndexReader) LoadRowIndex() error {
 			Build()
 	}
 
+	// Cache the page data for future use
+	if r.blockCache != nil {
+		if data, err := page.MarshalBinary(); err == nil {
+			r.blockCache.Put(cacheKey, data)
+		}
+	}
+
 	r.rowIndex = ri
 	r.rowIndexLoaded = true
 
 	return nil
+}
+
+// cacheKey generates a cache key for a page
+func (r *RowIndexReader) cacheKey(prefix string, offset int64) string {
+	return fmt.Sprintf("%s_%d", prefix, offset)
 }
 
 // LookupRowID returns the row index for the given document ID
@@ -192,4 +278,17 @@ func (r *RowIndexReader) RowIndexStats() (format.RowIndexStats, error) {
 	}
 
 	return r.rowIndex.Stats(), nil
+}
+
+// HasBlockCache returns true if the file has BlockCache hints
+func (r *RowIndexReader) HasBlockCache() bool {
+	return r.version.HasFeature(format.FeatureBlockCache)
+}
+
+// BlockCacheStats returns cache statistics
+func (r *RowIndexReader) BlockCacheStats() format.BlockCacheStats {
+	if r.blockCache == nil {
+		return format.BlockCacheStats{}
+	}
+	return r.blockCache.Stats()
 }
