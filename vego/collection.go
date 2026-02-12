@@ -63,13 +63,13 @@ func NewCollection(name, path string, config *Config) (*Collection, error) {
 	storagePath := filepath.Join(path, "documents")
 	storage, err := NewDocumentStorage(storagePath, config.Dimension)
 	if err != nil {
-		return nil, fmt.Errorf("init document storage: %w", err)
+		return nil, wrapError("NewCollection", name, "", err)
 	}
 	coll.storage = storage
 
 	// Try to load existing data
 	if err := coll.load(); err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("load collection: %w", err)
+		return nil, wrapError("NewCollection", name, "", err)
 	}
 
 	return coll, nil
@@ -99,13 +99,13 @@ func (c *Collection) InsertContext(ctx context.Context, doc *Document) error {
 
 	// Check if document already exists
 	if _, exists := c.docToNode[doc.ID]; exists {
-		return fmt.Errorf("document %s already exists", doc.ID)
+		return wrapError("InsertContext", c.name, doc.ID, ErrDuplicateID)
 	}
 
 	// Add to HNSW index
 	nodeID, err := c.index.Add(doc.Vector)
 	if err != nil {
-		return fmt.Errorf("add to index: %w", err)
+		return wrapError("InsertContext", c.name, doc.ID, err)
 	}
 
 	// Store document
@@ -114,7 +114,7 @@ func (c *Collection) InsertContext(ctx context.Context, doc *Document) error {
 		// Note: HNSW doesn't support Delete, so the node will stay in the index
 		// but won't be discoverable through normal operations
 		log.Printf("Warning: Failed to store document %s, node %d is orphaned", doc.ID, nodeID)
-		return fmt.Errorf("store document: %w", err)
+		return wrapError("InsertContext", c.name, doc.ID, err)
 	}
 
 	// Update mappings
@@ -150,12 +150,12 @@ func (c *Collection) InsertBatchContext(ctx context.Context, docs []*Document) e
 	}
 
 	// Validate all documents first
-	for i, doc := range docs {
+	for _, doc := range docs {
 		if err := doc.Validate(c.dimension); err != nil {
-			return fmt.Errorf("document %d: %w", i, err)
+			return wrapError("InsertBatchContext", c.name, doc.ID, ErrValidationFailed)
 		}
 		if _, exists := c.docToNode[doc.ID]; exists {
-			return fmt.Errorf("document %s already exists", doc.ID)
+			return wrapError("InsertBatchContext", c.name, doc.ID, ErrDuplicateID)
 		}
 	}
 
@@ -170,7 +170,7 @@ func (c *Collection) InsertBatchContext(ctx context.Context, docs []*Document) e
 
 		nodeID, err := c.index.Add(doc.Vector)
 		if err != nil {
-			return fmt.Errorf("add to index: %w", err)
+			return wrapError("InsertBatchContext", c.name, doc.ID, err)
 		}
 		c.docToNode[doc.ID] = nodeID
 		c.nodeToDoc[nodeID] = doc.ID
@@ -179,7 +179,7 @@ func (c *Collection) InsertBatchContext(ctx context.Context, docs []*Document) e
 
 	// Store documents
 	if err := c.storage.PutBatch(docs); err != nil {
-		return fmt.Errorf("store documents: %w", err)
+		return wrapError("InsertBatchContext", c.name, "", err)
 	}
 
 	return nil
@@ -309,12 +309,12 @@ func (c *Collection) DeleteContext(ctx context.Context, id string) error {
 
 	nodeID, exists := c.docToNode[id]
 	if !exists {
-		return fmt.Errorf("document %s not found", id)
+		return wrapError("DeleteContext", c.name, id, ErrDocumentNotFound)
 	}
 
 	// Delete from storage
 	if err := c.storage.Delete(id); err != nil {
-		return fmt.Errorf("delete from storage: %w", err)
+		return wrapError("DeleteContext", c.name, id, err)
 	}
 
 	// Delete from index (soft delete - mark as deleted)
@@ -351,18 +351,18 @@ func (c *Collection) UpdateContext(ctx context.Context, doc *Document) error {
 
 	oldNodeID, exists := c.docToNode[doc.ID]
 	if !exists {
-		return fmt.Errorf("document %s not found", doc.ID)
+		return wrapError("UpdateContext", c.name, doc.ID, ErrDocumentNotFound)
 	}
 
 	// Update storage first
 	if err := c.storage.Put(doc); err != nil {
-		return fmt.Errorf("update document: %w", err)
+		return wrapError("UpdateContext", c.name, doc.ID, err)
 	}
 
 	// Add new vector to index
 	newNodeID, err := c.index.Add(doc.Vector)
 	if err != nil {
-		return fmt.Errorf("update index: %w", err)
+		return wrapError("UpdateContext", c.name, doc.ID, err)
 	}
 
 	// Update mappings (old node becomes orphaned)
@@ -401,7 +401,7 @@ func (c *Collection) Search(query []float32, k int, opts ...SearchOption) ([]Sea
 // SearchContext performs vector similarity search with context support
 func (c *Collection) SearchContext(ctx context.Context, query []float32, k int, opts ...SearchOption) ([]SearchResult, error) {
 	if len(query) != c.dimension {
-		return nil, fmt.Errorf("query dimension mismatch: expected %d, got %d", c.dimension, len(query))
+		return nil, wrapError("SearchContext", c.name, "", ErrDimensionMismatch)
 	}
 
 	options := &SearchOptions{
@@ -424,7 +424,7 @@ func (c *Collection) SearchContext(ctx context.Context, query []float32, k int, 
 	// Search HNSW index
 	hnswResults, err := c.index.Search(query, k, options.EF)
 	if err != nil {
-		return nil, fmt.Errorf("search index: %w", err)
+		return nil, wrapError("SearchContext", c.name, "", err)
 	}
 
 	// Map to documents
@@ -533,9 +533,9 @@ func (c *Collection) SearchBatch(queries [][]float32, k int, opts ...SearchOptio
 	wg.Wait()
 
 	// Check for errors
-	for i, err := range errors {
+	for _, err := range errors {
 		if err != nil {
-			return nil, fmt.Errorf("search query %d: %w", i, err)
+			return nil, wrapError("SearchBatch", c.name, "", err)
 		}
 	}
 
@@ -590,18 +590,18 @@ func (c *Collection) Save() error {
 	// Save HNSW index
 	indexPath := filepath.Join(c.path, "index")
 	if err := c.index.SaveToLance(indexPath); err != nil {
-		return fmt.Errorf("save index: %w", err)
+		return wrapError("Save", c.name, "", err)
 	}
 
 	// Save mappings
 	mappingsPath := filepath.Join(c.path, "mappings.json")
 	if err := c.saveMappings(mappingsPath); err != nil {
-		return fmt.Errorf("save mappings: %w", err)
+		return wrapError("Save", c.name, "", err)
 	}
 
 	// Flush document storage
 	if err := c.storage.Flush(); err != nil {
-		return fmt.Errorf("flush storage: %w", err)
+		return wrapError("Save", c.name, "", err)
 	}
 
 	return nil
@@ -629,7 +629,7 @@ func (c *Collection) load() error {
 	if _, err := os.Stat(indexPath); err == nil {
 		loadedIndex, err := hnsw.LoadHNSWFromLance(indexPath)
 		if err != nil {
-			return fmt.Errorf("load index: %w", err)
+			return wrapError("load", c.name, "", ErrIndexCorrupted)
 		}
 		c.index = loadedIndex
 	}
@@ -637,7 +637,7 @@ func (c *Collection) load() error {
 	// Load mappings
 	mappingsPath := filepath.Join(c.path, "mappings.json")
 	if err := c.loadMappings(mappingsPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("load mappings: %w", err)
+		return wrapError("load", c.name, "", err)
 	}
 
 	return nil
@@ -651,11 +651,11 @@ func (c *Collection) saveMappings(path string) error {
 
 	bytes, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal mappings: %w", err)
+		return err
 	}
 
 	if err := os.WriteFile(path, bytes, 0644); err != nil {
-		return fmt.Errorf("write mappings: %w", err)
+		return err
 	}
 
 	return nil
@@ -669,7 +669,7 @@ func (c *Collection) loadMappings(path string) error {
 
 	var mappings map[string]interface{}
 	if err := json.Unmarshal(data, &mappings); err != nil {
-		return fmt.Errorf("unmarshal mappings: %w", err)
+		return ErrIndexCorrupted
 	}
 
 	// Load docToNode

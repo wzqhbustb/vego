@@ -213,7 +213,7 @@ func (s *DocumentStorage) Get(id string) (*Document, error) {
 	idHash, exists := s.metaStore.idToHash[id]
 	if !exists {
 		s.metaStore.mu.RUnlock()
-		return nil, fmt.Errorf("document not found: %s", id)
+		return nil, ErrDocumentNotFound
 	}
 	meta := s.metaStore.entries[idHash]
 	s.metaStore.mu.RUnlock()
