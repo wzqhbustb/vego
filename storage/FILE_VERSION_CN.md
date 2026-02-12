@@ -567,12 +567,13 @@ func (r *Reader) readHeader() error {
 
 ### Phase 1, 第 1-2 周：基础
 
-**第 1-2 天：版本类型**
-- [ ] 创建 `storage/format/version.go`
-- [ ] 定义 `VersionPolicy`、简化后的 `VersionChecker`
-- [ ] 实现 `FeatureXxx` 常量
-- [ ] 添加版本编码/解码辅助函数
-- [ ] 实现 `NormalizeVersion` 用于旧版本映射
+**第 1-2 天：版本类型** ✅ 已完成
+- [x] 创建 `storage/format/version.go`
+- [x] 定义 `VersionPolicy`、简化后的 `VersionChecker`
+- [x] 实现 `FeatureXxx` 常量
+- [x] 添加版本编码/解码辅助函数
+- [x] 实现 `NormalizeVersion` 用于旧版本映射
+- [x] 编写完整单元测试（16个测试用例）
 
 **第 3-4 天：Footer 扩展**
 - [ ] 扩展 Footer.Metadata 存储格式版本信息
