@@ -193,49 +193,6 @@ func main() {
 }
 ```
 
-### Basic Usage
-
-```go
-package main
-
-import (
-    "fmt"
-    hnsw "github.com/wzqhbustb/vego/index"
-)
-
-func main() {
-    // 1. Create index (using adaptive configuration)
-    config := hnsw.Config{
-        Dimension:      128,        // Vector dimension
-        Adaptive:       true,       // Auto-tune M and EfConstruction
-        ExpectedSize:   10000,      // Expected number of vectors
-        DistanceFunc:   hnsw.L2Distance,
-    }
-    index := hnsw.NewHNSW(config)
-
-    // 2. Add vectors
-    vector := make([]float32, 128)
-    // ... fill vector data ...
-    id, err := index.Add(vector)
-    if err != nil {
-        panic(err)
-    }
-    fmt.Printf("Added vector with ID: %d\n", id)
-
-    // 3. Search nearest neighbors
-    query := make([]float32, 128)
-    // ... fill query vector ...
-    results, err := index.Search(query, 10, 0) // Return Top-10
-    if err != nil {
-        panic(err)
-    }
-
-    for _, r := range results {
-        fmt.Printf("ID: %d, Distance: %.4f\n", r.ID, r.Distance)
-    }
-}
-```
-
 ### Collection API Examples
 
 #### Batch Operations
