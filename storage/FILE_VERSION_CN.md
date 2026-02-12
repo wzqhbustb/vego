@@ -575,10 +575,11 @@ func (r *Reader) readHeader() error {
 - [x] 实现 `NormalizeVersion` 用于旧版本映射
 - [x] 编写完整单元测试（16个测试用例）
 
-**第 3-4 天：Footer 扩展**
-- [ ] 扩展 Footer.Metadata 存储格式版本信息
-- [ ] 添加 `MetadataHelpers` 读写工具函数
-- [ ] 保持 Header 不变（向后兼容）
+**第 3-4 天：Footer 扩展** ✅ 已完成
+- [x] 扩展 Footer.Metadata 存储格式版本信息
+- [x] 添加 `MetadataHelpers` 读写工具函数
+- [x] 保持 Header 不变（向后兼容）
+- [x] 更新 CurrentVersion 到 0x0102 (V1.2)
 
 **第 5-6 天：兼容性框架**
 - [ ] 实现 `VersionChecker.CheckReadCompatibility()`
