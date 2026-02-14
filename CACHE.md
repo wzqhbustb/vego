@@ -319,83 +319,9 @@ func NewBlockCache(opts ...BlockCacheOption) *BlockCache {
 }
 ```
 
-### 六、缓存失效策略
+### 六、缓存失效策略（已迁移至"读写一致性解决方案"章节）
 
-#### 场景分析
-
-| 操作 | 影响范围 | 处理方式 |
-|------|----------|----------|
-| Insert() | 新增行 | 追加，不影响现有缓存 |
-| Update() | 修改行 | 清除该行缓存 |
-| Delete() | 删除行 | 清除该行缓存 |
-| flush() | 整文件重写 | Clear 所有缓存 |
-| Save() | 全量持久化 | Clear 所有缓存 |
-
-#### 方案一: 写时失效 (Write-Invalidate)
-
-```go
-func (s *DocumentStorage) flush() error {
-    // 1. 写入磁盘
-    err := s.writeColumnStorage()
-    if err != nil { return err }
-
-    // 2. 清除所有缓存
-    if s.blockCache != nil {
-        s.blockCache.Clear()
-    }
-
-    // 3. 重建行索引
-    return s.loadRowIndex()
-}
-
-func (s *DocumentStorage) Delete(id string) error {
-    // ... 执行删除
-
-    // 清除相关缓存
-    if s.blockCache != nil {
-        idHash := s.metaStore.idToHash[id]
-        rowIdx := s.rowIndex.idHashToRow[idHash]
-        cacheKey := fmt.Sprintf("%s_row_%d", s.dataPath, rowIdx)
-        s.blockCache.Remove(cacheKey)
-    }
-    return nil
-}
-```
-
-#### 方案二: 版本号机制
-
-```go
-type DocumentStorage struct {
-    blockCache   *format.BlockCache
-    dataVersion  int64  // 数据版本号
-}
-
-func (s *DocumentStorage) flush() error {
-    err := s.writeColumnStorage()
-    if err != nil { return err }
-
-    // 递增版本号
-    atomic.AddInt64(&s.dataVersion, 1)
-    return nil
-}
-
-// 缓存 key 包含版本号
-func (s *DocumentStorage) readWithCache(rowIdx int64) ([]float32, error) {
-    version := atomic.LoadInt64(&s.dataVersion)
-    cacheKey := fmt.Sprintf("%s_row_%d_v%d", s.dataPath, rowIdx, version)
-
-    if data, ok := s.blockCache.Get(cacheKey); ok {
-        return unmarshalVector(data)
-    }
-
-    // 读取并缓存
-    vector, err := s.readVectorFromDisk(rowIdx)
-    if err == nil {
-        s.blockCache.Put(cacheKey, marshalVector(vector))
-    }
-    return vector, err
-}
-```
+详见下文 **"加入缓存后的读写一致性问题的解决方案"** 章节。
 
 ## BlockCache 在数据读取全链路的集成
 
@@ -459,7 +385,8 @@ type Reader struct {
 func (r *Reader) readPage(pageIdx format.PageIndex) (*format.Page, error) {
     // 1. 先查 BlockCache
     if r.blockCache != nil {
-        key := fmt.Sprintf("%s:%d:%d", r.cacheKey, pageIdx.Offset, pageIdx.Size)
+        // 优化：cache key 不需要包含 size（可从 Footer 获取）
+        key := fmt.Sprintf("%s:%d", r.cacheKey, pageIdx.Offset)
         if cached, ok := r.blockCache.Get(key); ok {
             page := &format.Page{}
             if err := page.UnmarshalBinary(cached); err == nil {
@@ -467,17 +394,21 @@ func (r *Reader) readPage(pageIdx format.PageIndex) (*format.Page, error) {
             }
         }
     }
-    
+
     // 2. 缓存未命中，读磁盘
     page, err := r.readPageFromDisk(pageIdx)
-    
+    if err != nil {
+        return nil, err
+    }
+
     // 3. 存入缓存
-    if r.blockCache != nil && err == nil {
+    if r.blockCache != nil {
+        key := fmt.Sprintf("%s:%d", r.cacheKey, pageIdx.Offset)
         if data, err := page.MarshalBinary(); err == nil {
             r.blockCache.Put(key, data)
         }
     }
-    return page, err
+    return page, nil
 }
 ```
 
@@ -505,30 +436,87 @@ storage/format/blockcache.go (BlockCache)
 
 **正确的集成方式**：
 
+DocumentStorage 需要**显式传递 BlockCache 给 Reader**，而不是依赖 Reader 内部创建。
+
 ```go
 type DocumentStorage struct {
     path      string
     dimension int
-    
-    // 不需要直接持有 BlockCache
-    // 但可以有 DocumentCache（业务层缓存）
-    docCache *cache.DocumentCache
+
+    // 共享的 BlockCache 实例（传递给下层 Reader）
+    blockCache *format.BlockCache
+
+    // 业务层 Document 缓存（可选，缓存反序列化后的对象）
+    docCache *DocumentLRUCache
 }
 
-// 读取时自动使用 BlockCache
+// 初始化时创建共享 BlockCache
+func NewDocumentStorage(path string, dimension int) (*DocumentStorage, error) {
+    // ...
+    s := &DocumentStorage{
+        // ...
+        blockCache: format.NewBlockCache(format.DefaultBlockCacheSize), // 64MB
+        docCache:   NewDocumentLRUCache(10000), // 1万文档
+    }
+    return s, nil
+}
+
+// 读取时显式传递 BlockCache 给 Reader
 func (s *DocumentStorage) Get(id string) (*Document, error) {
-    // 使用 RowIndexReader（内部使用带 BlockCache 的 Reader）
-    reader, _ := column.NewRowIndexReader(s.dataFilePath())
-    // readPage 会自动使用 BlockCache
+    // 使用带缓存的 Reader
+    reader, _ := column.NewReaderWithCache(s.dataFilePath(), s.blockCache)
+    // 现在 readPage 会使用传入的 BlockCache
+    // ...
+}
+```
+
+**为什么需要显式传递**：
+
+```
+DocumentStorage (持有 BlockCache 实例)
+    │
+    ▼ 显式传递 blockCache
+Reader (使用传入的 blockCache)
+    │
+    ▼ 调用 Get/Put
+BlockCache (共享的缓存实例)
+```
+
+如果不显式传递：
+- 每个 Reader 创建自己的 BlockCache → 缓存不共享
+- 内存浪费，命中率低
+
+**需要新增的 Reader 构造函数**：
+
+```go
+// storage/column/reader.go
+
+// NewReaderWithCache 创建带 BlockCache 的 Reader
+func NewReaderWithCache(filename string, cache *format.BlockCache) (*Reader, error) {
+    reader, err := NewReader(filename)
+    if err != nil {
+        return nil, err
+    }
+    reader.blockCache = cache
+    reader.cacheKey = generateCacheKey(filename)
+    return reader, nil
+}
+
+// generateCacheKey 生成文件唯一标识
+func generateCacheKey(filename string) string {
+    // 使用文件路径的 hash 作为 key 前缀
+    h := fnv.New64a()
+    h.Write([]byte(filename))
+    return fmt.Sprintf("%x", h.Sum64())
 }
 ```
 
 **建议**：
-- DocumentStorage **不直接**使用 BlockCache
-- 通过使用带缓存的 Reader（如 RowIndexReader）**间接**支持
+- DocumentStorage **持有** BlockCache 实例（用于共享）
+- 创建 Reader 时**显式传递** BlockCache
 - 可额外添加 DocumentCache（业务层缓存，缓存反序列化后的 Document 对象）
 
-**优先级**：**P1** - 通过 Reader 改造自动生效
+**优先级**：**P1** - 需要配合 Reader 改造完成
 
 ---
 
@@ -593,17 +581,28 @@ func (r *Reader) readPageAsync(pageIdx format.PageIndex) (*format.Page, error) {
 
 ---
 
-### 集成优先级建议
+### 集成优先级建议（修订版）
 
 ```
-Phase 1 (P0): Reader (base) 支持 BlockCache
-    └─ 目标：让所有数据读取都能利用缓存
-    
-Phase 2 (P1): DocumentStorage 使用带缓存的 Reader
-    └─ 目标：vego 层自动享受缓存加速
-    
-Phase 3 (长期): AsyncIO 保持现状
-    └─ 目标：保持调度器纯粹性，不管理缓存
+Phase 1 (P0): BlockCache 基础修复
+    ├─ 修复 Get() 使用读锁（问题 1）
+    ├─ 添加命中率统计（问题 2）
+    └─ 数据拷贝避免外部修改（问题 3）
+
+Phase 2 (P0): Reader (base) 支持 BlockCache
+    ├─ Reader 添加 blockCache 字段
+    ├─ 改造 readPage() 使用缓存
+    └─ 新增 NewReaderWithCache() 构造函数
+
+Phase 3 (P1): DocumentStorage 集成
+    ├─ 创建共享 BlockCache 实例
+    ├─ 使用 NewReaderWithCache() 传递缓存
+    └─ 实现缓存失效（flush/Delete 时）
+
+Phase 4 (可选): 增强功能
+    ├─ TTL 支持
+    ├─ 请求合并
+    └─ 多级淘汰策略
 ```
 
 ### 总结
@@ -615,3 +614,245 @@ Phase 3 (长期): AsyncIO 保持现状
 
 ## 加入缓存后的读写一致性问题的解决方案
 
+### 核心问题
+
+当数据被修改（Insert/Update/Delete/flush）时，BlockCache 中可能缓存了旧数据，导致**读写不一致**。
+
+### 场景分析
+
+| 操作 | 影响范围 | 风险 | 处理方式 |
+|------|----------|------|----------|
+| Insert() | 新增行 | 无风险 | 追加写入，不影响现有缓存 |
+| Update() | 修改单行 | 缓存旧数据 | 清除该行缓存 |
+| Delete() | 删除单行 | 缓存已删除数据 | 清除该行缓存 |
+| flush() | 整文件重写 | 全部缓存失效 | **Clear 所有缓存** |
+| Save() | 全量持久化 | 全部缓存失效 | **Clear 所有缓存** |
+
+### 方案一: 写时失效 (Write-Invalidate) - 推荐
+
+**核心思想**：数据修改时，主动清除受影响的缓存。
+
+```go
+func (s *DocumentStorage) flush() error {
+    s.mu.Lock()
+    defer s.mu.Unlock()
+
+    // 1. 写入磁盘
+    err := s.writeColumnStorage()
+    if err != nil {
+        return err
+    }
+
+    // 2. 清除所有缓存（文件已重写，所有旧缓存失效）
+    if s.blockCache != nil {
+        s.blockCache.Clear()
+    }
+
+    // 3. 清除业务层缓存
+    if s.docCache != nil {
+        s.docCache.Clear()
+    }
+
+    // 4. 重建行索引
+    return s.rebuildRowIndex()
+}
+
+func (s *DocumentStorage) Delete(id string) error {
+    s.mu.Lock()
+    defer s.mu.Unlock()
+
+    // 1. 获取 idHash 和 rowIdx
+    idHash, exists := s.metaStore.idToHash[id]
+    if !exists {
+        return ErrDocumentNotFound
+    }
+
+    rowIdx, found := s.rowIndex.Lookup(idHash)
+    if !found {
+        return ErrDocumentNotFound
+    }
+
+    // 2. 执行删除（标记删除或物理删除）
+    // ... 删除逻辑 ...
+
+    // 3. 清除 BlockCache 中该行的缓存
+    if s.blockCache != nil {
+        cacheKey := fmt.Sprintf("%s:%d", s.dataFileCacheKey, rowIdx)
+        s.blockCache.Remove(cacheKey)
+    }
+
+    // 4. 清除业务层缓存
+    if s.docCache != nil {
+        s.docCache.Remove(id)
+    }
+
+    // 5. 更新行索引
+    s.rowIndex.Delete(idHash)
+
+    return nil
+}
+
+func (s *DocumentStorage) Update(doc *Document) error {
+    s.mu.Lock()
+    defer s.mu.Unlock()
+
+    // 1. 检查文档是否存在
+    idHash, exists := s.metaStore.idToHash[doc.ID]
+    if !exists {
+        return ErrDocumentNotFound
+    }
+
+    rowIdx, found := s.rowIndex.Lookup(idHash)
+    if !found {
+        return ErrDocumentNotFound
+    }
+
+    // 2. 清除旧缓存
+    if s.blockCache != nil {
+        cacheKey := fmt.Sprintf("%s:%d", s.dataFileCacheKey, rowIdx)
+        s.blockCache.Remove(cacheKey)
+    }
+    if s.docCache != nil {
+        s.docCache.Remove(doc.ID)
+    }
+
+    // 3. 写入缓冲区（稍后 flush 时会再次清除缓存）
+    return s.insertToBuffer(doc)
+}
+```
+
+**优点**：
+- 实现简单，立即生效
+- 无额外内存开销
+
+**缺点**：
+- flush 时全量清除，缓存命中率下降
+- 频繁 flush 导致缓存失效频繁
+
+### 方案二: 版本号机制 (Version-Based) - 备选
+
+**核心思想**：缓存 key 包含数据版本号，旧版本数据自然失效。
+
+```go
+type DocumentStorage struct {
+    path         string
+    dimension    int
+    blockCache   *format.BlockCache
+    dataVersion  int64  // 数据版本号，每次 flush 递增
+    fileHash     string // 文件路径 hash，用于 cache key
+}
+
+func NewDocumentStorage(path string, dimension int) (*DocumentStorage, error) {
+    // ...
+    s := &DocumentStorage{
+        // ...
+        dataVersion: 1,
+        fileHash:    generateFileHash(path),
+    }
+    return s, nil
+}
+
+func (s *DocumentStorage) flush() error {
+    s.mu.Lock()
+    defer s.mu.Unlock()
+
+    // 1. 写入磁盘
+    err := s.writeColumnStorage()
+    if err != nil {
+        return err
+    }
+
+    // 2. 递增版本号（旧版本缓存自然失效）
+    atomic.AddInt64(&s.dataVersion, 1)
+
+    // 3. 可选：异步清理旧版本缓存（后台任务）
+    go s.cleanupOldVersionCache()
+
+    return nil
+}
+
+// cache key 包含版本号
+func (s *DocumentStorage) getCacheKey(rowIdx int64) string {
+    version := atomic.LoadInt64(&s.dataVersion)
+    return fmt.Sprintf("%s:v%d:r%d", s.fileHash, version, rowIdx)
+}
+
+func (s *DocumentStorage) readWithCache(rowIdx int64) ([]float32, error) {
+    cacheKey := s.getCacheKey(rowIdx)
+
+    // 1. 查缓存
+    if data, ok := s.blockCache.Get(cacheKey); ok {
+        return unmarshalVector(data)
+    }
+
+    // 2. 读磁盘
+    vector, err := s.readVectorFromDisk(rowIdx)
+    if err != nil {
+        return nil, err
+    }
+
+    // 3. 写入缓存
+    if data, err := marshalVector(vector); err == nil {
+        s.blockCache.Put(cacheKey, data)
+    }
+
+    return vector, nil
+}
+
+// 后台清理旧版本缓存（可选优化）
+func (s *DocumentStorage) cleanupOldVersionCache() {
+    currentVersion := atomic.LoadInt64(&s.dataVersion)
+    // 清理版本号 < currentVersion - 2 的缓存
+    // 实现略...
+}
+```
+
+**优点**：
+- flush 时无需立即清除缓存，旧版本仍可服务读请求
+- 减少缓存抖动
+
+**缺点**：
+- 实现复杂，需要版本管理
+- 内存占用增加（多版本缓存共存）
+- 需要后台清理任务
+
+### 方案对比与推荐
+
+| 方案 | 复杂度 | 内存开销 | 缓存命中率 | 推荐场景 |
+|------|--------|----------|------------|----------|
+| 写时失效 | 低 | 低 | flush 后下降 | **通用推荐** |
+| 版本号机制 | 高 | 中 | 较高 | 频繁 flush 场景 |
+
+**推荐**：使用**方案一（写时失效）**，原因：
+1. 实现简单，易于维护
+2. flush 操作相对低频（默认 1000 条文档触发一次）
+3. 缓存重建成本低（RowIndex 在内存中，可快速重建缓存）
+
+### 缓存失效的粒度控制
+
+```go
+// 细粒度：单行失效（Update/Delete）
+func (s *DocumentStorage) invalidateRow(rowIdx int64) {
+    if s.blockCache != nil {
+        cacheKey := fmt.Sprintf("%s:%d", s.fileHash, rowIdx)
+        s.blockCache.Remove(cacheKey)
+    }
+}
+
+// 粗粒度：全量清除（flush/Save）
+func (s *DocumentStorage) invalidateAll() {
+    if s.blockCache != nil {
+        s.blockCache.Clear()
+    }
+    if s.docCache != nil {
+        s.docCache.Clear()
+    }
+}
+```
+
+### 总结
+
+- **flush/Save**：必须清除所有缓存（文件重写）
+- **Update/Delete**：清除受影响行的缓存
+- **Insert**：无需清除缓存（追加写入）
+- **推荐方案**：写时失效（简单可靠）
