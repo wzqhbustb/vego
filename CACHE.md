@@ -527,8 +527,219 @@ func (r *Reader) readPageAsync(pageIdx format.PageIndex) (*format.Page, error) {
 
 ## BlockCache 在数据读取全链路的集成
 
-RowIndexReader
-Reader（Base）
-DocumentStorage
-AsyncIO
+### 四个核心模块的集成可行性分析
+
+| 模块 | 当前状态 | 支持可行性 | 复杂度 | 优先级 |
+|------|----------|-----------|--------|--------|
+| **RowIndexReader** | ✅ 已支持 | 直接使用 | 低 | 已完成 |
+| **Reader (base)** | ❌ 未支持 | **完全可行** | 中 | **P0** |
+| **DocumentStorage** | ❌ 未支持 | **可行但需设计** | 中 | **P1** |
+| **AsyncIO** | ❌ 不适合 | **架构冲突** | 高 | 不推荐 |
+
+---
+
+#### 1. RowIndexReader（已支持，完善即可）
+
+**当前状态**：`storage/column/rowindex_reader.go` 已集成 BlockCache
+
+```go
+type RowIndexReader struct {
+    *Reader
+    blockCache     *format.BlockCache  // ← 已有字段
+    ...
+}
+```
+
+**使用场景**：
+- 缓存 RowIndex 元数据页（id → row 映射）
+- 避免重复解析索引
+
+**当前局限**：
+- 仅缓存索引页，不缓存数据页
+- 需要显式传入 BlockCache 实例：`NewRowIndexReaderWithCache(filename, cache)`
+
+**建议**：保持现状，与全局 PageCache 集成后可自动生效
+
+---
+
+#### 2. Reader (base)（强烈推荐支持，这是缓存的核心）
+
+**为什么必须支持**：
+`Reader` 是底层数据读取入口，**所有列数据读取都经过这里**，是最关键的缓存集成点。
+
+**改造方案**：
+
+```go
+// storage/column/reader.go
+type Reader struct {
+    file       *os.File
+    header     *format.Header
+    footer     *format.Footer
+    pageReader *PageReader
+    
+    // 新增：BlockCache 支持
+    blockCache *format.BlockCache  // 可选，为 nil 时不使用缓存
+    cacheKey   string              // 文件唯一标识（用于 cache key）
+    ...
+}
+
+// 改造 readPage 方法
+func (r *Reader) readPage(pageIdx format.PageIndex) (*format.Page, error) {
+    // 1. 先查 BlockCache
+    if r.blockCache != nil {
+        key := fmt.Sprintf("%s:%d:%d", r.cacheKey, pageIdx.Offset, pageIdx.Size)
+        if cached, ok := r.blockCache.Get(key); ok {
+            page := &format.Page{}
+            if err := page.UnmarshalBinary(cached); err == nil {
+                return page, nil  // 缓存命中
+            }
+        }
+    }
+    
+    // 2. 缓存未命中，读磁盘
+    page, err := r.readPageFromDisk(pageIdx)
+    
+    // 3. 存入缓存
+    if r.blockCache != nil && err == nil {
+        if data, err := page.MarshalBinary(); err == nil {
+            r.blockCache.Put(key, data)
+        }
+    }
+    return page, err
+}
+```
+
+**收益**：
+- 所有列数据读取都经过缓存
+- 自动支持 Page 级别的 LRU 淘汰
+- 多个 Reader 实例可共享同一 BlockCache
+
+**优先级**：**P0** - 这是实现全链路缓存的核心
+
+---
+
+#### 3. DocumentStorage（可行但需间接支持）
+
+**为什么不直接支持**：
+`DocumentStorage` 位于 **vego 层**（业务层），而 BlockCache 位于 **storage 层**（数据层）。正确的设计是**通过使用带缓存的 Reader 间接受益**。
+
+```
+vego/storage.go (DocumentStorage)
+    ↓ 调用
+storage/column/reader.go (Reader)  ← BlockCache 在这里
+    ↓ 使用
+storage/format/blockcache.go (BlockCache)
+```
+
+**正确的集成方式**：
+
+```go
+type DocumentStorage struct {
+    path      string
+    dimension int
+    
+    // 不需要直接持有 BlockCache
+    // 但可以有 DocumentCache（业务层缓存）
+    docCache *cache.DocumentCache
+}
+
+// 读取时自动使用 BlockCache
+func (s *DocumentStorage) Get(id string) (*Document, error) {
+    // 使用 RowIndexReader（内部使用带 BlockCache 的 Reader）
+    reader, _ := column.NewRowIndexReader(s.dataFilePath())
+    // readPage 会自动使用 BlockCache
+}
+```
+
+**建议**：
+- DocumentStorage **不直接**使用 BlockCache
+- 通过使用带缓存的 Reader（如 RowIndexReader）**间接**支持
+- 可额外添加 DocumentCache（业务层缓存，缓存反序列化后的 Document 对象）
+
+**优先级**：**P1** - 通过 Reader 改造自动生效
+
+---
+
+#### 4. AsyncIO（不适合，保持调度器纯粹性）
+
+**为什么不支持**：
+AsyncIO 的定位是**异步 I/O 调度器**，不是数据消费者。缓存应该在**数据消费端**（Reader）管理。
+
+**架构分层**：
+
+```
+┌─────────────────────────────────────────┐
+│           AsyncIO (调度层)               │
+│  - 请求排序（按 offset 排序）            │
+│  - 调度执行（Worker Pool）               │
+│  - 文件句柄管理（FilePool）              │
+│                                         │
+│  ❌ 不应该关心缓存                        │
+└─────────────────────────────────────────┘
+              ↓ 返回原始数据
+┌─────────────────────────────────────────┐
+│         Reader (数据消费层)              │
+│  ┌──────────┐    ┌──────────┐          │
+│  │ BlockCache│ <- │ readPage │          │
+│  │ (缓存)    │    │ (读磁盘) │          │
+│  └──────────┘    └──────────┘          │
+│                                         │
+│  ✅ 管理缓存是 Reader 的职责             │
+└─────────────────────────────────────────┘
+```
+
+**正确配合方式**：
+
+```go
+// Reader 使用 AsyncIO 读取，然后自己管理缓存
+func (r *Reader) readPageAsync(pageIdx format.PageIndex) (*format.Page, error) {
+    // 1. 先查缓存（Reader 的职责）
+    if r.blockCache != nil {
+        if cached, ok := r.blockCache.Get(key); ok {
+            return cached, nil
+        }
+    }
+    
+    // 2. 缓存未命中，使用 AsyncIO 读取
+    resultCh := r.asyncIO.Read(ctx, r.fileID, pageIdx.Offset, pageIdx.Size)
+    result := <-resultCh
+    
+    // 3. 存入缓存（Reader 的职责）
+    if r.blockCache != nil {
+        r.blockCache.Put(key, result.Data)
+    }
+    return result.Data, nil
+}
+```
+
+**结论**：
+- AsyncIO **不应该**直接支持 BlockCache
+- 保持调度器的纯粹性，专注于**高效调度 I/O**
+- 缓存由上层 Reader 管理，符合单一职责原则
+
+**优先级**：不推荐改造
+
+---
+
+### 集成优先级建议
+
+```
+Phase 1 (P0): Reader (base) 支持 BlockCache
+    └─ 目标：让所有数据读取都能利用缓存
+    
+Phase 2 (P1): DocumentStorage 使用带缓存的 Reader
+    └─ 目标：vego 层自动享受缓存加速
+    
+Phase 3 (长期): AsyncIO 保持现状
+    └─ 目标：保持调度器纯粹性，不管理缓存
+```
+
+### 总结
+
+- ✅ **RowIndexReader**：已支持，完善即可
+- ✅ **Reader (base)**：**强烈推荐支持**，这是缓存的核心
+- ⚠️ **DocumentStorage**：间接支持（通过 Reader），可额外加 DocumentCache
+- ❌ **AsyncIO**：**不适合**，保持调度器纯粹性
+
+## 加入缓存后的读写一致性问题的解决方案
 
