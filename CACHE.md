@@ -191,7 +191,16 @@ func (c *BlockCache) Get(key string) ([]byte, bool) {
 func (c *BlockCache) Get(key string) ([]byte, bool) {
     c.mu.RLock()        // ✅ 改为读锁
     defer c.mu.RUnlock()
-    // ...
+
+    elem, ok := c.items[key]
+    if !ok {
+        return nil, false
+    }
+
+    // Move to front (most recently used)
+    c.lru.MoveToFront(elem)
+    entry := elem.Value.(*cacheEntry)
+    return entry.data, true
 }
 ```
 
@@ -536,118 +545,14 @@ func (r *Reader) readPage(pageIdx format.PageIndex) (*format.Page, error) {
 
 ### 六、缓存失效策略
 
-#### 场景分析
-
-| 操作 | 影响范围 | 处理方式 |
-|------|----------|----------|
-| Insert() | 新增行 | 追加，不影响现有缓存 |
-| Update() | 修改行 | 清除该行缓存 |
-| Delete() | 删除行 | 清除该行缓存 |
-| flush() | 整文件重写 | Clear 所有缓存 |
-| Save() | 全量持久化 | Clear 所有缓存 |
-
-#### 方案一: 写时失效 (Write-Invalidate)
-
-```go
-func (s *DocumentStorage) flush() error {
-    // 1. 写入磁盘
-    err := s.writeColumnStorage()
-    if err != nil { return err }
-
-    // 2. 清除所有缓存
-    if s.blockCache != nil {
-        s.blockCache.Clear()
-    }
-
-    // 3. 重建行索引
-    return s.loadRowIndex()
-}
-
-func (s *DocumentStorage) Delete(id string) error {
-    // ... 删除逻辑 ...
-
-    // 清除 BlockCache
-    if s.blockCache != nil {
-        cacheKey := fmt.Sprintf("%s:%d", s.dataPath, rowIdx)
-        s.blockCache.Remove(cacheKey)
-    }
-
-    return nil
-}
-```
-
-详见下文 **"加入缓存后的读写一致性问题的解决方案"** 章节。
+详见 **"## 加入缓存后的读写一致性问题的解决方案"** 章节，包含完整的：
+- 三层缓存架构与一致性策略
+- Write-Back 写入策略代码示例
+- 分层查询读取策略代码示例
+- Flush 延迟批量策略
+- 场景分析与处理策略
 
 ---
-
-### 七、AsyncIO 与 BlockCache 的集成
-
-#### 关系说明
-
-**它们是互补的，不是互斥的**:
-- **BlockCache**: 避免重复读取（空间换时间）
-- **AsyncIO**: 并行化 I/O（并发换时间）
-
-#### 集成流程
-
-```
-Get(id)
-  │
-  ├─→ 1. 查 DocCache (行级缓存)
-  │     └─→ 命中 → 返回
-  │
-  ├─→ 2. 查 BlockCache (Page 级缓存)
-  │     └─→ 命中 → 解码 → 返回
-  │
-  ├─→ 3. 读磁盘 (AsyncIO 或同步)
-  │     ├─→ 异步: readPageAsync() → 存入 BlockCache → 解码
-  │     └─→ 同步: readPageSync() → 存入 BlockCache → 解码
-  │
-  └─→ 4. 存入 DocCache → 返回
-```
-
-#### AsyncIO 读取后缓存
-
-```go
-func (r *Reader) readPageAsync(pageIdx format.PageIndex) (*format.Page, error) {
-    cacheKey := r.cacheKey(pageIdx)
-
-    // 再次检查缓存（可能有其他请求刚加载过）
-    if r.blockCache != nil {
-        if data, ok := r.blockCache.Get(cacheKey); ok {
-            page := &format.Page{}
-            if err := page.UnmarshalBinary(data); err == nil {
-                return page, nil
-            }
-        }
-    }
-
-    // 使用 AsyncIO 读取
-    resultCh := r.asyncIO.Read(ctx, r.fileID, pageIdx.Offset, pageIdx.Size)
-    // ... 等待结果
-
-    // 存入 BlockCache
-    if r.blockCache != nil && page != nil {
-        if data, err := page.MarshalBinary(); err == nil {
-            r.blockCache.Put(cacheKey, data)
-        }
-    }
-    return page, err
-}
-```
-
----
-
-### 八、待完成事项清单
-
-- [ ] 修复 Get() 锁问题 (P0)
-- [ ] 添加缓存命中率统计 (P1)
-- [ ] 修复数据安全问题 - 拷贝数据 (P2)
-- [ ] 集成 BlockCache 到 Reader.readPageSync() (P0)
-- [ ] 集成 BlockCache 到 AsyncIO 读取路径 (P1)
-- [ ] 实现缓存失效策略 (P0)
-- [ ] 可选: TTL 支持 (P3)
-- [ ] 可选: 请求合并 (P3)
 
 
 ## BlockCache 在数据读取全链路的集成
@@ -1269,7 +1174,74 @@ func (s *DocumentStorage) ConsistencyStats() ConsistencyMetrics {
 }
 ```
 
-### 八、总结
+### 九、缓存容量配置建议
+
+| 层级 | 默认容量 | 配置参数 | 计算方式 | 适用场景 |
+|------|----------|----------|----------|----------|
+| L1 writeBuffer | 1000 条 | MaxBufferSize | 按数量 | 写入缓冲 |
+| L2 DocumentCache | 10000 条 | CacheCapacity | 按数量 | 热文档缓存 |
+| L3 BlockCache | 64 MB | BlockCacheSize | 按字节 | 页面缓存 |
+
+**配置示例**:
+```go
+type CacheConfig struct {
+    // L1: 写缓冲
+    MaxBufferSize int // 默认 1000
+
+    // L2: 文档缓存
+    DocumentCacheCapacity int // 默认 10000
+    DocumentCacheEnabled bool // 默认 true
+
+    // L3: 页面缓存
+    BlockCacheSize int64 // 默认 64MB
+    BlockCacheEnabled bool // 默认 true
+}
+
+func DefaultCacheConfig() *CacheConfig {
+    return &CacheConfig{
+        MaxBufferSize:           1000,
+        DocumentCacheCapacity:   10000,
+        DocumentCacheEnabled:   true,
+        BlockCacheSize:         64 * 1024 * 1024,
+        BlockCacheEnabled:      true,
+    }
+}
+```
+
+---
+
+### 十、性能指标目标
+
+#### 读取性能目标
+
+| 指标 | 目标 | 说明 |
+|------|------|------|
+| Get() 单次延迟 (缓存命中) | < 1ms | L2 命中 |
+| Get() 单次延迟 (缓存未命中) | < 10ms | 需要读磁盘 |
+| Get() 100次重复查询 | < 50ms | 缓存预热后 |
+| GetBatch(10) | < 5ms | 批量读取优化 |
+| GetBatch(100) | < 50ms | 批量读取优化 |
+| Search(k=10) on 100K docs | < 100ms | 含 HNSW 搜索 |
+
+#### 缓存命中率目标
+
+| 指标 | 目标 | 说明 |
+|------|------|------|
+| L2 DocumentCache 命中率 | > 80% | 热数据 |
+| L3 BlockCache 命中率 | > 60% | 页面缓存 |
+| RowIndex 命中率 | > 95% | 元数据缓存 |
+
+#### 写入性能目标
+
+| 指标 | 目标 | 说明 |
+|------|------|------|
+| Insert() 延迟 | < 1ms | 写入缓冲 |
+| Flush() 1000 条 | < 500ms | 批量刷盘 |
+| 并发写入吞吐 | > 10K ops/s | 多客户端 |
+
+---
+
+### 十一、总结
 
 - **三层缓存**：writeBuffer(L1) → DocumentCache(L2) → BlockCache(L3)
 - **Write-Back 策略**：优先写入内存，异步刷盘，最大化写入性能
