@@ -189,20 +189,27 @@ func (c *BlockCache) Get(key string) ([]byte, bool) {
 **修复方案**:
 ```go
 func (c *BlockCache) Get(key string) ([]byte, bool) {
-    c.mu.RLock()        // ✅ 改为读锁
-    defer c.mu.RUnlock()
+    c.mu.Lock()         // 必须使用写锁，因为 MoveToFront 修改链表
+    defer c.mu.Unlock()
 
     elem, ok := c.items[key]
     if !ok {
+        c.misses++
         return nil, false
     }
 
     // Move to front (most recently used)
     c.lru.MoveToFront(elem)
+    c.hits++
     entry := elem.Value.(*cacheEntry)
     return entry.data, true
 }
 ```
+
+**注意**: `MoveToFront` 会修改 LRU 链表结构，因此必须使用写锁。如需更高并发性能，可考虑：
+- **方案 A**: 分片锁（sharding）- 将 key 哈希到多个桶，每个桶独立加锁
+- **方案 B**: 延迟晋升 - 使用读锁查询，通过计数器批量更新 LRU 位置
+- **方案 C**: 无锁 LRU - 使用原子操作和链表分离技术
 
 ---
 
@@ -840,6 +847,7 @@ func (s *DocumentStorage) Insert(doc *Document) error {
     s.bufferSize++
     
     // 2. 写穿透到 L2 缓存（保证即时可见）
+    // 注意：使用当前版本号，Flush 后版本号递增，旧缓存自然失效
     idHash := hashID(doc.ID)
     cacheKey := s.cacheKey(idHash, s.dataVersion)
     s.docCache.Put(cacheKey, doc.Clone())
@@ -879,7 +887,7 @@ func (s *DocumentStorage) Update(doc *Document) error {
     s.writeBuffer = append(s.writeBuffer, doc.Clone())
     s.bufferSize++
     
-    // 5. 新文档加入缓存
+    // 5. 新文档加入缓存（与第3步互斥，不会重复执行）
     newKey := s.cacheKey(idHash, s.dataVersion)
     s.docCache.Put(newKey, doc.Clone())
     
@@ -985,6 +993,8 @@ func (s *DocumentStorage) GetBatch(ids []string) (map[string]*Document, error) {
         }
         
         // 检查墓碑（已删除）
+        // 墓碑中的版本号是删除操作发生时的版本号
+        // 如果墓碑版本号 <= 当前版本号，说明在当前数据版本中该记录已被删除
         if tombstoneVer, deleted := s.tombstones[idHash]; deleted {
             if tombstoneVer <= currentVersion {
                 continue  // 已删除，跳过
@@ -1174,7 +1184,7 @@ func (s *DocumentStorage) ConsistencyStats() ConsistencyMetrics {
 }
 ```
 
-### 九、缓存容量配置建议
+### 八、缓存容量配置建议
 
 | 层级 | 默认容量 | 配置参数 | 计算方式 | 适用场景 |
 |------|----------|----------|----------|----------|
@@ -1210,7 +1220,7 @@ func DefaultCacheConfig() *CacheConfig {
 
 ---
 
-### 十、性能指标目标
+### 九、性能指标目标
 
 #### 读取性能目标
 
@@ -1241,11 +1251,11 @@ func DefaultCacheConfig() *CacheConfig {
 
 ---
 
-## 待讨论的重要问题
+### 十、待讨论的重要问题
 
 以下问题在本文档中尚未详细讨论，留待后续补充：
 
-### 一、缓存预热与冷启动优化
+#### 10.1 缓存预热与冷启动优化
 
 **问题**：服务重启后缓存为空，大量请求直接打到磁盘，导致延迟飙升。
 
@@ -1257,7 +1267,7 @@ func DefaultCacheConfig() *CacheConfig {
 
 ---
 
-### 二、缓存雪崩/穿透/击穿防护
+#### 10.2 缓存雪崩/穿透/击穿防护
 
 **问题**：高并发场景下的缓存失效导致的系统风险。
 
@@ -1268,7 +1278,7 @@ func DefaultCacheConfig() *CacheConfig {
 
 ---
 
-### 三、内存限制与过载保护
+#### 10.3 内存限制与过载保护
 
 **问题**：缓存占用过多内存导致 OOM 或 GC 压力。
 
@@ -1280,7 +1290,7 @@ func DefaultCacheConfig() *CacheConfig {
 
 ---
 
-### 四、崩溃恢复与缓存一致性
+#### 10.4 崩溃恢复与缓存一致性
 
 **问题**：进程崩溃后未 Flush 数据的丢失风险。
 
@@ -1292,7 +1302,7 @@ func DefaultCacheConfig() *CacheConfig {
 
 ---
 
-### 五、性能调优指南
+#### 10.5 性能调优指南
 
 **问题**：如何根据实际场景调整缓存参数。
 
@@ -1319,5 +1329,5 @@ func DefaultCacheConfig() *CacheConfig {
 1. 实现基础缓存功能（BlockCache、DocumentCache）
 2. 集成到 Reader 和 DocumentStorage
 3. 解决读写一致性问题
-4. 逐步完善上述待讨论的问题（预热、防护、恢复等）
+4. 逐步完善上述待讨论的问题（见第 10 节：预热、防护、恢复等）
 
