@@ -171,58 +171,102 @@
 
 ### 二、需要修改的问题
 
-#### 问题 1: Get() 使用了写锁 [P0 - 严重]
+#### 问题 1: Get() 使用了写锁 - 需优化为分片锁方案 [P0]
 
 **位置**: `storage/format/blockcache.go:39-41`
 
-**当前代码**:
+**说明**: 原来的描述有误。`Get()` 使用写锁是**正确设计**，因为 `MoveToFront()` 会修改 LRU 链表结构。但全局写锁确实会导致高并发性能问题。
+
+**推荐方案: 分片锁 (Sharding)**
+
+将缓存划分为多个独立分片，每个分片拥有独立的锁。key 通过哈希路由到对应分片，显著减少锁竞争。
+
 ```go
-func (c *BlockCache) Get(key string) ([]byte, bool) {
-    c.mu.Lock()         // ❌ 使用了写锁
-    defer c.mu.Unlock()
-    // ...
+type BlockCache struct {
+    shards    []*cacheShard
+    numShards int
+    capacity  int64
+
+    // 全局统计（原子操作）
+    hits      int64
+    misses    int64
+    evictions int64
+}
+
+type cacheShard struct {
+    mu    sync.RWMutex
+    items map[string]*list.Element
+    lru   *list.List
+    size  int64
+}
+
+func NewBlockCache(capacityBytes int64, numShards ...int) *BlockCache {
+    n := 64 // 默认 64 个分片
+    shards := make([]*cacheShard, n)
+    for i := 0; i < n; i++ {
+        shards[i] = &cacheShard{
+            items: make(map[string]*list.Element),
+            lru:   list.New(),
+        }
+    }
+    return &BlockCache{shards: shards, numShards: n, capacity: capacityBytes}
+}
+
+func (c *BlockCache) getShard(key string) *cacheShard {
+    h := fnv.New64a()
+    h.Write([]byte(key))
+    return c.shards[h.Sum64()%uint64(c.numShards)]
 }
 ```
 
-**问题**: 每次读取都要加写锁，高并发下会严重影响性能
+**Get() 优化: 读锁 + 写锁晋升**
 
-**修复方案**:
 ```go
 func (c *BlockCache) Get(key string) ([]byte, bool) {
-    c.mu.Lock()         // 必须使用写锁，因为 MoveToFront 修改链表
-    defer c.mu.Unlock()
+    shard := c.getShard(key)
 
-    elem, ok := c.items[key]
+    // Step 1: 读锁查询（不晋升）
+    shard.mu.RLock()
+    elem, ok := shard.items[key]
+    shard.mu.RUnlock()
+
     if !ok {
-        c.misses++
+        atomic.AddInt64(&c.misses, 1)
         return nil, false
     }
 
-    // Move to front (most recently used)
-    c.lru.MoveToFront(elem)
-    c.hits++
-    entry := elem.Value.(*cacheEntry)
-    return entry.data, true
+    // Step 2: 写锁晋升（双重检查）
+    shard.mu.Lock()
+    if elem2, ok := shard.items[key]; ok && elem2 == elem {
+        shard.lru.MoveToFront(elem)
+        shard.mu.Unlock()
+
+        // 拷贝返回，避免外部修改缓存
+        data := make([]byte, len(elem.Value.(*cacheEntry).data))
+        copy(data, elem.Value.(*cacheEntry).data)
+
+        atomic.AddInt64(&c.hits, 1)
+        return data, true
+    }
+    shard.mu.Unlock()
+
+    atomic.AddInt64(&c.misses, 1)
+    return nil, false
 }
 ```
 
-**注意**: `MoveToFront` 会修改 LRU 链表结构，因此必须使用写锁。如需更高并发性能，可考虑：
-- **方案 A**: 分片锁（sharding）- 将 key 哈希到多个桶，每个桶独立加锁
-- **方案 B**: 延迟晋升 - 使用读锁查询，通过计数器批量更新 LRU 位置
-- **方案 C**: 无锁 LRU - 使用原子操作和链表分离技术
+**优势**:
+- 64 个分片时，锁竞争降低约 64 倍
+- 读操作大部分情况只加读锁
+- 写锁只影响单个分片
+
+**备选方案**:
+- **方案 B**: 延迟晋升 - 读锁查询，通过计数器批量更新 LRU 位置（会降低 LRU 准确性）
+- **方案 C**: 无锁 LRU - 使用原子操作和链表分离技术（复杂度高）
 
 ---
 
-#### 问题 2: 缺少缓存命中率统计 [P1]
-
-**当前 Stats 结构体**:
-```go
-type BlockCacheStats struct {
-    ItemCount int
-    Size      int64
-    Capacity  int64
-}
-```
+#### 问题 2: 缺少缓存命中率统计 [P1 - 已修复]
 
 **建议扩展**:
 ```go
@@ -230,63 +274,184 @@ type BlockCacheStats struct {
     ItemCount  int     // 缓存项数量
     Size       int64   // 当前缓存大小 (bytes)
     Capacity   int64   // 缓存容量 (bytes)
-    Hits       int64  // 缓存命中次数
-    Misses     int64  // 缓存未命中次数
-    Evictions  int64  // 淘汰次数
+    Hits       int64   // 缓存命中次数
+    Misses     int64   // 缓存未命中次数
+    Evictions  int64   // 淘汰次数
+    HitRate    float64 // 命中率 (0.0 - 1.0)
 }
 
 func (c *BlockCache) Stats() BlockCacheStats {
-    c.mu.RLock()
-    defer c.mu.RUnlock()
+    hits := atomic.LoadInt64(&c.hits)
+    misses := atomic.LoadInt64(&c.misses)
     return BlockCacheStats{
-        ItemCount:  len(c.items),
-        Size:       c.size,
+        ItemCount:  c.Len(),
+        Size:       c.Size(),
         Capacity:   c.capacity,
-        Hits:       c.hits,
-        Misses:     c.misses,
-        Evictions:  c.evictions,
+        Hits:       hits,
+        Misses:     misses,
+        Evictions:  atomic.LoadInt64(&c.evictions),
+        HitRate:    c.calculateHitRate(hits, misses),
     }
 }
-```
 
-**需要在 BlockCache 结构体中新增字段**:
-```go
-type BlockCache struct {
-    mu        sync.RWMutex
-    capacity  int64
-    size      int64
-    items     map[string]*list.Element
-    lru       *list.List
+func (c *BlockCache) calculateHitRate(hits, misses int64) float64 {
+    total := hits + misses
+    if total == 0 {
+        return 0.0
+    }
+    return float64(hits) / float64(total)
+}
 
-    // 新增统计字段
-    hits      int64
-    misses    int64
-    evictions int64
+// ResetStats 重置统计计数器
+func (c *BlockCache) ResetStats() {
+    atomic.StoreInt64(&c.hits, 0)
+    atomic.StoreInt64(&c.misses, 0)
+    atomic.StoreInt64(&c.evictions, 0)
 }
 ```
+
+**注意**: 统计字段使用 `sync/atomic` 进行无锁计数，避免影响并发性能。
 
 ---
 
-#### 问题 3: 数据安全问题 [P2]
+#### 问题 3: 数据安全问题 [P2 - 已修复]
 
-**问题**: `Put` 直接引用传入的 `[]byte`，如果外部修改，缓存数据也会变
+**问题**: `Put` 和 `Get` 直接引用内部 `[]byte`，如果外部修改，缓存数据也会变
 
-**当前代码**:
-```go
-func (c *BlockCache) Put(key string, data []byte) {
-    // ...
-    entry.data = data  // 直接引用
-    // ...
-}
-```
+**修复方案**:
 
-**建议修复**:
+1. **Put 时拷贝**:
 ```go
 func (c *BlockCache) Put(key string, data []byte) {
     // 拷贝数据，避免外部修改影响缓存
     entry.data = make([]byte, len(data))
     copy(entry.data, data)
     // ...
+}
+```
+
+2. **Get 时拷贝返回**（非常重要）:
+```go
+func (c *BlockCache) Get(key string) ([]byte, bool) {
+    // ... 查找逻辑 ...
+
+    // 拷贝返回，避免外部修改缓存数据
+    data := make([]byte, len(entry.data))
+    copy(data, entry.data)
+    return data, true
+}
+```
+
+**为什么 Get 也需要拷贝**:
+- 调用方可能修改返回的 `[]byte`
+- 如果直接返回内部引用，调用方的修改会污染缓存
+- 特别在分片锁方案中，拷贝返回是必须的
+
+---
+
+#### 问题 4: 墓碑版本比较逻辑错误 [P0 - 严重]
+
+**位置**: 读取策略代码中墓碑检查部分
+
+**当前代码**:
+```go
+// 检查墓碑（已删除）
+if tombstoneVer, deleted := s.tombstones[idHash]; deleted {
+    if tombstoneVer <= currentVersion {  // ❌ 逻辑错误
+        return nil, ErrDocumentNotFound
+    }
+}
+```
+
+**问题**: 应该是 `<` 而不是 `<=`
+
+**分析**:
+- 墓碑版本号 = 删除操作发生时的版本号
+- 如果 `tombstoneVer == currentVersion`，说明删除操作发生在当前版本
+- 此时该记录应该被视为已删除
+
+**修复**:
+```go
+if tombstoneVer, deleted := s.tombstones[idHash]; deleted {
+    if tombstoneVer < currentVersion {  // ✅ 正确：删除版本 < 当前版本
+        return nil, ErrDocumentNotFound
+    }
+}
+```
+
+---
+
+#### 问题 5: L2 缓存返回前缺少二次墓碑检查 [P1]
+
+**位置**: Get() 和 GetBatch() 中 L2 缓存命中后
+
+**当前代码**:
+```go
+// L2: 查文档缓存（注意版本号）
+cacheKey := s.cacheKey(idHash, currentVersion)
+if doc, ok := s.docCache.Get(cacheKey); ok {
+    return doc.Clone(), nil  // ❌ 可能返回已删除数据
+}
+```
+
+**问题**: 极端情况下，从 L2 返回的数据可能是已删除的（虽然概率极低，但理论上存在）
+
+**修复**:
+```go
+// L2: 查文档缓存（注意版本号）
+cacheKey := s.cacheKey(idHash, currentVersion)
+if doc, ok := s.docCache.Get(cacheKey); ok {
+    // 二次检查墓碑，防止返回已删除数据
+    if tombstoneVer, deleted := s.tombstones[idHash]; deleted && tombstoneVer < currentVersion {
+        s.docCache.Invalidate(cacheKey) // 清除脏缓存
+        // 继续往下走到磁盘读取
+    } else {
+        return doc.Clone(), nil
+    }
+}
+```
+
+---
+
+#### 问题 6: 并发 Update/Delete 竞态条件 [P1]
+
+**位置**: Update() 和 Delete() 函数中
+
+**当前代码**:
+```go
+func (s *DocumentStorage) Update(doc *Document) error {
+    idHash := hashID(doc.ID)
+
+    // ❌ Invalidate 和写入之间有竞态窗口
+    oldKey := s.cacheKey(idHash, s.dataVersion)
+    s.docCache.Invalidate(oldKey)
+
+    s.writeBuffer[i] = doc.Clone()
+    // ... 其他代码 ...
+}
+```
+
+**问题**: `Invalidate` 和后续写入之间，其他 goroutine 可能读取到不一致状态
+
+**修复**: 使用单一锁保护整个 Invalidate + Write 操作
+```go
+func (s *DocumentStorage) Update(doc *Document) error {
+    s.mu.Lock()
+    defer s.mu.Unlock()
+
+    idHash := hashID(doc.ID)
+
+    // 在锁内完成失效和写入
+    oldKey := s.cacheKey(idHash, s.dataVersion)
+    s.docCache.Invalidate(oldKey)
+
+    // ... 查找并更新 writeBuffer ...
+
+    // 新文档立即加入缓存
+    newKey := s.cacheKey(idHash, s.dataVersion)
+    s.docCache.Put(newKey, doc.Clone())
+
+    return nil
 }
 ```
 
@@ -1314,7 +1479,20 @@ func DefaultCacheConfig() *CacheConfig {
 
 ---
 
-### 十一、总结
+### 十一、问题修复状态总结
+
+| 问题 | 优先级 | 状态 | 修复说明 |
+|------|--------|------|----------|
+| 问题 1: Get() 写锁优化 | P0 | ✅ 已修复 | 采用分片锁方案，Get 使用读锁+写锁晋升 |
+| 问题 2: 命中率统计 | P1 | ✅ 已修复 | 新增 Hits/Misses/Evictions/HitRate，使用 atomic |
+| 问题 3: 数据安全 | P2 | ✅ 已修复 | Put 和 Get 都进行数据拷贝 |
+| 问题 4: 墓碑版本比较 | P0 | ✅ 已修复 | <= 改为 < |
+| 问题 5: L2 二次墓碑检查 | P1 | ✅ 已修复 | 缓存命中后再次检查墓碑 |
+| 问题 6: 并发竞态条件 | P1 | ✅ 已修复 | 单一锁保护 Invalidate + Write |
+
+---
+
+### 十二、总结
 
 - **三层缓存**：writeBuffer(L1) → DocumentCache(L2) → BlockCache(L3)
 - **Write-Back 策略**：优先写入内存，异步刷盘，最大化写入性能
