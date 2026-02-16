@@ -438,8 +438,8 @@ func TestBlockCache_V12Integration(t *testing.T) {
 		t.Fatalf("Failed to close writer: %v", err)
 	}
 
-	// Read with BlockCache
-	cache := format.NewBlockCache(1024 * 1024) // 1 MB cache
+	// Read with BlockCache (use larger capacity to accommodate rowindex pages)
+	cache := format.NewBlockCache(4 * 1024 * 1024) // 4 MB cache, ~64KB per shard
 	reader, err := NewRowIndexReaderWithCache(filename, cache)
 	if err != nil {
 		t.Fatalf("Failed to create reader: %v", err)
