@@ -81,7 +81,11 @@ func NewBlockCache(capacityBytes int64, numShards ...int) *BlockCache {
 // getShard returns the shard for a given key
 func (c *BlockCache) getShard(key string) *cacheShard {
 	h := fnv.New64a()
-	h.Write([]byte(key))
+	// FNV Write never returns error, but we check for completeness
+	if _, err := h.Write([]byte(key)); err != nil {
+		// Fallback to first shard on error (should never happen with FNV)
+		return c.shards[0]
+	}
 	return c.shards[h.Sum64()%uint64(c.numShards)]
 }
 
@@ -122,8 +126,8 @@ func (c *BlockCache) Get(key string) ([]byte, bool) {
 }
 
 // Put adds a block to the cache
-// If the block is larger than shard capacity, it won't be cached
-// If the cache is full, evicts least recently used items
+// If the block is larger than the per-shard capacity, it won't be cached
+// If the shard is full, evicts least recently used items in that shard
 // The data is copied to prevent external modifications
 func (c *BlockCache) Put(key string, data []byte) {
 	shard := c.getShard(key)
@@ -133,9 +137,9 @@ func (c *BlockCache) Put(key string, data []byte) {
 	copy(dataCopy, data)
 	entrySize := int64(len(dataCopy))
 
-	// Don't cache items larger than total cache capacity
-	totalCapacity := c.capacity * int64(c.numShards)
-	if entrySize > totalCapacity {
+	// Don't cache items larger than per-shard capacity
+	// Each item must fit within its assigned shard to avoid unbounded growth
+	if entrySize > c.capacity {
 		return
 	}
 
@@ -154,7 +158,7 @@ func (c *BlockCache) Put(key string, data []byte) {
 		return
 	}
 
-	// Evict items if necessary
+	// Evict items if necessary to make room for new entry
 	for shard.size+entrySize > c.capacity && shard.lru.Len() > 0 {
 		c.evictOldestLocked(shard)
 	}
@@ -250,14 +254,22 @@ func (c *BlockCache) ShardCount() int {
 }
 
 // Stats returns cache statistics
+// Note: ItemCount and Size are snapshots and may not be perfectly consistent
+// with Hits/Misses due to concurrent modifications. This is acceptable for
+// monitoring purposes.
 func (c *BlockCache) Stats() BlockCacheStats {
+	// Load atomic counters first for relative consistency
 	hits := atomic.LoadInt64(&c.hits)
 	misses := atomic.LoadInt64(&c.misses)
 	evictions := atomic.LoadInt64(&c.evictions)
 
+	// Get size and count (these traverse all shards and may lag slightly)
+	itemCount := c.Len()
+	size := c.Size()
+
 	return BlockCacheStats{
-		ItemCount: c.Len(),
-		Size:      c.Size(),
+		ItemCount: itemCount,
+		Size:      size,
 		Capacity:  c.Capacity(),
 		Hits:      hits,
 		Misses:    misses,

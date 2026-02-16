@@ -413,6 +413,73 @@ func TestBlockCache_ShardDistribution(t *testing.T) {
 	}
 }
 
+// TestBlockCache_CapacityBoundary tests cache behavior at capacity boundaries
+func TestBlockCache_CapacityBoundary(t *testing.T) {
+	// Use single shard for deterministic testing
+	cache := NewBlockCache(100, 1)
+
+	// Add data to fill exactly 100 bytes
+	cache.Put("key1", make([]byte, 50))
+	cache.Put("key2", make([]byte, 50))
+
+	if cache.Size() != 100 {
+		t.Errorf("Size = %d, want 100", cache.Size())
+	}
+
+	// Both should be retrievable
+	if _, ok := cache.Get("key1"); !ok {
+		t.Error("key1 should be in cache")
+	}
+	if _, ok := cache.Get("key2"); !ok {
+		t.Error("key2 should be in cache")
+	}
+
+	// Add a new item that requires eviction
+	cache.Put("key3", make([]byte, 10))
+
+	// key1 should be evicted (LRU), key2 and key3 should remain
+	if _, ok := cache.Get("key1"); ok {
+		t.Error("key1 should be evicted (LRU)")
+	}
+	if _, ok := cache.Get("key2"); !ok {
+		t.Error("key2 should still be in cache")
+	}
+	if _, ok := cache.Get("key3"); !ok {
+		t.Error("key3 should be in cache")
+	}
+
+	// Size should not exceed capacity
+	if cache.Size() > cache.Capacity() {
+		t.Errorf("Size %d should not exceed capacity %d", cache.Size(), cache.Capacity())
+	}
+}
+
+// TestBlockCache_PerShardCapacityLimit tests that items larger than per-shard capacity are rejected
+func TestBlockCache_PerShardCapacityLimit(t *testing.T) {
+	// 1 MB total with 64 shards = ~16KB per shard
+	cache := NewBlockCache(1024*1024, 64)
+	perShardCapacity := cache.Capacity() / int64(cache.ShardCount())
+
+	// Create item that exceeds per-shard capacity but fits in total capacity
+	largeItem := make([]byte, perShardCapacity+1000)
+
+	// Try to cache the large item
+	cache.Put("large_key", largeItem)
+
+	// Should not be cached (exceeds per-shard capacity)
+	if cache.Len() != 0 {
+		t.Errorf("Large item should not be cached, got %d items", cache.Len())
+	}
+
+	// Smaller item should be cached fine
+	smallItem := make([]byte, perShardCapacity/2)
+	cache.Put("small_key", smallItem)
+
+	if cache.Len() != 1 {
+		t.Errorf("Small item should be cached, got %d items", cache.Len())
+	}
+}
+
 // BenchmarkBlockCache_Get benchmarks cache get operations
 func BenchmarkBlockCache_Get(b *testing.B) {
 	cache := NewBlockCache(1024*1024) // 1 MB
