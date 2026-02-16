@@ -4,6 +4,8 @@
 package format
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 )
 
@@ -60,8 +62,8 @@ func TestBlockCache_Update(t *testing.T) {
 
 // TestBlockCache_Eviction tests LRU eviction
 func TestBlockCache_Eviction(t *testing.T) {
-	// Create cache that can hold exactly 2 items of 100 bytes
-	cache := NewBlockCache(250)
+	// Create cache with 1 shard to test eviction deterministically
+	cache := NewBlockCache(250, 1)
 
 	data1 := make([]byte, 100)
 	data2 := make([]byte, 100)
@@ -98,7 +100,8 @@ func TestBlockCache_Eviction(t *testing.T) {
 
 // TestBlockCache_LRU tests that recently accessed items are not evicted
 func TestBlockCache_LRU(t *testing.T) {
-	cache := NewBlockCache(250)
+	// Use single shard for deterministic testing
+	cache := NewBlockCache(250, 1)
 
 	data1 := make([]byte, 100)
 	data2 := make([]byte, 100)
@@ -154,6 +157,18 @@ func TestBlockCache_Remove(t *testing.T) {
 	}
 }
 
+// TestBlockCache_Invalidate tests invalidating specific keys
+func TestBlockCache_Invalidate(t *testing.T) {
+	cache := NewBlockCache(1024)
+
+	cache.Put("key1", []byte("value1"))
+	cache.Invalidate("key1")
+
+	if _, ok := cache.Get("key1"); ok {
+		t.Error("key1 should be invalidated")
+	}
+}
+
 // TestBlockCache_Clear tests clearing the cache
 func TestBlockCache_Clear(t *testing.T) {
 	cache := NewBlockCache(1024)
@@ -194,7 +209,7 @@ func TestBlockCache_Size(t *testing.T) {
 
 	// Update should adjust size
 	cache.Put("key1", []byte("123456")) // 6 bytes
-	if cache.Size() != 14 { // 6 + 8
+	if cache.Size() != 14 {             // 6 + 8
 		t.Errorf("Size = %d, want 14", cache.Size())
 	}
 }
@@ -205,6 +220,14 @@ func TestBlockCache_Stats(t *testing.T) {
 
 	cache.Put("key1", []byte("value1"))
 	cache.Put("key2", []byte("value2"))
+
+	// Access key1 twice and key2 once
+	cache.Get("key1")
+	cache.Get("key1")
+	cache.Get("key2")
+
+	// Miss
+	cache.Get("key3")
 
 	stats := cache.Stats()
 
@@ -217,29 +240,100 @@ func TestBlockCache_Stats(t *testing.T) {
 	if stats.Size != 12 { // "value1" + "value2" = 12 bytes
 		t.Errorf("Size = %d, want 12", stats.Size)
 	}
+	if stats.Hits != 3 {
+		t.Errorf("Hits = %d, want 3", stats.Hits)
+	}
+	if stats.Misses != 1 {
+		t.Errorf("Misses = %d, want 1", stats.Misses)
+	}
+	expectedHitRate := 3.0 / 4.0
+	if stats.HitRate != expectedHitRate {
+		t.Errorf("HitRate = %f, want %f", stats.HitRate, expectedHitRate)
+	}
+}
+
+// TestBlockCache_ResetStats tests resetting statistics
+func TestBlockCache_ResetStats(t *testing.T) {
+	cache := NewBlockCache(1024)
+
+	cache.Put("key1", []byte("value1"))
+	cache.Get("key1")
+	cache.Get("missing")
+
+	stats := cache.Stats()
+	if stats.Hits != 1 || stats.Misses != 1 {
+		t.Error("Expected hits and misses to be recorded")
+	}
+
+	cache.ResetStats()
+
+	stats = cache.Stats()
+	if stats.Hits != 0 || stats.Misses != 0 || stats.HitRate != 0 {
+		t.Error("Expected stats to be reset")
+	}
 }
 
 // TestBlockCache_Concurrent tests concurrent access
 func TestBlockCache_Concurrent(t *testing.T) {
-	cache := NewBlockCache(10240)
+	cache := NewBlockCache(10240, 16) // 16 shards
 
 	// Run multiple goroutines
-	done := make(chan bool)
+	var wg sync.WaitGroup
+	numGoroutines := 10
+	opsPerGoroutine := 100
 
-	for i := 0; i < 10; i++ {
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
 		go func(id int) {
-			for j := 0; j < 100; j++ {
-				key := string(rune('a' + id))
+			defer wg.Done()
+			for j := 0; j < opsPerGoroutine; j++ {
+				key := string(rune('a' + id%26))
 				cache.Put(key, []byte{byte(j)})
 				cache.Get(key)
 			}
-			done <- true
 		}(i)
 	}
 
-	// Wait for all goroutines
-	for i := 0; i < 10; i++ {
-		<-done
+	wg.Wait()
+
+	// Verify stats are consistent
+	stats := cache.Stats()
+	expectedOps := int64(numGoroutines * opsPerGoroutine)
+	if stats.Hits+stats.Misses != expectedOps {
+		t.Errorf("Total operations = %d, want %d", stats.Hits+stats.Misses, expectedOps)
+	}
+}
+
+// TestBlockCache_ConcurrentDifferentKeys tests concurrent access with different keys
+func TestBlockCache_ConcurrentDifferentKeys(t *testing.T) {
+	cache := NewBlockCache(1024*1024, 64) // 1MB cache with 64 shards
+
+	var wg sync.WaitGroup
+	numGoroutines := 100
+	keysPerGoroutine := 50
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < keysPerGoroutine; j++ {
+				key := string(rune('a'+id%26)) + string(rune('0'+j%10))
+				data := []byte{byte(id), byte(j)}
+				cache.Put(key, data)
+			}
+			for j := 0; j < keysPerGoroutine; j++ {
+				key := string(rune('a'+id%26)) + string(rune('0'+j%10))
+				cache.Get(key)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	stats := cache.Stats()
+	t.Logf("Concurrent test stats: %+v", stats)
+	if stats.ItemCount == 0 {
+		t.Error("Expected some items in cache")
 	}
 }
 
@@ -256,11 +350,72 @@ func TestBlockCache_LargeItem(t *testing.T) {
 	if cache.Size() > cache.Capacity() {
 		t.Errorf("Size %d should not exceed capacity %d", cache.Size(), cache.Capacity())
 	}
+
+	// Should be empty or 0
+	if cache.Len() != 0 {
+		t.Errorf("Cache should be empty for oversized item, got %d items", cache.Len())
+	}
+}
+
+// TestBlockCache_DataIsolation tests that returned data cannot modify cache
+func TestBlockCache_DataIsolation(t *testing.T) {
+	cache := NewBlockCache(1024)
+
+	original := []byte("original")
+	cache.Put("key1", original)
+
+	// Get the data
+	got, ok := cache.Get("key1")
+	if !ok {
+		t.Fatal("Should get the item")
+	}
+
+	// Modify the returned data
+	got[0] = 'X'
+
+	// Get again, should still be original
+	got2, ok := cache.Get("key1")
+	if !ok {
+		t.Fatal("Should get the item again")
+	}
+
+	if string(got2) != string(original) {
+		t.Errorf("Cache data was modified! Got %q, want %q", got2, original)
+	}
+}
+
+// TestBlockCache_ShardDistribution tests that keys are distributed across shards
+func TestBlockCache_ShardDistribution(t *testing.T) {
+	numShards := 8
+	cache := NewBlockCache(1024*1024, numShards)
+
+	// Put many keys
+	for i := 0; i < 1000; i++ {
+		key := string(rune('a' + i%26)) + string(rune('0'+i/26))
+		cache.Put(key, []byte{byte(i)})
+	}
+
+	// Check that shards have data distributed
+	nonEmptyShards := 0
+	for i := 0; i < numShards; i++ {
+		if cache.shards[i].lru.Len() > 0 {
+			nonEmptyShards++
+		}
+	}
+
+	// Most shards should have some data
+	if nonEmptyShards < numShards/2 {
+		t.Errorf("Keys not well distributed: only %d/%d shards have data", nonEmptyShards, numShards)
+	}
+
+	if cache.ShardCount() != numShards {
+		t.Errorf("ShardCount = %d, want %d", cache.ShardCount(), numShards)
+	}
 }
 
 // BenchmarkBlockCache_Get benchmarks cache get operations
 func BenchmarkBlockCache_Get(b *testing.B) {
-	cache := NewBlockCache(1024 * 1024) // 1 MB
+	cache := NewBlockCache(1024*1024) // 1 MB
 	cache.Put("key", []byte("value"))
 
 	b.ResetTimer()
@@ -277,5 +432,98 @@ func BenchmarkBlockCache_Put(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		cache.Put(string(rune(i%100)), data)
+	}
+}
+
+// BenchmarkBlockCache_ConcurrentGet benchmarks concurrent get operations
+func BenchmarkBlockCache_ConcurrentGet(b *testing.B) {
+	cache := NewBlockCache(1024*1024, 64)
+
+	// Populate cache
+	for i := 0; i < 1000; i++ {
+		key := string(rune('a' + i%26))
+		cache.Put(key, []byte{byte(i)})
+	}
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			key := string(rune('a' + i%26))
+			cache.Get(key)
+			i++
+		}
+	})
+}
+
+// BenchmarkBlockCache_ConcurrentPut benchmarks concurrent put operations
+func BenchmarkBlockCache_ConcurrentPut(b *testing.B) {
+	cache := NewBlockCache(1024*1024, 64)
+	data := []byte("concurrent benchmark data")
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			key := string(rune('a'+i%26)) + string(rune('0'+i/26%10))
+			cache.Put(key, data)
+			i++
+		}
+	})
+}
+
+// BenchmarkBlockCache_ConcurrentMixed benchmarks mixed concurrent operations
+func BenchmarkBlockCache_ConcurrentMixed(b *testing.B) {
+	cache := NewBlockCache(1024*1024, 64)
+	data := []byte("mixed benchmark data")
+
+	// Pre-populate
+	for i := 0; i < 100; i++ {
+		cache.Put(string(rune(i)), data)
+	}
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			if i%3 == 0 {
+				// 33% writes
+				cache.Put(string(rune(i%100)), data)
+			} else {
+				// 67% reads
+				cache.Get(string(rune(i % 100)))
+			}
+			i++
+		}
+	})
+}
+
+// BenchmarkBlockCache_ShardedVsNonSharded compares performance with different shard counts
+func BenchmarkBlockCache_ShardedVsNonSharded(b *testing.B) {
+	shardCounts := []int{1, 4, 16, 64}
+	data := []byte("test data for sharding comparison")
+
+	for _, shards := range shardCounts {
+		b.Run(fmt.Sprintf("shards_%d", shards), func(b *testing.B) {
+			cache := NewBlockCache(1024*1024, shards)
+
+			// Pre-populate
+			for i := 0; i < 100; i++ {
+				cache.Put(string(rune(i)), data)
+			}
+
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				i := 0
+				for pb.Next() {
+					if i%2 == 0 {
+						cache.Put(string(rune(i%100)), data)
+					} else {
+						cache.Get(string(rune(i % 100)))
+					}
+					i++
+				}
+			})
+		})
 	}
 }
