@@ -31,6 +31,10 @@ type Reader struct {
 	fileID       string // 在 AsyncIO 中注册的文件 ID
 	useAsync     bool   // 是否启用异步模式
 	asyncEnabled bool   // AsyncIO 是否可用（文件已注册）
+
+	// BlockCache 支持（可选）
+	blockCache *format.BlockCache // 页面缓存实例
+	cacheKey   string             // 文件唯一标识（用于缓存键）
 }
 
 // NewReader creates a new column reader（同步模式）
@@ -68,6 +72,36 @@ func NewReader(filename string) (*Reader, error) {
 	}
 
 	return reader, nil
+}
+
+// NewReaderWithCache creates a new column reader with BlockCache support
+// The cache parameter can be shared across multiple readers for the same or different files
+func NewReaderWithCache(filename string, cache *format.BlockCache) (*Reader, error) {
+	reader, err := NewReader(filename)
+	if err != nil {
+		return nil, err
+	}
+
+	if cache != nil {
+		reader.blockCache = cache
+		reader.cacheKey = generateCacheKey(filename)
+	}
+
+	return reader, nil
+}
+
+// generateCacheKey generates a unique cache key for a file
+// Uses absolute path hash to ensure uniqueness
+func generateCacheKey(filename string) string {
+	absPath, err := filepath.Abs(filename)
+	if err != nil {
+		absPath = filename
+	}
+
+	hash := fnv.New64a()
+	hash.Write([]byte(absPath))
+
+	return fmt.Sprintf("lance:%x", hash.Sum64())
 }
 
 // NewReaderWithAsyncIO 不需要自己打开文件
@@ -504,14 +538,74 @@ func (r *Reader) readPagesSync(pageIndices []format.PageIndex, dataType arrow.Da
 
 // readPage reads a single page from the file
 // 优先使用 AsyncIO（如果启用），否则使用同步 I/O
+// 如果 BlockCache 启用，优先从缓存读取
 func (r *Reader) readPage(pageIndex format.PageIndex) (*format.Page, error) {
-	// 如果 AsyncIO 启用，使用异步读取
-	if r.useAsync && r.asyncEnabled {
-		return r.readPageAsync(pageIndex)
+	// 1. 尝试从 BlockCache 读取
+	if r.blockCache != nil {
+		page, hit := r.readPageFromCache(pageIndex)
+		if hit {
+			return page, nil
+		}
 	}
 
-	// 同步读取
-	return r.readPageSync(pageIndex)
+	// 2. 缓存未命中，根据配置选择读取方式
+	var page *format.Page
+	var err error
+
+	if r.useAsync && r.asyncEnabled {
+		page, err = r.readPageAsync(pageIndex)
+	} else {
+		page, err = r.readPageSync(pageIndex)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. 写入缓存
+	if r.blockCache != nil {
+		r.writePageToCache(pageIndex, page)
+	}
+
+	return page, nil
+}
+
+// readPageFromCache 尝试从 BlockCache 读取 Page
+func (r *Reader) readPageFromCache(pageIndex format.PageIndex) (*format.Page, bool) {
+	cacheKey := r.generatePageCacheKey(pageIndex)
+
+	data, found := r.blockCache.Get(cacheKey)
+	if !found {
+		return nil, false
+	}
+
+	// 反序列化
+	page := &format.Page{}
+	if err := page.UnmarshalBinary(data); err != nil {
+		// 缓存数据损坏，移除该条目
+		r.blockCache.Remove(cacheKey)
+		return nil, false
+	}
+
+	return page, true
+}
+
+// writePageToCache 将 Page 写入 BlockCache
+func (r *Reader) writePageToCache(pageIndex format.PageIndex, page *format.Page) {
+	cacheKey := r.generatePageCacheKey(pageIndex)
+
+	data, err := page.MarshalBinary()
+	if err != nil {
+		return // 序列化失败，跳过缓存
+	}
+
+	r.blockCache.Put(cacheKey, data)
+}
+
+// generatePageCacheKey 生成 Page 的缓存键
+// 格式: {cacheKey}:page:{offset}:{size}
+func (r *Reader) generatePageCacheKey(pageIndex format.PageIndex) string {
+	return fmt.Sprintf("%s:page:%d:%d", r.cacheKey, pageIndex.Offset, pageIndex.Size)
 }
 
 // readPageSync 同步读取 Page
