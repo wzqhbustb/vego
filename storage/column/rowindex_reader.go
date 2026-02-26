@@ -237,7 +237,11 @@ func (r *RowIndexReader) generateRowIndexCacheKey(offset int64) string {
 	if r.Reader != nil && r.Reader.cacheKey != "" {
 		return fmt.Sprintf("%s:rowindex:%d", r.Reader.cacheKey, offset)
 	}
-	// Fallback: use file name hash
+	// Fallback: derive a cache key from the file name to ensure file uniqueness
+	if r.Reader != nil && r.file != nil {
+		return fmt.Sprintf("%s:rowindex:%d", generateCacheKey(r.file.Name()), offset)
+	}
+	// Last resort: use offset only (may cause collisions if shared cache is used)
 	return fmt.Sprintf("rowindex:%d", offset)
 }
 
