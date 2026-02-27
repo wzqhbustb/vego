@@ -87,7 +87,7 @@ func (r *RowIndexReader) SetBlockCache(cache *format.BlockCache) {
 	if r.Reader != nil {
 		r.Reader.blockCache = cache
 		if cache != nil && r.Reader.cacheKey == "" {
-			r.Reader.cacheKey = generateCacheKey(r.file.Name())
+			r.Reader.cacheKey = GenerateCacheKey(r.file.Name())
 		}
 	}
 }
@@ -239,7 +239,7 @@ func (r *RowIndexReader) generateRowIndexCacheKey(offset int64) string {
 	}
 	// Fallback: derive a cache key from the file name to ensure file uniqueness
 	if r.Reader != nil && r.file != nil {
-		return fmt.Sprintf("%s:rowindex:%d", generateCacheKey(r.file.Name()), offset)
+		return fmt.Sprintf("%s:rowindex:%d", GenerateCacheKey(r.file.Name()), offset)
 	}
 	// Last resort: use offset only (may cause collisions if shared cache is used)
 	return fmt.Sprintf("rowindex:%d", offset)

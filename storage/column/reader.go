@@ -84,15 +84,16 @@ func NewReaderWithCache(filename string, cache *format.BlockCache) (*Reader, err
 
 	if cache != nil {
 		reader.blockCache = cache
-		reader.cacheKey = generateCacheKey(filename)
+		reader.cacheKey = GenerateCacheKey(filename)
 	}
 
 	return reader, nil
 }
 
-// generateCacheKey generates a unique cache key for a file
+// GenerateCacheKey generates a unique cache key for a file
 // Uses absolute path hash to ensure uniqueness
-func generateCacheKey(filename string) string {
+// This is exported for cache invalidation purposes
+func GenerateCacheKey(filename string) string {
 	absPath, err := filepath.Abs(filename)
 	if err != nil {
 		absPath = filename

@@ -210,6 +210,30 @@ func (c *BlockCache) Invalidate(key string) {
 	c.Remove(key)
 }
 
+// InvalidateByPrefix removes all keys with the given prefix from the cache
+// This is useful for invalidating all cached pages for a specific file
+func (c *BlockCache) InvalidateByPrefix(prefix string) {
+	for _, shard := range c.shards {
+		shard.mu.Lock()
+		// Collect keys to remove (can't delete during iteration)
+		var keysToRemove []string
+		for key, elem := range shard.items {
+			if len(key) >= len(prefix) && key[:len(prefix)] == prefix {
+				keysToRemove = append(keysToRemove, key)
+				entry := elem.Value.(*cacheEntry)
+				shard.size -= entry.size
+				shard.lru.Remove(elem)
+				atomic.AddInt64(&c.evictions, 1)
+			}
+		}
+		// Remove from map
+		for _, key := range keysToRemove {
+			delete(shard.items, key)
+		}
+		shard.mu.Unlock()
+	}
+}
+
 // Clear removes all items from the cache
 func (c *BlockCache) Clear() {
 	for _, shard := range c.shards {

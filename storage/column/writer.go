@@ -257,6 +257,11 @@ func (w *Writer) Close() error {
 		return lerrors.IO("rewrite_header", "", err)
 	}
 
+	// Sync file to ensure data is written to disk
+	if err := w.file.Sync(); err != nil {
+		return lerrors.IO("sync_file", "", err)
+	}
+
 	// Close file
 	if err := w.file.Close(); err != nil {
 		return lerrors.IO("close_file", "", err)
