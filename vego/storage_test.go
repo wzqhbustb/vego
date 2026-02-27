@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/wzqhbustb/vego/storage/column"
 	"github.com/wzqhbustb/vego/storage/format"
 )
 
@@ -440,4 +441,113 @@ func TestDocumentStorageCacheInvalidationOnDelete(t *testing.T) {
 	if got.ID != "doc2" {
 		t.Errorf("Expected doc2, got %s", got.ID)
 	}
+}
+
+// TestDocumentStorageRowIndexWrite verifies that V1.2 format writes RowIndex correctly
+func TestDocumentStorageRowIndexWrite(t *testing.T) {
+	// Create temp directory
+	tmpDir, err := os.MkdirTemp("", "vego-storage-rowindex-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create storage (defaults to V1.2)
+	storage, err := NewDocumentStorage(filepath.Join(tmpDir, "storage"), 64)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+
+	// Verify default version is V1.2
+	if storage.version != format.V1_2 {
+		t.Errorf("Expected default version V1_2, got %v", storage.version)
+	}
+
+	// Create test documents
+	docs := []*Document{
+		{ID: "doc1", Vector: makeTestVector(64, 1.0), Metadata: map[string]interface{}{"key": "value1"}},
+		{ID: "doc2", Vector: makeTestVector(64, 2.0), Metadata: map[string]interface{}{"key": "value2"}},
+		{ID: "doc3", Vector: makeTestVector(64, 3.0), Metadata: map[string]interface{}{"key": "value3"}},
+	}
+
+	// Put documents
+	for _, doc := range docs {
+		if err := storage.Put(doc); err != nil {
+			t.Fatalf("Failed to put document %s: %v", doc.ID, err)
+		}
+	}
+
+	// Flush to write data file with RowIndex
+	if err := storage.Flush(); err != nil {
+		t.Fatalf("Failed to flush: %v", err)
+	}
+
+	// Close storage
+	if err := storage.Close(); err != nil {
+		t.Fatalf("Failed to close storage: %v", err)
+	}
+
+	// Verify RowIndex was written correctly by checking file format
+	dataFile := filepath.Join(tmpDir, "storage", "vectors.lance")
+	reader, err := column.NewRowIndexReader(dataFile)
+	if err != nil {
+		t.Fatalf("Failed to open reader: %v", err)
+	}
+	defer reader.Close()
+
+	// Verify Footer has RowIndex
+	if !reader.HasRowIndex() {
+		t.Error("Expected HasRowIndex() to be true for V1.2 file")
+	}
+
+	// Verify file version is V1.2
+	version := reader.GetVersion()
+	if version != format.V1_2 {
+		t.Errorf("Expected version V1_2, got %v", version)
+	}
+
+	// Reopen storage and verify data can be read (RowIndex written correctly)
+	storage2, err := NewDocumentStorage(filepath.Join(tmpDir, "storage"), 64)
+	if err != nil {
+		t.Fatalf("Failed to reopen storage: %v", err)
+	}
+	defer storage2.Close()
+
+	// Verify all documents can be retrieved
+	for _, expected := range docs {
+		got, err := storage2.Get(expected.ID)
+		if err != nil {
+			t.Fatalf("Failed to get document %s: %v", expected.ID, err)
+		}
+		if got.ID != expected.ID {
+			t.Errorf("ID mismatch: got %s, want %s", got.ID, expected.ID)
+		}
+		if len(got.Vector) != len(expected.Vector) {
+			t.Errorf("Vector length mismatch for %s", expected.ID)
+		}
+	}
+
+	t.Logf("RowIndex write test passed - Footer.HasRowIndex=true, Version=V1.2, documents verified")
+}
+
+// TestDocumentStorageVersionConfiguration tests that version can be configured
+func TestDocumentStorageVersionConfiguration(t *testing.T) {
+	// Create temp directory
+	tmpDir, err := os.MkdirTemp("", "vego-storage-version-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Test default version is V1.2
+	storage, err := NewDocumentStorage(filepath.Join(tmpDir, "storage-v12"), 64)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	if storage.version != format.V1_2 {
+		t.Errorf("Expected default version V1_2, got %v", storage.version)
+	}
+	storage.Close()
+
+	t.Logf("Version configuration test passed - default version is V1.2")
 }

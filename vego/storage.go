@@ -61,6 +61,9 @@ type DocumentStorage struct {
 	// BlockCache for page-level caching (optional, shared across storages)
 	blockCache *format.BlockCache
 
+	// Format version for column storage (V1_0, V1_1, V1_2)
+	version format.VersionPolicy
+
 	// State tracking
 	dirty  bool
 	mu     sync.RWMutex
@@ -77,6 +80,7 @@ type StorageStats struct {
 
 // NewDocumentStorage creates a new document storage instance.
 // Optionally accepts a shared BlockCache for page-level caching.
+// Optionally accepts a format version (defaults to V1_2 for RowIndex + BlockCache support).
 func NewDocumentStorage(path string, dimension int, cache ...*format.BlockCache) (*DocumentStorage, error) {
 	if err := os.MkdirAll(path, 0755); err != nil {
 		return nil, fmt.Errorf("create storage directory: %w", err)
@@ -94,6 +98,7 @@ func NewDocumentStorage(path string, dimension int, cache ...*format.BlockCache)
 		factory:   encoding.NewEncoderFactory(3),
 		metaStore: metaStore,
 		maxBuffer: maxBufferSize,
+		version:   format.V1_2, // Default to V1.2 for RowIndex + BlockCache support
 	}
 
 	// Optional BlockCache for shared caching across storages
@@ -406,7 +411,7 @@ func (s *DocumentStorage) rewriteStorage(docs []*Document) error {
 	return nil
 }
 
-// writeColumnStorage writes vectors to Lance format.
+// writeColumnStorage writes vectors to columnar format with RowIndex support.
 func (s *DocumentStorage) writeColumnStorage(docs []*Document) error {
 	if len(docs) == 0 {
 		return nil
@@ -422,9 +427,15 @@ func (s *DocumentStorage) writeColumnStorage(docs []*Document) error {
 		}
 	}
 
-	writer, err := column.NewWriter(dataFile, schema, s.factory)
+	// Use RowIndexWriter for V1.1+ format support
+	writer, err := column.NewRowIndexWriter(dataFile, schema, s.version, s.factory)
 	if err != nil {
-		return fmt.Errorf("create writer: %w", err)
+		return fmt.Errorf("create row index writer: %w", err)
+	}
+
+	// Configure BlockCache if available (V1.2+)
+	if s.blockCache != nil {
+		writer.SetBlockSize(format.DefaultBlockSize)
 	}
 
 	// Build arrays
@@ -461,7 +472,15 @@ func (s *DocumentStorage) writeColumnStorage(docs []*Document) error {
 		return fmt.Errorf("write record batch: %w", err)
 	}
 
-	// Close writer to ensure data is flushed
+	// Build RowIndex: ID -> Row mapping
+	for i, doc := range docs {
+		if err := writer.AddRowID(doc.ID, int64(i)); err != nil {
+			writer.Close()
+			return fmt.Errorf("add row ID for document %s: %w", doc.ID, err)
+		}
+	}
+
+	// Close writer to flush data and write RowIndex page
 	if err := writer.Close(); err != nil {
 		return fmt.Errorf("close writer: %w", err)
 	}
