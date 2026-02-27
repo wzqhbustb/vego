@@ -25,13 +25,23 @@ LanceDB (and by extension, Vego) adopts a **page-based columnar storage format w
 
 ## 2. Workload Characteristics
 
-### 2.1 LSM Tree: Optimized for OLTP
+### 2.1 LSM Tree: Origins in OLTP, Adapted for Analytics
 
-LSM Trees excel in scenarios with:
-- High-throughput random key-value writes
-- Frequent updates to small records
-- Read-heavy with strong locality
-- Need for fast point lookups
+LSM Tree was originally designed (O'Neil, 1996) to solve B-Tree's write amplification problems in **write-heavy OLTP workloads**. While modern variants (RocksDB, LevelDB) are used in some analytical systems, their core optimizations remain OLTP-centric:
+
+**Original Design Goals (OLTP)**:
+- High-throughput random key-value writes (the primary motivation)
+- Low write latency via sequential WAL + MemTable
+- Fast point lookups with bloom filters
+- Small record updates (typically < 1KB)
+
+**Adaptations for Analytics**:
+Some databases (ClickHouse MergeTree, Druid, InfluxDB I/Ox) use LSM-like structures, but require significant modifications:
+- Columnar storage layer on top of LSM (MergeTree)
+- Specialized compression codecs
+- Time-range partitioning (time-series optimization)
+
+**Key Insight**: Pure LSM (RocksDB) is row-oriented and optimized for key-value access patterns. Using it for columnar analytics requires architectural layers that add complexity.
 
 ```
 Typical LSM Flow:
@@ -221,11 +231,28 @@ Lance Compaction:
 
 ## 7. When to Use Which?
 
+### Clarification: Is RocksDB Analytical?
+
+**RocksDB is fundamentally an OLTP engine**, though it's used as a storage backend in various systems:
+
+| System | Use Case | LSM Role | Additional Layers |
+|--------|----------|----------|-------------------|
+| **MyRocks** (MySQL) | SQL OLTP | Storage engine | SQL layer on top |
+| **TiKV** | Distributed OLTP | Key-value store | TiDB SQL layer |
+| **MongoDB WiredTiger** | Document OLTP | Storage engine | Document model |
+| **Flink State Backend** | Stream processing | State store | Flink's window operators |
+| **ClickHouse** | OLAP Analytics | **Modified** MergeTree | Columnar storage + vectorized execution |
+
+**Key Distinction**: RocksDB itself provides key-value API, not analytical queries. Systems doing analytics either:
+1. Add heavy abstraction layers (Flink's state management)
+2. Modify the storage format significantly (ClickHouse MergeTree is LSM-inspired but not RocksDB)
+3. Accept suboptimal performance for simplicity (early prototypes)
+
 ### Choose LSM Tree when:
-- ✅ High-throughput key-value writes (e.g., caching, sessions)
+- ✅ High-throughput key-value writes (e.g., caching, sessions, OLTP)
 - ✅ Frequent small updates to records
 - ✅ Strong consistency requirements per key
-- ✅ Point lookup dominant workload
+- ✅ Point lookup dominant workload (OLTP pattern)
 
 ### Choose Lance when:
 - ✅ Vector/analytical workloads (embeddings, feature stores)
@@ -250,8 +277,9 @@ Lance Compaction:
 
 ### Key Insight
 
-> LSM Tree optimizes for **write-heavy, key-value, OLTP** workloads.
-> Lance optimizes for **read-heavy, columnar, AI/Analytics** workloads.
+> **LSM Tree** was invented for **write-heavy OLTP** (B-Tree replacement), and its core design remains row-oriented and key-value focused.
+> 
+> **Lance** is purpose-built for **read-heavy, columnar AI/Analytics** from the ground up, avoiding the architectural mismatch of adapting OLTP storage for analytical workloads.
 
 For vector databases, the choice is clear: the overhead of LSM compaction on large vector data outweighs its benefits, while Lance's page-based columnar format with Deletion Vectors provides the right balance of write efficiency, read performance, and storage economics for AI applications.
 
