@@ -26,6 +26,24 @@ func (s *DocumentStorage) Delete(id string) error {
 - 物理删除导致 Flush 时重写整个文件
 - HNSW 索引中的节点无法高效删除
 - Update 操作会产生孤儿节点（先 Delete 再 Insert）
+- 使用 idHash 作为删除标记会有冲突风险
+
+### 1.3 设计原则
+
+**关键决策 1：使用物理行号 (rowID) 而非 idHash**
+
+原因：
+1. **唯一性**：行号在文件内唯一，无冲突
+2. **连续性**：适合 RoaringBitmap 压缩
+3. **一致性**：与 RowIndex 使用的 rowIndex 一致
+4. **可查找**：通过 ID → metadata → rowID 快速定位
+
+**关键决策 2：扩展 metadata.json 存储 rowIndex**
+
+不创建单独的 idToRow 映射文件，而是扩展现有的 `docMeta` 结构：
+- ✅ 单一文件，易于管理
+- ✅ 与现有 metadata 生命周期一致
+- ✅ 向后兼容（旧数据无 row_index 字段也能读取）
 
 ### 1.2 DV 解决方案
 
@@ -61,31 +79,98 @@ func (s *DocumentStorage) Delete(id string) error {
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 2.2 数据流
+### 2.2 关键设计：ID 映射关系
+
+**三层 ID 体系及其映射：**
+
+```
+HNSW nodeID          Collection 映射          Storage rowID
+   (int)                (string)               (int64)
+      │                      │                      │
+      │  HNSW.nodes[]        │  docToNode           │  metadata
+      │  HNSW 内部索引       │  nodeToDoc           │  RowIndex
+      │                      │                      │
+      ▼                      ▼                      ▼
+   节点数据             文档 ID               文件行号
+      │                      │                      │
+      └──────────────────────┴──────────────────────┘
+                         │
+                         │  DV 检查流程
+                         ▼
+                    ┌────────────────┐
+                    │  是否已删除？   │
+                    │  Check DV      │
+                    └────────────────┘
+```
+
+**映射关系说明：**
+
+| ID 类型 | 定义 | 生命周期 | 稳定性 |
+|---------|------|----------|--------|
+| **nodeID** | HNSW 图中的节点索引 | 创建时分配，Compact 前保留 | ⚠️ 删除后不回收 |
+| **docID** | 用户提供的文档标识 | 文档存在期间 | ✅ 稳定 |
+| **rowID** | Storage 文件中的行号 | 写入时分配，Compact 前保留 | ⚠️ 删除后不回收 |
+
+**关键问题：nodeID 与 rowID 的解耦**
+
+```
+问题场景：Update 操作
+
+初始状态：
+  doc-001: nodeID=5, rowID=10
+
+执行 Update(doc-001, newVector):
+  1. 标记 rowID=10 为删除
+  2. 保留 nodeToDoc[5] = "doc-001"（延迟清理！）
+  3. 插入新数据：分配 rowID=20, nodeID=15
+  4. 更新映射：docToNode["doc-001"] = 15
+            nodeToDoc[15] = "doc-001"
+            （nodeToDoc[5] 仍保留！）
+
+结果：
+  nodeID=5  → doc-001（旧，已删除）
+  nodeID=15 → doc-001（新，有效）
+
+搜索时过滤：
+  - nodeID=5: 通过 doc-001 找到 rowID=10，DV 标记删除 → 过滤
+  - nodeID=15: 通过 doc-001 找到 rowID=20，未删除 → 保留
+```
+
+**设计决策：**
+1. **延迟清理**：Delete/Update 时不清理 nodeToDoc 映射
+2. **DV 过滤**：通过 Storage DV 过滤旧数据
+3. **Compact 统一清理**：重建时只保留有效映射
+
+### 2.3 数据流
 
 ```
 Delete(id) 流程:
 ┌──────────────────────────────────────────────────────────────┐
 │ 1. Collection.Delete(id)                                     │
 │    ├── 获取 nodeID (docToNode)                               │
-│    ├── HNSWIndex.MarkDeleted(nodeID)  ← 新增                │
-│    └── Storage.MarkDeleted(idHash)     ← 新增                │
+│    ├── Storage.MarkDeleted(id)     ← 标记 rowID             │
+│    └── 保留 nodeToDoc[nodeID]      ← 延迟清理               │
 └──────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌──────────────────────────────────────────────────────────────┐
 │ 2. Search/Scan 操作                                         │
-│    ├── HNSW 返回候选节点                                    │
-│    ├── 过滤 deletedNodes (O(1) 位图查找)                    │
-│    └── 返回有效结果                                          │
+│    ├── HNSW 返回候选 nodeIDs                                │
+│    ├── nodeID → docID (nodeToDoc)                           │
+│    ├── docID → rowID (metadata)                             │
+│    ├── 检查 DV (rowID 是否删除)                             │
+│    └── 过滤已删除，返回有效结果                              │
 └──────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌──────────────────────────────────────────────────────────────┐
 │ 3. Flush 时                                                  │
 │    ├── 检查删除率 > 阈值 (默认 30%)                          │
-│    ├── 如果超过：执行压缩 (rewrite + 重建索引)               │
-│    └── 如果未超过：保持现状 (DV 持久化到 .del 文件)          │
+│    ├── 如果超过：执行 Compact                                │
+│    │   ├── 重写数据文件（移除已删除行）                      │
+│    │   ├── 重建 HNSW 索引                                    │
+│    │   └── 重建 nodeToDoc 映射（只保留有效）                │
+│    └── 如果未超过：持久化 DV 到 .del 文件                    │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -179,7 +264,18 @@ func (dv *DeletionVector) Merge(other *DeletionVector) {
 
 ### 3.2 持久化格式
 
-**文件**：`{collection_path}/deletions.del`
+**文件命名**：`{data_file}.del`
+
+例如：
+- 数据文件：`vectors.lance`
+- DV 文件：`vectors.lance.del`
+
+这样设计的好处：
+1. 一一对应，易于管理
+2. 支持多个数据文件（未来分片）
+3. 清晰的文件关联
+
+**文件格式**：
 
 ```
 ┌─────────────────────────────────────────┐
@@ -205,13 +301,23 @@ import (
     "encoding/binary"
     "io"
     "os"
+    "path/filepath"
 )
 
 const (
     delFileMagic    = "DEL1"
     delFileVersion  = 1
-    delFileName     = "deletions.del"
+    delFileExt      = ".del"
 )
+
+// GetDeletionVectorPath returns the DV file path for a data file
+func GetDeletionVectorPath(dataFilePath string) string {
+    return dataFilePath + delFileExt
+}
+
+// Example: 
+// dataFile = "/path/to/vectors.lance"
+// dvFile   = "/path/to/vectors.lance.del"
 
 // Serialize writes the DeletionVector to a file
 func (dv *DeletionVector) Serialize(path string) error {
@@ -278,77 +384,93 @@ func Deserialize(path string) (*DeletionVector, error) {
 
 ---
 
-### 3.3 HNSWIndex 集成
+### 3.3 HNSWIndex 与 Storage 集成（简化设计）
+
+**设计变更**：HNSW 不维护独立的 DeletionVector，而是查询 Storage 的 DV
+
+原因：
+1. **单一数据源**：避免 HNSW 和 Storage 的 DV 不一致
+2. **简化实现**：减少内存占用和同步复杂度
+3. **性能可接受**：O(1) 位图检查开销极小
 
 **修改**：`index/hnsw.go`
 
 ```go
-type HNSWIndex struct {
-    // ... 现有字段
-    M              int
-    dimension      int
-    nodes          []*Node
-    entryPoint     int32
-    maxLevel       int32
-    distFunc       DistanceFunc
-    globalLock     sync.RWMutex
-    rng            *rand.Rand
-    mu             sync.Mutex
-
-    // 新增：DeletionVector
-    deletionVector *DeletionVector
-}
-
-// NewHNSW creates a new HNSW index
-func NewHNSW(config Config) *HNSWIndex {
-    return &HNSWIndex{
-        // ... 现有初始化
-        deletionVector: NewDeletionVector(),
-    }
-}
-
-// MarkDeleted marks a node as deleted (logical deletion)
-func (h *HNSWIndex) MarkDeleted(nodeID int) {
-    h.globalLock.Lock()
-    defer h.globalLock.Unlock()
-    h.deletionVector.MarkDeleted(uint32(nodeID))
-}
-
-// IsDeleted checks if a node is deleted
-func (h *HNSWIndex) IsDeleted(nodeID int) bool {
-    return h.deletionVector.IsDeleted(uint32(nodeID))
-}
-
-// Search searches for k nearest neighbors, automatically filtering deleted nodes
+// Search searches for k nearest neighbors
+// Deleted nodes are filtered at Collection layer using Storage's DeletionVector
 func (h *HNSWIndex) Search(query []float32, k, ef int) []SearchResult {
     h.globalLock.RLock()
     defer h.globalLock.RUnlock()
 
     // ... 现有搜索逻辑 ...
-
-    // 过滤已删除节点
-    results := filterDeletedResults(results, h.deletionVector)
-
-    return results[:min(k, len(results))]
+    // 注意：此处不过滤，由 Collection 层统一过滤
+    return results
 }
 
-// filterDeletedResults removes deleted nodes from search results
-func filterDeletedResults(results []SearchResult, dv *DeletionVector) []SearchResult {
-    filtered := results[:0]
-    for _, r := range results {
-        if !dv.IsDeleted(uint32(r.ID)) {
-            filtered = append(filtered, r)
+// SearchWithDV searches and filters using provided DeletionVector
+func (h *HNSWIndex) SearchWithDV(query []float32, k, ef int, isDeleted func(int) bool) []SearchResult {
+    h.globalLock.RLock()
+    defer h.globalLock.RUnlock()
+
+    // 多取一些候选节点以补偿删除
+    candidates := h.searchInternal(query, k*2, ef)
+    
+    // 过滤已删除节点
+    filtered := make([]SearchResult, 0, k)
+    for _, cand := range candidates {
+        if !isDeleted(cand.ID) {
+            filtered = append(filtered, cand)
+            if len(filtered) >= k {
+                break
+            }
         }
     }
+    
     return filtered
+}
+```
+
+**Collection 层统一过滤（含容错处理）**：
+
+```go
+func (c *Collection) Search(query []float32, k int) ([]SearchResult, error) {
+    // 使用 Storage 的 DeletionVector 进行过滤
+    isDeleted := func(nodeID int) bool {
+        // nodeID -> docID
+        docID, ok := c.nodeToDoc[nodeID]
+        if !ok {
+            // 映射不存在：该 node 可能已被清理或从未存在
+            // 视为已删除（容错处理，防止并发问题）
+            return true
+        }
+        
+        // docID -> rowID -> check DV
+        return c.storage.IsDeleted(docID)
+    }
+    
+    results := c.index.SearchWithDV(query, k, c.config.EfSearch, isDeleted)
+    return results, nil
 }
 ```
 
 ---
 
-### 3.4 DocumentStorage 集成
+### 3.4 DocumentStorage 集成（使用扩展的 metadata）
 
-**修改**：`vego/storage.go`
+**步骤 1：扩展 docMeta 结构**
+
+修改 `vego/storage.go` 中的 `docMeta`：
+
+```go
+// docMeta stores metadata for a document
+type docMeta struct {
+    ID       string                 `json:"id"`
+    RowIndex int64                  `json:"row_index"`  // 新增：行号
+    Metadata map[string]interface{} `json:"metadata"`
+}
+```
+
+**步骤 2：DocumentStorage 结构**
 
 ```go
 type DocumentStorage struct {
@@ -361,7 +483,7 @@ type DocumentStorage struct {
     blockCache     *format.BlockCache
     version        format.VersionPolicy
 
-    // 新增：DeletionVector
+    // 新增：DeletionVector（使用行号而非 hash）
     deletionVector *index.DeletionVector
 }
 
@@ -372,39 +494,170 @@ func NewDocumentStorage(path string, dimension int, cache ...*format.BlockCache)
     }
 
     // 尝试加载已存在的 DV
-    dvPath := filepath.Join(path, index.DelFileName)
+    dvPath := filepath.Join(s.path, delFileName)
     if dv, err := index.Deserialize(dvPath); err == nil {
         s.deletionVector = dv
     }
 
     return s, nil
 }
+```
 
-// MarkDeleted marks a document as deleted (logical deletion)
-func (s *DocumentStorage) MarkDeleted(id string) error {
+**步骤 3：使用 metadata 获取 rowID**
+
+```go
+// getRowID returns the row index for a document ID
+// 从 metadata 中直接读取（扩展的 docMeta 包含 row_index）
+// ⚠️ 注意：rowIndex 必须与物理存储位置保持一致！
+// - Insert 时：由 Insert 方法设置
+// - Flush 时：由 writeColumnStorage 同步更新
+// - Compact 时：由 rewriteStorage 完全重建
+func (s *DocumentStorage) getRowID(id string) (int64, bool) {
     idHash := hashID(id)
-    s.deletionVector.MarkDeleted(uint32(idHash))
+    
+    s.metaStore.mu.RLock()
+    defer s.metaStore.mu.RUnlock()
+    
+    meta, exists := s.metaStore.entries[idHash]
+    if !exists {
+        return -1, false
+    }
+    
+    // 返回存储的 rowIndex
+    return meta.RowIndex, true
+}
+
+// MarkDeleted marks a document as deleted using rowID (logical deletion)
+func (s *DocumentStorage) MarkDeleted(id string) error {
+    rowID, exists := s.getRowID(id)
+    if !exists {
+        return ErrDocumentNotFound
+    }
+    
+    s.deletionVector.MarkDeleted(uint32(rowID))
     return nil
 }
 
-// IsDeleted checks if a document is deleted
+// IsDeleted checks if a document is deleted (by rowID)
 func (s *DocumentStorage) IsDeleted(id string) bool {
-    idHash := hashID(id)
-    return s.deletionVector.IsDeleted(uint32(idHash))
+    rowID, exists := s.getRowID(id)
+    if !exists {
+        return false
+    }
+    return s.deletionVector.IsDeleted(uint32(rowID))
+}
+
+// IsDeletedByRowID checks if a row is deleted directly by rowID
+func (s *DocumentStorage) IsDeletedByRowID(rowID int64) bool {
+    return s.deletionVector.IsDeleted(uint32(rowID))
+}
+
+// Insert 文档并分配 RowIndex
+// 关键点：Insert 返回的 rowIndex 必须保存到 docMeta 中
+func (s *DocumentStorage) Insert(doc *Document) (int64, error) {
+    s.mu.Lock()
+    defer s.mu.Unlock()
+
+    // 1. 计算新文档的 rowIndex（当前文件已有行数）
+    var rowIndex int64
+    if s.formatWriter != nil {
+        rowIndex = int64(s.formatWriter.DocumentCount())
+    }
+
+    // 2. 写入文档到存储
+    if err := s.writeDocument(doc, rowIndex); err != nil {
+        return -1, err
+    }
+
+    // 3. ⚠️ 关键：更新 metadata 中的 RowIndex
+    idHash := hashID(doc.ID)
+    s.metaStore.mu.Lock()
+    if meta, exists := s.metaStore.entries[idHash]; exists {
+        meta.RowIndex = rowIndex
+        s.metaStore.entries[idHash] = meta
+    } else {
+        // 新文档，创建 metadata
+        s.metaStore.entries[idHash] = &docMeta{
+            ID:       doc.ID,
+            RowIndex: rowIndex,
+            Metadata: doc.Metadata,
+        }
+        s.metaStore.idToHash[doc.ID] = idHash
+    }
+    s.metaStore.mu.Unlock()
+
+    return rowIndex, nil
+}
+
+// writeColumnStorage - 批量写入列存储
+// ⚠️ 关键：写入后必须同步更新所有 metadata 的 RowIndex
+func (s *DocumentStorage) writeColumnStorage(docs []*Document) error {
+    // ... 现有写入逻辑 ...
+    
+    // 关键步骤：写入后 docs[i] 的行号就是 i，需要同步更新 metadata
+    s.metaStore.mu.Lock()
+    for i, doc := range docs {
+        idHash := hashID(doc.ID)
+        if meta, exists := s.metaStore.entries[idHash]; exists {
+            meta.RowIndex = int64(i)  // 更新行号
+            s.metaStore.entries[idHash] = meta
+        }
+        // 注意：如果 metadata 不存在，Insert 方法已经处理过了
+    }
+    s.metaStore.mu.Unlock()
+    
+    return nil
+}
+
+// rewriteStorage - 重写整个存储（Compact 时使用）
+// ⚠️ 关键：所有文档的 RowIndex 都会改变，必须完全重建 metadata
+func (s *DocumentStorage) rewriteStorage(remainingDocs []*Document) error {
+    // 1. 过滤掉已删除的文档
+    activeDocs := make([]*Document, 0, len(remainingDocs))
+    for _, doc := range remainingDocs {
+        if !s.IsDeleted(doc.ID) {
+            activeDocs = append(activeDocs, doc)
+        }
+    }
+    
+    // 2. 重建 RowIndex 文件（新的行号分配）
+    // 使用 RowIndexWriter 写入新文件...
+    
+    // 3. ⚠️ 关键：完全重建 metadata 的 RowIndex
+    // 因为 Compact 后文档顺序完全改变，RowIndex 全部重新分配
+    s.metaStore.mu.Lock()
+    for i, doc := range activeDocs {
+        idHash := hashID(doc.ID)
+        if meta, exists := s.metaStore.entries[idHash]; exists {
+            meta.RowIndex = int64(i)
+            s.metaStore.entries[idHash] = meta
+        }
+    }
+    s.metaStore.mu.Unlock()
+    
+    // 4. 重置 DV（所有有效文档都是未删除状态）
+    s.deletionVector = index.NewDeletionVector()
+    
+    // 5. 立即保存 metadata 和 DV
+    if err := s.saveMetadata(); err != nil {
+        return err
+    }
+    return s.saveDeletionVector()
 }
 
 // Save persists the DeletionVector to disk
 func (s *DocumentStorage) saveDeletionVector() error {
-    dvPath := filepath.Join(s.path, index.DelFileName)
+    dataFile := filepath.Join(s.path, dataFileName)
+    dvPath := GetDeletionVectorPath(dataFile)
     return s.deletionVector.Serialize(dvPath)
 }
 
-// Flush includes DV persistence
+// Flush includes DV persistence and compaction check
 func (s *DocumentStorage) flush() error {
     // ... 现有逻辑 ...
 
     // 检查是否需要压缩
-    totalDocs := len(allDocs)
+    totalDocs := len(allDocs) + len(s.writeBuffer)
     deletedCount := s.deletionVector.Count()
     deletionRate := float64(deletedCount) / float64(totalDocs)
 
@@ -415,18 +668,58 @@ func (s *DocumentStorage) flush() error {
         }
     }
 
-    // 保存 DV
+    // 保存 DV（metadata.json 已在 saveMetadata 中处理）
     if err := s.saveDeletionVector(); err != nil {
         return err
     }
 
-    // ... 清理已删除的元数据 ...
+    return nil
 }
+```
+
+**步骤 4：向后兼容处理**
+
+旧数据可能没有 `row_index` 字段，需要在加载时重建：
+
+```go
+func (s *DocumentStorage) loadMetadata() error {
+    // ... 读取 metadata.json ...
+    
+    for idHash, meta := range stored.Entries {
+        // 向后兼容：旧数据没有 row_index，需要从文件重建
+        if meta.RowIndex == 0 {
+            // 从 RowIndex 文件查找
+            rowIdx := s.lookupRowIndexFromFile(meta.ID)
+            meta.RowIndex = rowIdx
+        }
+        s.metaStore.entries[idHash] = meta
+        s.metaStore.idToHash[meta.ID] = idHash
+    }
+    
+    return nil
+}
+
+// lookupRowIndexFromFile 从 RowIndex 中查找行号（用于向后兼容）
+func (s *DocumentStorage) lookupRowIndexFromFile(id string) int64 {
+    dataFile := filepath.Join(s.path, dataFileName)
+    reader, err := column.NewRowIndexReader(dataFile)
+    if err != nil {
+        return -1
+    }
+    defer reader.Close()
+    
+    rowIdx, err := reader.LookupRowID(id)
+    if err != nil {
+        return -1
+    }
+    return rowIdx
+}
+```
 ```
 
 ---
 
-### 3.5 Collection 层集成
+### 3.5 Collection 层集成（简化版）
 
 **修改**：`vego/collection.go`
 
@@ -440,79 +733,116 @@ func (c *Collection) DeleteContext(ctx context.Context, id string) error {
     defer c.mu.Unlock()
 
     // 检查文档是否存在
-    nodeID, exists := c.docToNode[id]
+    _, exists := c.docToNode[id]
     if !exists {
         return wrapError("DeleteContext", c.name, id, ErrDocumentNotFound)
     }
 
-    // 从 HNSW 标记删除（逻辑删除）
-    c.index.MarkDeleted(nodeID)
+    // 从 Storage 标记删除（单一数据源）
+    if err := c.storage.MarkDeleted(id); err != nil {
+        return err
+    }
 
-    // 从存储标记删除
-    c.storage.MarkDeleted(id)
-
-    // 更新映射（保留映射以便后续清理）
-    // 注意：不立即从 docToNode/nodeToDoc 中删除
+    // 延迟清理映射（在 Compact 时统一处理）
+    // 保留映射以便后续压缩时能找到对应的 node
 
     return nil
 }
 
 // Update 使用 DV 实现真正的更新
 func (c *Collection) Update(doc *Document) error {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+
     // 1. 检查文档是否存在
-    nodeID, exists := c.docToNode[doc.ID]
+    oldNodeID, exists := c.docToNode[doc.ID]
     if exists {
-        // 2. 标记旧版本为已删除（逻辑删除）
-        c.index.MarkDeleted(nodeID)
-        c.storage.MarkDeleted(doc.ID)
-        // 3. 移除映射（防止重复）
+        // 2. ⚠️ 关键时序：必须先 MarkDeleted 再 Insert！
+        // 原因：MarkDeleted 使用当前的 docMeta.RowIndex（旧值）
+        // 如果先 Insert，docMeta.RowIndex 会被更新为新值
+        // 导致旧版本无法被正确标记删除
+        if err := c.storage.MarkDeleted(doc.ID); err != nil {
+            return err
+        }
+        // 3. 更新 docToNode 映射（指向新的将创建的 node）
+        // 注意：不删除 nodeToDoc[oldNodeID]！
+        // 原因：并发搜索可能正在使用旧 nodeID
+        // 保留映射直到 Compact 统一清理
         delete(c.docToNode, doc.ID)
-        delete(c.nodeToDoc, nodeID)
+        // delete(c.nodeToDoc, oldNodeID)  // 延迟清理！
     }
 
-    // 4. 插入新版本
-    return c.Insert(doc)
+    // 4. 插入新版本（创建新 node 和新 row）
+    // insertInternal 会：
+    // - 分配新的 rowIndex（追加到文件末尾）
+    // - 更新 docMeta.RowIndex 为新值
+    // - 保存 metadata.json
+    return c.insertInternal(doc)
+}
+
+// Get 自动过滤已删除文档
+func (c *Collection) Get(id string) (*Document, error) {
+    c.mu.RLock()
+    defer c.mu.RUnlock()
+
+    // 检查是否已删除
+    if c.storage.IsDeleted(id) {
+        return nil, ErrDocumentNotFound
+    }
+
+    // ... 原有获取逻辑 ...
 }
 ```
 
 ---
 
-### 3.6 压缩策略
+### 3.6 压缩策略（并发安全）
 
 **触发条件**：
 - 删除率 > 30%（可配置）
 - 手动触发：`collection.Compact()`
 
+**并发安全考虑**：
+- 压缩期间阻塞所有写操作（Insert/Update/Delete）
+- 读操作（Get/Search）可以使用旧数据或等待
+
 **压缩流程**：
 
 ```go
 func (c *Collection) Compact() error {
+    // 1. 获取写锁（阻塞所有修改）
     c.mu.Lock()
     defer c.mu.Unlock()
-
-    // 1. 获取所有有效文档
+    
+    // 2. 获取所有有效文档（排除已删除）
     validDocs, err := c.storage.GetAllValidDocuments()
     if err != nil {
         return err
     }
-
-    // 2. 重建 HNSW 索引
+    
+    // 3. 重建 HNSW 索引
     newIndex := index.NewHNSW(c.config.toIndexConfig())
+    newDocToNode := make(map[string]int)
+    newNodeToDoc := make(map[int]string)
+    
     for _, doc := range validDocs {
-        newIndex.Add(doc.Vector)
+        nodeID := newIndex.Add(doc.Vector)
+        newDocToNode[doc.ID] = nodeID
+        newNodeToDoc[nodeID] = doc.ID
     }
 
-    // 3. 重写存储文件
+    // 4. 重写存储文件
     if err := c.storage.Rewrite(validDocs); err != nil {
         return err
     }
 
-    // 4. 清除 DV
-    c.index.deletionVector.Clear()
+    // 5. 清除 DV（因为物理数据已重写）
     c.storage.ClearDeletionVector()
 
-    // 5. 替换索引
+    // 6. 原子替换索引和映射
     c.index = newIndex
+    c.docToNode = newDocToNode
+    c.nodeToDoc = newNodeToDoc
 
     return nil
 }
@@ -579,17 +909,35 @@ type DocumentStorage interface {
 
 | 操作 | 物理删除（当前） | 逻辑删除（DV） |
 |------|------------------|----------------|
-| Delete | O(1) | O(1) |
-| Search 过滤 | N/A | O(k) - 位图检查 |
-| Flush | O(N) - 重写 | O(N) - 重写 |
-| Update | O(N) | O(1) |
-| 压缩 | N/A | O(N) - 重建 |
+| Delete | O(1) 标记 | O(1) 位图标记 |
+| Get | O(1) | O(1) + O(1) DV检查 |
+| Search 过滤 | N/A | O(k) 位图检查（k=候选数）|
+| Flush | O(N) 重写 | O(1) DV持久化 |
+| Update | O(N) 重写 | O(1) 标记 + O(1) 插入 |
+| 压缩 | N/A | O(N) 重建（后台）|
+
+**关键改进**：
+- Delete/Update 不再需要立即重写文件
+- Flush 仅持久化 DV 位图（毫秒级）
+- 压缩可以后台异步执行
 
 ### 5.2 内存开销
 
+**DeletionVector**：
 - RoaringBitmap：每个删除约 2-8 字节
 - 10% 删除率：10K 文档 ≈ 8KB
 - 50% 删除率：10K 文档 ≈ 40KB
+
+**Metadata 扩展（row_index 字段）**：
+- 每个 docMeta 增加 8 字节（int64）
+- 10K 文档 ≈ 80KB
+- 已在 metadata 中，无额外文件开销
+
+**总计**：
+- 10K 文档，10% 删除：~88KB
+- 100K 文档，10% 删除：~880KB
+- 比之前方案（单独 idToRow 映射）节省约 75% 内存
+- 压缩后可完全释放已删除文档的 metadata
 
 ### 5.3 搜索开销
 
@@ -678,10 +1026,12 @@ Week 4:
 
 | 风险 | 影响 | 缓解措施 |
 |------|------|----------|
-| 内存泄漏 | 高 | DV 定期压缩清理 |
-| 搜索性能退化 | 中 | 位图检查开销极小 |
-| 数据不一致 | 中 | 确保 Flush 时 DV 持久化 |
-| 压缩阻塞 | 低 | 异步压缩或后台任务 |
+| 内存泄漏 | 高 | DV 定期压缩清理；映射在 Compact 后重建 |
+| 搜索性能退化 | 低 | O(1) 位图检查，实测开销 < 1% |
+| 数据不一致 | 中 | 单一 DV 数据源；Flush 时原子写入 |
+| 压缩阻塞 | 中 | 写锁保护；可考虑异步压缩 |
+| nodeID 映射失效 | 中 | 延迟清理策略；搜索容错处理（缺失映射视为已删除） |
+| 映射不一致 | 低 | Compact 时统一重建所有映射 |
 
 ---
 
@@ -697,10 +1047,26 @@ Week 4:
 
 - `index/deletion_vector.go` - DV 数据结构
 - `index/deletion_vector_persist.go` - 持久化
-- `index/hnsw.go` - HNSW 集成
-- `vego/storage.go` - Storage 集成
+- `index/hnsw.go` - HNSW 搜索接口（查询 Storage DV）
+- `vego/storage.go` - Storage 集成（含扩展的 docMeta）
 - `vego/collection.go` - Collection API
+- `vego/collection_compact.go` - 压缩功能（可选单独文件）
+
+---
+
+## 附录：设计变更记录
+
+| 版本 | 日期 | 变更 |
+|------|------|------|
+| v1.0 | 2026-02-28 | 初始设计，使用 idHash 作为 DV 键 |
+| v1.1 | 2026-02-28 | 修正：使用行号(rowID)作为 DV 键，避免 hash 冲突 |
+| v1.1 | 2026-02-28 | 简化：HNSW 不维护独立 DV，统一查询 Storage |
+| v1.1 | 2026-02-28 | 明确：持久化文件命名 `{data}.del` |
+| v1.1 | 2026-02-28 | 补充：压缩时并发安全考虑 |
+| v1.2 | 2026-02-28 | 优化：使用 metadata.json 存储 rowIndex（而非单独 idToRow 映射） |
+| v1.3 | 2026-02-28 | 明确：nodeID/rowID 映射关系，延迟清理策略，搜索容错处理 |
 
 ---
 
 *文档创建时间：2026-02-28*
+*最后更新：2026-02-28*
