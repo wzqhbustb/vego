@@ -76,6 +76,7 @@ type StorageStats struct {
 	BufferSize    int
 	DataFileSize  int64
 	MetaFileSize  int64
+	FormatVersion string // File format version (e.g., "1.2")
 }
 
 // NewDocumentStorage creates a new document storage instance.
@@ -342,10 +343,22 @@ func (s *DocumentStorage) flush() error {
 		return nil
 	}
 
+	// Check for version upgrade before writing
+	dataFile := filepath.Join(s.path, dataFileName)
+	oldVersion := s.version // Default to current configured version
+	if fileVer, err := s.getFileVersion(); err == nil {
+		oldVersion = fileVer
+	}
+	
+	// Detect version upgrade
+	if oldVersion != s.version {
+		// File will be upgraded to new version
+		// This is expected behavior when configuration changes
+		_ = oldVersion // Silence unused warning in production
+	}
+
 	// Invalidate cache before reading existing data
 	// This ensures we read the latest data from disk, not stale cache
-	// Use InvalidateByPrefix to remove all cached pages for this file
-	dataFile := filepath.Join(s.path, dataFileName)
 	if s.blockCache != nil {
 		cacheKey := column.GenerateCacheKey(dataFile)
 		s.blockCache.InvalidateByPrefix(cacheKey)
@@ -364,14 +377,12 @@ func (s *DocumentStorage) flush() error {
 	// Add buffered documents
 	allDocs := append(existingDocs, s.writeBuffer...)
 
-	// Rewrite storage
+	// Rewrite storage using configured version (may upgrade old files)
 	if err := s.rewriteStorage(allDocs); err != nil {
 		return fmt.Errorf("rewrite storage: %w", err)
 	}
 
 	// Invalidate cache again after writing
-	// This is necessary because readAllDocuments() above may have populated
-	// the cache with old data before we rewrote the file
 	if s.blockCache != nil {
 		cacheKey := column.GenerateCacheKey(dataFile)
 		s.blockCache.InvalidateByPrefix(cacheKey)
@@ -613,6 +624,11 @@ func (s *DocumentStorage) tryReadByRowIndex(id string) (*Document, bool, error) 
 		return nil, false, nil
 	}
 	
+	// Check if file supports RowIndex (version check)
+	if !s.supportsRowIndex() {
+		return nil, false, nil
+	}
+	
 	// Open RowIndexReader with cache if available
 	var reader *column.RowIndexReader
 	var err error
@@ -626,7 +642,7 @@ func (s *DocumentStorage) tryReadByRowIndex(id string) (*Document, bool, error) 
 	}
 	defer reader.Close()
 	
-	// Check if file has RowIndex
+	// Double-check: file has RowIndex
 	if !reader.HasRowIndex() {
 		return nil, false, nil
 	}
@@ -770,13 +786,58 @@ func (s *DocumentStorage) Stats() StorageStats {
 	if info, err := os.Stat(s.metaStore.path); err == nil {
 		metaSize = info.Size()
 	}
+	
+	// Get file format version
+	formatVersion := s.version.String() // Default to configured version
+	if fileVer, err := s.getFileVersion(); err == nil {
+		formatVersion = fileVer.String()
+	}
 
 	return StorageStats{
 		DocumentCount: docCount,
 		BufferSize:    s.bufferSize,
 		DataFileSize:  dataSize,
 		MetaFileSize:  metaSize,
+		FormatVersion: formatVersion,
 	}
+}
+
+// getFileVersion reads the actual file format version from disk.
+// Returns the configured version if file doesn't exist or can't be read.
+func (s *DocumentStorage) getFileVersion() (format.VersionPolicy, error) {
+	dataFile := filepath.Join(s.path, dataFileName)
+	
+	// Check if file exists
+	if _, err := os.Stat(dataFile); err != nil {
+		return s.version, fmt.Errorf("data file not found: %w", err)
+	}
+	
+	// Open reader to get version from footer
+	reader, err := column.NewRowIndexReader(dataFile)
+	if err != nil {
+		return s.version, fmt.Errorf("open reader: %w", err)
+	}
+	defer reader.Close()
+	
+	return reader.GetVersion(), nil
+}
+
+// supportsRowIndex checks if the current data file supports RowIndex.
+// This checks both the configured version and the actual file version.
+func (s *DocumentStorage) supportsRowIndex() bool {
+	// Check configured version
+	if !s.version.HasFeature(format.FeatureRowIndex) {
+		return false
+	}
+	
+	// Check actual file version
+	fileVer, err := s.getFileVersion()
+	if err != nil {
+		// File doesn't exist or can't be read, assume supported for new files
+		return true
+	}
+	
+	return fileVer.HasFeature(format.FeatureRowIndex)
 }
 
 // Close flushes pending writes and closes the storage.
