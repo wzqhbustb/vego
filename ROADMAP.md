@@ -5,12 +5,12 @@
 | Phase | Goal | Timeline | Key Deliverables |
 |-------|------|----------|------------------|
 | **Phase 0** | Unified API & Foundation | 1-2 weeks | User-friendly API, basic integration tests |
-| Phase 1 | Storage Engine Hardening | 4-6 weeks | Row Index, Block Cache, Get() O(n) fix, async I/O |
-| Phase 2 | MVP | 6-8 weeks | CRUD operations, basic query, performance baseline |
-| Phase 3 | Beta | 8-10 weeks | CMO, projection pushdown, Zone Map |
-| Phase 4 | V1.0 Performance | 10-12 weeks | MiniBlock, prefetch, SIMD |
-| Phase 5 | V1.5 Extreme | 12-16 weeks | io_uring, vectorized execution |
-| Phase 6 | V2.0 Enterprise | 20-24 weeks | WAL, MVCC, indexing, partitioning |
+| Phase 1 | Storage Engine Hardening | 4-6 weeks | Row Index, Block Cache, Deletion Vector (framework), Get() O(1) |
+| Phase 2 | MVP | 6-8 weeks | CRUD operations, I/O Scheduler, Blob Storage (basic), Delete/Update hardening |
+| Phase 3 | Beta | 8-10 weeks | CMO, Zone Map, IVF-PQ Index, Blob tiered storage, Production-ready |
+| Phase 4 | V1.0 Performance | 10-12 weeks | MiniBlock, prefetch, IVF-HNSW-PQ, Late Materialization |
+| Phase 5 | V1.5 Cloud Native | 12-16 weeks | Object Store, Multi-modal optimization, Cloud storage support |
+| Phase 6 | V2.0 Enterprise | 20-24 weeks | WAL, MVCC (simplified), Scalar indexes, Point-in-time recovery |
 
 **Current Focus**: Phase 0 - Building a unified, user-friendly API layer that seamlessly integrates HNSW vector search with columnar storage.
 
@@ -142,6 +142,23 @@ Solidify the storage foundation, establish benchmarks, and ensure subsequent dev
 - **Page-Level Statistics (Min/Max)**: Foundation for Phase 3 Zone Map
 - **Nullable Encoding Unified Handling**: Currently only Zstd supports null; unify null handling across all encoders
 
+#### Deletion Vector Framework (New)
+- **Design Rationale**: Following Lance's design, use logical deletion instead of physical deletion to support incremental updates without full rewrite
+- **In-Memory Deletion Vector**: Bitmap-based row-level deletion marker (RoaringBitmap or similar)
+- **HNSW Integration**: `SearchWithDV()` API to filter deleted nodes during search
+- **Persistence**: Serialize DV to `.del` sidecar files on flush
+- **Benefits**: Enables true Update support, prevents index bloat, foundation for MVCC
+- **API**:
+  ```go
+  type DeletionVector interface {
+      Contains(rowID uint32) bool
+      Set(rowID uint32)
+      Count() int
+      Serialize() ([]byte, error)
+      Deserialize([]byte) error
+  }
+  ```
+
 ### Steps
 1. Error classification system ✅
 2. End-to-end integration tests ✅
@@ -162,6 +179,7 @@ Solidify the storage foundation, establish benchmarks, and ensure subsequent dev
 - [ ] `go test -race` shows no race conditions
 - [ ] Benchmark targets: Write 100MB vector data < 5s, Read < 2s
 - [ ] Code test coverage > 60%
+- [ ] Deletion Vector framework: Can mark rows as deleted and filter during search
 
 ### Dependencies
 - Week 1-2 (File Version) must complete before any disk format changes
@@ -174,15 +192,48 @@ Solidify the storage foundation, establish benchmarks, and ensure subsequent dev
 ## Phase 2: MVP (Minimum Viable Product)
 
 ### Goal
-Enable the system to handle real-world data with basic CRUD and query capabilities.
+Enable the system to handle real-world data with basic CRUD and query capabilities. Following Lance's design: separate vector storage (in-page) from multimodal storage (external), enable lazy loading for large objects.
 
 ### Key Tasks
 
-#### HNSW Index Hardening
-- **True Delete Support**: Remove node from HNSW index at all layers, reconnect neighbors to maintain graph connectivity
-- **Tombstone Mechanism**: Mark deleted nodes for lazy cleanup or immediate removal
-- **Orphan Prevention**: Update operation properly handles old nodes (reuse or delete)
-- **Index Compaction**: Background rebuild to remove deleted nodes and optimize graph structure
+#### HNSW Index Hardening with Deletion Vector
+- **Deletion Vector Integration**: Replace physical deletion with logical deletion using DV
+  - HNSW nodes are marked deleted via DV, not removed from graph
+  - Search results filtered by DV (O(1) check per result)
+  - Background compaction reclaims space periodically
+- **Tombstone Mechanism**: Soft-delete for documents with grace period
+- **Orphan Prevention**: Update uses DV to mark old version, inserts new version
+- **Index Compaction**: Background rebuild removes DV-marked nodes and optimizes graph
+
+#### I/O Scheduler Refactoring (Critical)
+- **Problem**: Current 4x concurrency = 4x performance degradation
+- **Solution**: Implement Lance-style I/O scheduler with:
+  - **Request Coalescing**: Merge adjacent/small I/O requests
+  - **Priority Queue**: Row-number based priority for sequential scan optimization
+  - **Backpressure**: Limit in-flight I/O to prevent memory blowup
+  - **Per-file Scheduling**: Independent queues per file to avoid head-of-line blocking
+- **API**:
+  ```go
+  type IOScheduler interface {
+      Submit(requests []IORange, priority int) Future<[]bytes>
+      Coalesce(requests []IORange) []IORange
+  }
+  ```
+
+#### Blob Storage Foundation (New)
+- **Goal**: Support multimodal data (images, videos, audio) following Lance Blob v2 design
+- **Storage Strategy** (3-tier, similar to Lance):
+  - **Inline**: < 64KB blobs stored directly in Page
+  - **Pack**: 64KB ~ 4MB blobs stored in `.pack` sidecar files (1GB max per file)
+  - **Dedicated**: > 4MB blobs stored in individual `.blob` files
+- **Descriptor Format**: `struct { kind uint8; position uint64; size uint64; fileID uint32 }`
+- **API Preview**:
+  ```go
+  type BlobStorage interface {
+      Write(data []byte) (BlobDescriptor, error)
+      Read(desc BlobDescriptor) (io.ReadCloser, error)
+  }
+  ```
 
 #### Storage Engine Enhancements
 - **Accumulation Buffer**: Avoid small Pages (< 4KB)
@@ -205,9 +256,10 @@ Enable the system to handle real-world data with basic CRUD and query capabiliti
 - [ ] Single file 1GB vector data read/write without OOM
 - [ ] Repeated query performance improved 5x+ (cache hit)
 - [ ] Write 1M vectors (768-dim) < 30s
-- [ ] Provide high-level APIs: `lance.Open()` / `lance.Write()` / `lance.Read()`
-- [ ] Delete operation truly removes nodes from HNSW index (no index bloat)
-- [ ] Update operation does not create orphan nodes (or reuses old node)
+- [ ] I/O Scheduler: 4x concurrency performance degradation < 20% (vs current 300%)
+- [ ] Delete operation uses Deletion Vector (no immediate index rebuild)
+- [ ] Update operation uses DV + Insert (no orphan nodes)
+- [ ] Blob Storage: Support inline (<64KB) and pack (64KB-4MB) storage
 - [ ] Index compaction reduces size after bulk deletes (>30% space reclaim)
 
 ---
@@ -215,9 +267,11 @@ Enable the system to handle real-world data with basic CRUD and query capabiliti
 ## Phase 3: Beta (Production-Ready)
 
 ### Goal
-Production-grade reliability, observability, and query optimization for confident deployment.
+Production-grade reliability, observability, and query optimization for confident deployment. Following Lance: separate vector indexes (ANN) from multimodal storage.
 
 ### Key Tasks
+
+#### Storage Optimization
 - **CMO (Column Metadata Offset) Table**: O(1) column lookup, supporting 1000+ columns
 - **Projection Pushdown**: Read only required columns
 - **Page Skipping (Zone Map)**: Min/Max statistics to skip irrelevant pages
@@ -227,50 +281,162 @@ Production-grade reliability, observability, and query optimization for confiden
 - **Streaming Reads**: Large files without loading entirely into memory
 - **Parallel Column Reading**: Multi-column parallel loading (3-4x performance gain)
 
+#### Vector Index: IVF-PQ (New - Critical)
+- **Motivation**: HNSW memory usage O(N), unsuitable for >10M vectors. IVF-PQ uses O(√N) memory with acceptable recall loss.
+- **Components**:
+  - **IVF (Inverted File Index)**: K-means clustering into partitions (nlist = 4*√N)
+  - **PQ (Product Quantization)**: Split vector into m sub-vectors, each quantized to k centroids (typically m=16, k=256)
+  - **Coarse Quantizer**: Center points for partition assignment
+  - **Codebook**: PQ centroids stored per partition
+- **Search Process**:
+  1. Find nearest nprobe partitions using coarse quantizer
+  2. Load PQ codes for candidates in selected partitions
+  3. Asymmetric Distance Computation (ADC) on compressed codes
+  4. Rerank top-k using original vectors
+- **API**:
+  ```go
+  index := NewIVFPQIndex(Config{
+      Dimension: 768,
+      Nlist: 256,      // Number of partitions
+      M: 16,           // Sub-quantizers
+      Nbits: 8,        // Bits per code (k=256)
+      Metric: Cosine,
+  })
+  ```
+- **Memory Saving**: 100M vectors (768d) = 300GB raw → ~5GB with IVF-PQ (60x reduction)
+
+#### Blob Storage: Tiered Implementation (New)
+- **Dedicated File Support**: >4MB blobs stored as individual `.blob` files
+- **take_blobs() API**: Lazy loading for large objects
+  ```go
+  func (c *Collection) TakeBlobs(column string, ids []string) ([]BlobFile, error)
+  type BlobFile interface {
+      io.ReadSeeker
+      io.Closer
+      Size() int64
+  }
+  ```
+- **Use Case**: Video frame extraction without loading entire file
+  ```go
+  blobs, _ := coll.TakeBlobs("video", []string{"vid001"})
+  defer blobs[0].Close()
+  
+  // Seek to specific offset, stream read
+  blobs[0].Seek(1024*1024, io.SeekStart)  // Skip to 1MB
+  chunk := make([]byte, 4096)
+  blobs[0].Read(chunk)  // Read 4KB chunk
+  ```
+- **Integration with PyTorch**: `LanceDataset` equivalent for Go ML frameworks
+
+#### Late Materialization (New)
+- **Concept**: Filter on lightweight columns first, load heavy blobs only for matching rows
+- **Implementation**:
+  1. Search vector column → get candidate row IDs
+  2. Apply metadata filters → filtered row IDs  
+  3. Load blob columns only for final results
+- **Benefit**: 10x+ I/O reduction for filtered queries
+
 ### Definition of Done
 - [ ] 1000-column file open time < 100ms (vs current O(n) scan)
 - [ ] Single-column query I/O reduced by 90%
 - [ ] File corruption localization to specific Page, support partial recovery
 - [ ] Prometheus exporter with observable key metrics
+- [ ] IVF-PQ index: 10M vectors search < 50ms with 95%+ recall
+- [ ] Blob storage: Support all 3 tiers (inline/pack/dedicated), lazy loading works
+- [ ] Late materialization: Filter-then-load reduces I/O by 5x+
 
 ---
 
 ## Phase 4: V1.0 (Performance Edition)
 
 ### Goal
-Achieve performance approaching 80% of Rust Lance.
+Achieve performance approaching 80% of Rust Lance. Focus on algorithmic optimization over hardware-specific acceleration (Go limitations).
 
 ### Key Tasks
 - **MiniBlock Architecture Refactoring**: Page internal block structure
 - **Intelligent Prefetch**: Sequential prefetch + strided prefetch (columnar)
 - **String Compression Optimization**: Snappy as FSST alternative (pragmatic choice)
-- **Encoder SIMD Optimization**: BitPacking and other critical paths
 - **Memory Pool Optimization**: Reduce GC pressure, fine-grained object pooling
 - **Adaptive Compression Level**: Auto-select compression based on data characteristics
 - **Batch Decoding Optimization**: Process multiple values per operation
+
+#### Vector Index: IVF-HNSW-PQ (New)
+- **Hybrid Index**: Combine IVF (partitioning) + HNSW (per-partition graph) + PQ (compression)
+- **Benefits**:
+  - IVF reduces search space from N to N/nlist
+  - HNSW within partition provides fast exact search
+  - PQ reduces memory by 20-50x
+- **Use Case**: Billion-scale vector search (e.g., 1B vectors = ~100GB with PQ vs 4TB raw)
+- **Architecture**:
+  ```
+  Level 1: IVF (256-4096 partitions)
+    └─ Level 2: HNSW graph per partition (small, fits in cache)
+          └─ Level 3: PQ codes for storage, original vectors for reranking
+  ```
+
+#### Late Materialization Enhancement (New)
+- **Predicate Pushdown on Blobs**: Filter using blob metadata (size, type) before loading
+- **Partial Blob Read**: Read only header/range of large files (e.g., video thumbnail)
+- **Async Blob Prefetch**: Predictive loading of blobs based on access patterns
+
+#### Multimodal Query Optimization (New)
+- **Unified Search API**: Combine vector search + metadata filter + blob existence check
+  ```go
+  results, _ := coll.MultimodalSearch(queryVector, 10,
+      WithFilter("category = 'video'"),
+      WithBlobCheck("thumbnail"),  // Only return if thumbnail exists
+  )
+  ```
 
 ### Definition of Done
 - [ ] Compression ratio: integers > 70%, strings > 60% (Snappy)
 - [ ] Sequential scan performance improved 3x (vs MVP)
 - [ ] Decoding overhead < 5% of raw read cost
 - [ ] Single file support for 100GB+ datasets
+- [ ] IVF-HNSW-PQ: 100M vectors search < 20ms with 90%+ recall
+- [ ] Late materialization: 10x I/O reduction for filtered multimodal queries
 
 ---
 
-## Phase 5: V1.5 (Extreme Edition)
+## Phase 5: V1.5 (Cloud Native Edition)
 
 ### Goal
-Outperform competitors, become the fastest Go columnar storage.
+Extend Vego from local embedded storage to cloud-native multimodal vector database.
+
+### Rationale for Scope Change
+- **Removed io_uring**: Go ecosystem immature, Linux-only, complexity outweighs benefit
+- **Removed SIMD**: Go's SIMD support limited; focus on algorithmic optimization instead
+- **Focus Shift**: Cloud storage integration is more valuable for production deployments
 
 ### Key Tasks
-- **io_uring Support (Linux only)**: Ultimate I/O performance
-- **Vectorized Execution**: SIMD computation based on Arrow
-- **FSST Final Implementation**: If time permits, pure Go implementation or CGO binding
-- **Adaptive Encoding Optimization**: ML-based optimal encoding selection
+- **Object Store Abstraction**: Unified interface for local/S3/GCS/Azure
+  ```go
+  type ObjectStore interface {
+      Get(path string, range Range) ([]byte, error)
+      Put(path string, data []byte) error
+      List(prefix string) ([]ObjectMeta, error)
+      Delete(path string) error
+  }
+  ```
+- **Cloud Blob Storage**: Store large multimodal data in object storage (S3)
+  - Hot data: Local cache (LRU)
+  - Warm data: S3 standard
+  - Cold data: S3 Glacier (via lifecycle policy)
+- **Streaming Upload/Download**: Multipart upload for large files, resumable downloads
+- **Credential Management**: IAM role, access key, environment variable support
+- **Caching Strategy**: Tiered cache (local SSD → distributed cache → object store)
+
+#### Multimodal Optimization (New)
+- **Video Streaming**: HTTP Range request support for browser-based playback
+- **Image Thumbnails**: On-the-fly resizing with caching
+- **Content-Type Detection**: MIME type inference from blob content
+- **Presigned URLs**: Temporary access to private blobs
 
 ### Definition of Done
-- [ ] TPC-H query performance approaching 50% of DuckDB
-- [ ] Vector search performance reaching 80% of Milvus/Lance
+- [ ] S3/GCS/Azure blob storage support
+- [ ] 100MB file upload < 5s on standard broadband
+- [ ] Multimodal streaming: Video seek latency < 100ms
+- [ ] Vector search performance reaching 80% of Milvus/Lance (local), 60% (cloud)
 
 ---
 
@@ -292,15 +458,19 @@ Evolve from "storage engine" to "database system".
 - **Multi-Version Concurrency Control**
 - **Out of Scope**: Two-phase commit, distributed transactions
 
-#### Tier 3: Indexing System
-- **BTree Index**: Scalar fields
-- **Bloom Filter**: Existence queries
-- **Vector Index HNSW**: External integration (already implemented)
+#### Tier 3: Indexing System (Expanded)
+- **BTree Index**: Scalar fields for range queries
+- **Bloom Filter**: Existence queries, negative lookup acceleration
+- **Inverted Index**: Full-text search on text fields (Phase 6 Extension)
+- **Vector Indexes**: HNSW (in-memory), IVF-PQ (disk-based), IVF-HNSW-PQ (hybrid)
 
-#### Tier 4: Distributed
-- **Data Partitioning**
-- **Partition Pruning**
-- **Parallel Query Execution**
+#### Tier 4: Distributed (Deferred to Post-V2.0)
+> **Decision**: Distributed features deferred as they conflict with Vego's "embedded storage" positioning. Focus on single-node performance and reliability.
+
+- ~~Data Partitioning~~ (Post-V2.0)
+- ~~Partition Pruning~~ (Post-V2.0)  
+- ~~Parallel Query Execution~~ (Post-V2.0)
+- **Single-Node Parallelism**: Multi-core query execution within single node (kept)
 
 #### Tier 4: Query Engine (Pending Planning)
 - **Expression System (Basic)**: Simple filtering
@@ -362,6 +532,35 @@ The following tasks were intentionally deferred from Phase 0 to focus on core pe
 **Context**: Small file compression overhead > benefits  
 **Decision**: < 1MB files use Plain encoding, > 1MB use ZSTD  
 **Impact**: Slightly lower compression ratio, significantly faster speed
+
+### ADR 9: Deletion Vector over Physical Delete
+**Context**: HNSW doesn't support efficient deletion; physical rebuild is expensive  
+**Decision**: Adopt Lance-style Deletion Vector (DV) for logical deletion  
+**Trade-offs**: 
+- ✅ Fast soft-delete (O(1) bitmap mark)
+- ✅ Background compaction amortizes cleanup cost
+- ✅ Enables MVCC foundation
+- ❌ Slightly higher memory (bitmap overhead)
+- ❌ Search needs DV filtering (minimal overhead)
+
+### ADR 10: Separate Vector and Multimodal Storage
+**Context**: Vectors (small, compute-heavy) and multimodal data (large, I/O-heavy) have different access patterns  
+**Decision**: 
+- Vectors: In-page columnar storage with ANN indexes
+- Multimodal: External storage with descriptor-based lazy loading  
+**Impact**: 
+- ✅ Vector search not blocked by large blob I/O
+- ✅ Multimodal data can be streamed/paged
+- ✅ Independent scaling (hot vectors in memory, cold blobs on disk/S3)
+
+### ADR 11: Abandon io_uring and SIMD (Phase 5 Scope Change)
+**Context**: Phase 5 originally planned io_uring (Linux-only) and SIMD (Go limitations)  
+**Decision**: Remove both; focus on Object Store and cloud integration  
+**Rationale**:
+- io_uring: Go support immature (requires CGO or experimental runtime); complexity outweighs 10-15% perf gain
+- SIMD: Go's `simd` package experimental; pure Go algorithmic optimization (cache locality, prefetch) provides 80% of benefit with 20% effort
+- Cloud storage: More impactful for production use cases than local I/O micro-optimization  
+**Impact**: Reduced complexity, faster delivery, broader platform support
 
 ---
 

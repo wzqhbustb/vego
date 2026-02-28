@@ -5,12 +5,12 @@
 | 阶段 | 目标 | 时间线 | 关键交付物 |
 |------|------|--------|-----------|
 | Phase 0 | 统一 API 与基础 | 1-2 周 | 用户友好的 API、基础集成测试 |
-| **Phase 1** | 存储引擎加固 | 4-6 周 | 行索引、块缓存、Get() O(n) 修复、异步 I/O |
-| Phase 2 | MVP（最小可行产品） | 6-8 周 | CRUD 操作、基础查询、性能基线 |
-| Phase 3 | Beta 版 | 8-10 周 | CMO、投影下推、Zone Map |
-| Phase 4 | V1.0 性能版 | 10-12 周 | MiniBlock、预取、SIMD |
-| Phase 5 | V1.5 极致版 | 12-16 周 | io_uring、向量化执行 |
-| Phase 6 | V2.0 企业版 | 20-24 周 | WAL、MVCC、索引、分区 |
+| **Phase 1** | 存储引擎加固 | 4-6 周 | 行索引、块缓存、Deletion Vector（框架）、Get() O(1) |
+| Phase 2 | MVP（最小可行产品） | 6-8 周 | CRUD 操作、I/O 调度器、Blob 存储（基础）、Delete/Update 加固 |
+| Phase 3 | Beta 版 | 8-10 周 | CMO、Zone Map、IVF-PQ 索引、Blob 分层存储、生产就绪 |
+| Phase 4 | V1.0 性能版 | 10-12 周 | MiniBlock、预取、IVF-HNSW-PQ、Late Materialization |
+| Phase 5 | V1.5 云原生版 | 12-16 周 | 对象存储、多模态优化、云存储支持 |
+| Phase 6 | V2.0 企业版 | 20-24 周 | WAL、MVCC（简化版）、标量索引、时间点恢复 |
 
 **当前重点**：Phase 0 - 构建统一的、用户友好的 API 层，无缝集成 HNSW 向量搜索与列式存储。
 
@@ -117,7 +117,7 @@ results, _ := coll.Search(queryVector, 10,
 
 ### 关键任务
 
-#### 第 1-2 周：文件格式基础
+#### 第 1-2 周：文件格式基础 ✅
 - **文件版本管理**：向 Header/Footer 添加版本字段，兼容性检查框架
 - **格式演进策略**：设计未来模式变更的前向/后向兼容性
 
@@ -143,6 +143,23 @@ results, _ := coll.Search(queryVector, 10,
 - **页面级统计（Min/Max）**：Phase 3 Zone Map 的基础
 - **可空编码统一处理**：目前仅 Zstd 支持 null；统一所有编码器的 null 处理
 
+#### Deletion Vector 框架（新增）
+- **设计原理**：参考 Lance 设计，使用逻辑删除替代物理删除，支持增量更新而无需全量重写
+- **内存删除向量**：基于位图的行级删除标记（RoaringBitmap 或类似）
+- **HNSW 集成**：`SearchWithDV()` API 在搜索期间过滤已删除节点
+- **持久化**：将 DV 序列化为 `.del` 侧车文件
+- **收益**：实现真正的 Update 支持、防止索引膨胀、为 MVCC 打基础
+- **API**：
+  ```go
+  type DeletionVector interface {
+      Contains(rowID uint32) bool
+      Set(rowID uint32)
+      Count() int
+      Serialize() ([]byte, error)
+      Deserialize([]byte) error
+  }
+  ```
+
 ### 步骤
 1. 错误分类系统 ✅
 2. 端到端集成测试 ✅
@@ -163,6 +180,7 @@ results, _ := coll.Search(queryVector, 10,
 - [ ] `go test -race` 无竞态条件
 - [ ] 基准测试目标：写入 100MB 向量数据 < 5秒，读取 < 2秒
 - [ ] 代码测试覆盖率 > 60%
+- [ ] Deletion Vector 框架：能够标记行为已删除并在搜索时过滤
 
 ### 依赖关系
 - 第 1-2 周（文件版本）必须在任何磁盘格式变更前完成
@@ -175,15 +193,48 @@ results, _ := coll.Search(queryVector, 10,
 ## Phase 2: MVP（最小可行产品）
 
 ### 目标
-使系统能够处理真实世界的数据，具备基础 CRUD 和查询能力。
+使系统能够处理真实世界的数据，具备基础 CRUD 和查询能力。参考 Lance 设计：向量存储（Page 内）与多模态存储（外部）分离，支持大对象懒加载。
 
 ### 关键任务
 
-#### HNSW 索引加固
-- **真正的删除支持**：从 HNSW 索引的所有层移除节点，重新连接邻居以保持图连通性
-- **墓碑机制**：标记删除节点用于延迟清理或立即移除
-- **孤儿预防**：更新操作正确处理旧节点（重用或删除）
-- **索引压缩**：后台重建以移除删除节点并优化图结构
+#### HNSW 索引与 Deletion Vector 集成
+- **Deletion Vector 集成**：使用 DV 替代物理删除
+  - HNSW 节点通过 DV 标记删除，不从图中移除
+  - 搜索结果通过 DV 过滤（每次结果 O(1) 检查）
+  - 后台压缩定期回收空间
+- **墓碑机制**：带宽限期的软删除
+- **孤儿预防**：Update 使用 DV 标记旧版本，插入新版本
+- **索引压缩**：后台重建移除 DV 标记节点并优化图结构
+
+#### I/O 调度器重構（关键）
+- **问题**：当前 4x 并发 = 4x 性能退化
+- **解决方案**：实现 Lance 风格的 I/O 调度器：
+  - **请求合并**：合并相邻/小 I/O 请求
+  - **优先级队列**：基于行号的优先级，优化顺序扫描
+  - **背压**：限制进行中的 I/O 防止内存爆炸
+  - **每文件调度**：每文件独立队列避免队头阻塞
+- **API**：
+  ```go
+  type IOScheduler interface {
+      Submit(requests []IORange, priority int) Future<[]bytes>
+      Coalesce(requests []IORange) []IORange
+  }
+  ```
+
+#### Blob 存储基础（新增）
+- **目标**：支持多模态数据（图像、视频、音频），参考 Lance Blob v2 设计
+- **存储策略**（3 层，类似 Lance）：
+  - **内联**：< 64KB Blob 直接存储在 Page 中
+  - **打包**：64KB ~ 4MB Blob 存储在 `.pack` 侧车文件（每文件最大 1GB）
+  - **独立**：> 4MB Blob 存储在单独的 `.blob` 文件
+- **描述符格式**：`struct { kind uint8; position uint64; size uint64; fileID uint32 }`
+- **API 预览**：
+  ```go
+  type BlobStorage interface {
+      Write(data []byte) (BlobDescriptor, error)
+      Read(desc BlobDescriptor) (io.ReadCloser, error)
+  }
+  ```
 
 #### 存储引擎增强
 - **累积缓冲区**：避免小页面（< 4KB）
@@ -207,9 +258,10 @@ results, _ := coll.Search(queryVector, 10,
 - [ ] 单文件 1GB 向量数据读写不 OOM
 - [ ] 重复查询性能提升 5x+（缓存命中）
 - [ ] 写入 100万向量（768维）< 30秒
-- [ ] 提供高级 API：`lance.Open()` / `lance.Write()` / `lance.Read()`
-- [ ] 删除操作真正从 HNSW 索引移除节点（无索引膨胀）
-- [ ] 更新操作不创建孤儿节点（或重用旧节点）
+- [ ] I/O 调度器：4x 并发性能退化 < 20%（对比当前 300%）
+- [ ] 删除操作使用 Deletion Vector（无需立即重建索引）
+- [ ] 更新操作使用 DV + Insert（无孤儿节点）
+- [ ] Blob 存储：支持内联（<64KB）和打包（64KB-4MB）存储
 - [ ] 索引压缩在大批量删除后减少大小（>30% 空间回收）
 
 ---
@@ -217,9 +269,11 @@ results, _ := coll.Search(queryVector, 10,
 ## Phase 3: Beta（生产就绪）
 
 ### 目标
-生产级的可靠性、可观测性和查询优化，确保部署信心。
+生产级的可靠性、可观测性和查询优化，确保部署信心。参考 Lance：向量索引（ANN）与多模态存储分离。
 
 ### 关键任务
+
+#### 存储优化
 - **CMO（列元数据偏移）表**：O(1) 列查找，支持 1000+ 列
 - **投影下推**：仅读取所需列
 - **页面跳过（Zone Map）**：Min/Max 统计跳过无关页面
@@ -229,50 +283,162 @@ results, _ := coll.Search(queryVector, 10,
 - **流式读取**：大文件无需完全加载到内存
 - **并行列读取**：多列并行加载（3-4x 性能提升）
 
+#### 向量索引：IVF-PQ（新增 - 关键）
+- **动机**：HNSW 内存使用 O(N)，不适合 >1000万 向量。IVF-PQ 使用 O(√N) 内存，可接受召回率损失。
+- **组件**：
+  - **IVF（倒排文件索引）**：K-means 聚类分区（nlist = 4*√N）
+  - **PQ（乘积量化）**：将向量分成 m 子向量，量化到 k 中心点（通常 m=16, k=256）
+  - **粗量化器**：分区分配的中心点
+  - **码本**：每分区的 PQ 中心点
+- **搜索流程**：
+  1. 使用粗量化器找到最近的 nprobe 分区
+  2. 加载选中分区的候选者 PQ 码
+  3. 在压缩码上进行非对称距离计算（ADC）
+  4. 使用原始向量对 top-k 重排序
+- **API**：
+  ```go
+  index := NewIVFPQIndex(Config{
+      Dimension: 768,
+      Nlist: 256,      // 分区数
+      M: 16,           // 子量化器数
+      Nbits: 8,        // 每码位数（k=256）
+      Metric: Cosine,
+  })
+  ```
+- **内存节省**：1亿 向量 (768d) = 300GB 原始 → ~5GB（60倍减少）
+
+#### Blob 存储：分层实现（新增）
+- **独立文件支持**：>4MB Blob 作为独立 `.blob` 文件存储
+- **take_blobs() API**：大对象懒加载
+  ```go
+  func (c *Collection) TakeBlobs(column string, ids []string) ([]BlobFile, error)
+  type BlobFile interface {
+      io.ReadSeeker
+      io.Closer
+      Size() int64
+  }
+  ```
+- **用例**：视频帧提取无需加载整个文件
+  ```go
+  blobs, _ := coll.TakeBlobs("video", []string{"vid001"})
+  defer blobs[0].Close()
+  
+  // Seek 到指定偏移，流式读取
+  blobs[0].Seek(1024*1024, io.SeekStart)  // 跳到 1MB
+  chunk := make([]byte, 4096)
+  blobs[0].Read(chunk)  // 读取 4KB 块
+  ```
+- **与 PyTorch 集成**：Go ML 框架的 `LanceDataset` 等价物
+
+#### Late Materialization（新增）
+- **概念**：先在轻量列上过滤，只为匹配行加载重 Blob
+- **实现**：
+  1. 搜索向量列 → 获取候选行 ID
+  2. 应用元数据过滤 → 过滤后行 ID
+  3. 仅为最终结果加载 Blob 列
+- **收益**：过滤查询 I/O 减少 10x+
+
 ### 完成标准
 - [ ] 1000 列文件打开时间 < 100ms（对比当前 O(n) 扫描）
 - [ ] 单列查询 I/O 减少 90%
 - [ ] 文件损坏定位到特定页面，支持部分恢复
 - [ ] Prometheus 导出器，关键指标可观测
+- [ ] IVF-PQ 索引：1000万 向量搜索 < 50ms，召回率 95%+
+- [ ] Blob 存储：支持全部 3 层（内联/打包/独立），懒加载可用
+- [ ] Late Materialization：过滤-后加载 I/O 减少 5x+
 
 ---
 
 ## Phase 4: V1.0（性能版）
 
 ### 目标
-达到接近 Rust Lance 80% 的性能。
+达到接近 Rust Lance 80% 的性能。聚焦算法优化而非硬件特定加速（Go 限制）。
 
 ### 关键任务
 - **MiniBlock 架构重构**：页面内部块结构
 - **智能预取**：顺序预取 + 步进预取（列式）
 - **字符串压缩优化**：Snappy 作为 FSST 替代方案（务实选择）
-- **编码器 SIMD 优化**：BitPacking 和其他关键路径
 - **内存池优化**：减少 GC 压力，细粒度对象池
 - **自适应压缩级别**：基于数据特征自动选择压缩
 - **批处理解码优化**：每次操作处理多个值
+
+#### 向量索引：IVF-HNSW-PQ（新增）
+- **混合索引**：结合 IVF（分区）+ HNSW（每分区图）+ PQ（压缩）
+- **收益**：
+  - IVF 将搜索空间从 N 减少到 N/nlist
+  - 分区内 HNSW 提供快速精确搜索
+  - PQ 内存减少 20-50x
+- **用例**：十亿级向量搜索（如 10亿 向量 = ~100GB，PQ 对比 4TB 原始）
+- **架构**：
+  ```
+  Level 1: IVF（256-4096 分区）
+    └─ Level 2: 每分区 HNSW 图（小，适合缓存）
+          └─ Level 3: 存储 PQ 码，重排序用原始向量
+  ```
+
+#### Late Materialization 增强（新增）
+- **Blob 谓词下推**：加载前使用 Blob 元数据（大小、类型）过滤
+- **部分 Blob 读取**：只读大文件头部/范围（如视频缩略图）
+- **异步 Blob 预取**：基于访问模式的预测性 Blob 加载
+
+#### 多模态查询优化（新增）
+- **统一搜索 API**：结合向量搜索 + 元数据过滤 + Blob 存在性检查
+  ```go
+  results, _ := coll.MultimodalSearch(queryVector, 10,
+      WithFilter("category = 'video'"),
+      WithBlobCheck("thumbnail"),  // 只返回有缩略图的
+  )
+  ```
 
 ### 完成标准
 - [ ] 压缩比：整数 > 70%，字符串 > 60%（Snappy）
 - [ ] 顺序扫描性能提升 3x（对比 MVP）
 - [ ] 解码开销 < 原始读取成本的 5%
 - [ ] 单文件支持 100GB+ 数据集
+- [ ] IVF-HNSW-PQ：1亿 向量搜索 < 20ms，召回率 90%+
+- [ ] Late Materialization：过滤多模态查询 I/O 减少 10x
 
 ---
 
-## Phase 5: V1.5（极致版）
+## Phase 5: V1.5（云原生版）
 
 ### 目标
-超越竞争对手，成为最快的 Go 列式存储。
+将 Vego 从本地嵌入式存储扩展为云原生多模态向量数据库。
+
+### 范围变更理由
+- **移除 io_uring**：Go 生态不成熟、仅限 Linux、复杂性超过收益
+- **移除 SIMD**：Go SIMD 支持有限；聚焦算法优化
+- **焦点转移**：云存储集成对生产部署更有价值
 
 ### 关键任务
-- **io_uring 支持（仅限 Linux）**：极致 I/O 性能
-- **向量化执行**：基于 Arrow 的 SIMD 计算
-- **FSST 最终实现**：时间允许的话，纯 Go 实现或 CGO 绑定
-- **自适应编码优化**：基于 ML 的最优编码选择
+- **对象存储抽象**：本地/S3/GCS/Azure 的统一接口
+  ```go
+  type ObjectStore interface {
+      Get(path string, range Range) ([]byte, error)
+      Put(path string, data []byte) error
+      List(prefix string) ([]ObjectMeta, error)
+      Delete(path string) error
+  }
+  ```
+- **云 Blob 存储**：在对象存储（S3）中存储大多模态数据
+  - 热数据：本地缓存（LRU）
+  - 温数据：S3 标准
+  - 冷数据：S3 Glacier（通过生命周期策略）
+- **流式上传/下载**：大文件分片上传、断点续传下载
+- **凭证管理**：IAM 角色、访问密钥、环境变量支持
+- **缓存策略**：分层缓存（本地 SSD → 分布式缓存 → 对象存储）
+
+#### 多模态优化（新增）
+- **视频流**：HTTP Range 请求支持浏览器播放
+- **图像缩略图**：即时调整大小带缓存
+- **Content-Type 检测**：从 Blob 内容推断 MIME 类型
+- **预签名 URL**：私有 Blob 临时访问
 
 ### 完成标准
-- [ ] TPC-H 查询性能接近 DuckDB 的 50%
-- [ ] 向量搜索性能达到 Milvus/Lance 的 80%
+- [ ] S3/GCS/Azure Blob 存储支持
+- [ ] 标准宽带下 100MB 文件上传 < 5秒
+- [ ] 多模态流：视频 seek 延迟 < 100ms
+- [ ] 向量搜索性能达到 Milvus/Lance 的 80%（本地），60%（云端）
 
 ---
 
@@ -294,15 +460,19 @@ results, _ := coll.Search(queryVector, 10,
 - **多版本并发控制**
 - **范围外**：两阶段提交、分布式事务
 
-#### 第三层：索引系统
-- **BTree 索引**：标量字段
-- **Bloom Filter**：存在性查询
-- **向量索引 HNSW**：外部集成（已实现）
+#### 第三层：索引系统（扩展）
+- **BTree 索引**：标量字段范围查询
+- **Bloom Filter**：存在性查询、负向查找加速
+- **倒排索引**：文本字段全文搜索（Phase 6 扩展）
+- **向量索引**：HNSW（内存中）、IVF-PQ（磁盘）、IVF-HNSW-PQ（混合）
 
-#### 第四层：分布式
-- **数据分区**
-- **分区裁剪**
-- **并行查询执行**
+#### 第四层：分布式（推迟到 V2.0 后）
+> **决策**：分布式功能推迟，因其与 Vego "嵌入式存储" 定位冲突。聚焦单节点性能和可靠性。
+
+- ~~数据分区~~（V2.0 后）
+- ~~分区裁剪~~（V2.0 后）
+- ~~并行查询执行~~（V2.0 后）
+- **单节点并行**：单节点内多核查询执行（保留）
 
 #### 第四层：查询引擎（待定规划）
 - **表达式系统（基础）**：简单过滤
@@ -364,6 +534,35 @@ results, _ := coll.Search(queryVector, 10,
 **背景**：小文件压缩开销 > 收益  
 **决策**：< 1MB 文件使用 Plain 编码，> 1MB 使用 ZSTD  
 **影响**：压缩比略低，速度显著提升
+
+### ADR 9: Deletion Vector 替代物理删除
+**背景**：HNSW 不支持高效删除；物理重建昂贵  
+**决策**：采用 Lance 风格的 Deletion Vector (DV) 进行逻辑删除  
+**权衡**：
+- ✅ 快速软删除（O(1) 位图标记）
+- ✅ 后台压缩均摊清理成本
+- ✅ 为 MVCC 打基础
+- ❌ 内存略高（位图开销）
+- ❌ 搜索需要 DV 过滤（最小开销）
+
+### ADR 10: 向量与多模态存储分离
+**背景**：向量（小、计算密集）和多模态数据（大、I/O 密集）有不同访问模式  
+**决策**：
+- 向量：带 ANN 索引的 Page 内列式存储
+- 多模态：带描述符的懒加载外部存储  
+**影响**：
+- ✅ 向量搜索不被大 Blob I/O 阻塞
+- ✅ 多模态数据可流式/分页
+- ✅ 独立扩展（热向量在内存，冷 Blob 在磁盘/S3）
+
+### ADR 11: 放弃 io_uring 和 SIMD（Phase 5 范围变更）
+**背景**：Phase 5 原计划 io_uring（仅限 Linux）和 SIMD（Go 限制）  
+**决策**：两者都移除；聚焦对象存储和云集成  
+**理由**：
+- io_uring：Go 支持不成熟（需要 CGO 或实验运行时）；复杂性超过 10-15% 性能增益
+- SIMD：Go `simd` 包实验性；纯 Go 算法优化（缓存局部性、预取）提供 80% 收益只需 20% 努力
+- 云存储：对生产用例比本地 I/O 微优化更有影响  
+**影响**：降低复杂性、更快交付、更广平台支持
 
 ---
 

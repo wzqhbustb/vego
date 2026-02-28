@@ -11,14 +11,14 @@ import (
 	lerrors "github.com/wzqhbustb/vego/storage/errors"
 )
 
-// RowIndexReader extends Reader with RowIndex and BlockCache support for V1.1+ files
+// RowIndexReader extends Reader with RowIndex support for V1.1+ files
+// It shares the BlockCache from the embedded Reader for both data pages and RowIndex
 type RowIndexReader struct {
 	*Reader
 	rowIndex       *format.RowIndex
 	version        format.VersionPolicy
 	hasRowIndex    bool
 	rowIndexLoaded bool
-	blockCache     *format.BlockCache
 	blockSize      int32
 }
 
@@ -50,24 +50,46 @@ func NewRowIndexReader(filename string) (*RowIndexReader, error) {
 }
 
 // NewRowIndexReaderWithCache creates a reader with a shared BlockCache
+// The cache is shared with the embedded Reader, so all data pages and RowIndex are cached uniformly
 func NewRowIndexReaderWithCache(filename string, cache *format.BlockCache) (*RowIndexReader, error) {
-	reader, err := NewRowIndexReader(filename)
+	// Use NewReaderWithCache to create a Reader with cache support
+	reader, err := NewReaderWithCache(filename, cache)
 	if err != nil {
 		return nil, err
 	}
 
-	reader.blockCache = cache
-	return reader, nil
+	// Build RowIndexReader from the cached Reader
+	version := reader.footer.GetFormatVersion()
+	hasRowIndex := reader.footer.HasRowIndex()
+	blockSize, hasBlockCache := reader.footer.GetBlockCacheInfo()
+	if !hasBlockCache {
+		blockSize = format.DefaultBlockSize
+	}
+
+	return &RowIndexReader{
+		Reader:      reader,
+		version:     version,
+		hasRowIndex: hasRowIndex,
+		blockSize:   blockSize,
+	}, nil
 }
 
-// GetBlockCache returns the BlockCache (nil if not set)
+// GetBlockCache returns the BlockCache from the embedded Reader (nil if not set)
 func (r *RowIndexReader) GetBlockCache() *format.BlockCache {
-	return r.blockCache
+	if r.Reader == nil {
+		return nil
+	}
+	return r.Reader.blockCache
 }
 
-// SetBlockCache sets the BlockCache for this reader
+// SetBlockCache sets the BlockCache for the embedded Reader
 func (r *RowIndexReader) SetBlockCache(cache *format.BlockCache) {
-	r.blockCache = cache
+	if r.Reader != nil {
+		r.Reader.blockCache = cache
+		if cache != nil && r.Reader.cacheKey == "" {
+			r.Reader.cacheKey = GenerateCacheKey(r.file.Name())
+		}
+	}
 }
 
 // GetBlockSize returns the block size hint
@@ -78,8 +100,8 @@ func (r *RowIndexReader) GetBlockSize() int32 {
 // WarmupCache loads frequently accessed pages into cache
 // This is especially useful for V1.2+ files with BlockCache
 func (r *RowIndexReader) WarmupCache() error {
-	// Check if cache is available
-	if r.blockCache == nil {
+	// Check if cache is available (from embedded Reader)
+	if r.Reader == nil || r.Reader.blockCache == nil {
 		return nil // No cache, no-op
 	}
 
@@ -119,10 +141,10 @@ func (r *RowIndexReader) LoadRowIndex() error {
 			Build()
 	}
 
-	// Check cache first
-	cacheKey := r.cacheKey("rowindex", offset)
-	if r.blockCache != nil {
-		if data, found := r.blockCache.Get(cacheKey); found {
+	// Check cache first (using embedded Reader's blockCache)
+	cacheKey := r.generateRowIndexCacheKey(offset)
+	if r.Reader != nil && r.Reader.blockCache != nil {
+		if data, found := r.Reader.blockCache.Get(cacheKey); found {
 			// Parse from cached data
 			page := &format.Page{}
 			if err := page.UnmarshalBinary(data); err == nil {
@@ -196,10 +218,10 @@ func (r *RowIndexReader) LoadRowIndex() error {
 			Build()
 	}
 
-	// Cache the page data for future use
-	if r.blockCache != nil {
+	// Cache the page data for future use (using embedded Reader's blockCache)
+	if r.Reader != nil && r.Reader.blockCache != nil {
 		if data, err := page.MarshalBinary(); err == nil {
-			r.blockCache.Put(cacheKey, data)
+			r.Reader.blockCache.Put(cacheKey, data)
 		}
 	}
 
@@ -209,9 +231,18 @@ func (r *RowIndexReader) LoadRowIndex() error {
 	return nil
 }
 
-// cacheKey generates a cache key for a page
-func (r *RowIndexReader) cacheKey(prefix string, offset int64) string {
-	return fmt.Sprintf("%s_%d", prefix, offset)
+// generateRowIndexCacheKey generates a cache key for RowIndex page
+// Uses the embedded Reader's cacheKey to ensure consistency
+func (r *RowIndexReader) generateRowIndexCacheKey(offset int64) string {
+	if r.Reader != nil && r.Reader.cacheKey != "" {
+		return fmt.Sprintf("%s:rowindex:%d", r.Reader.cacheKey, offset)
+	}
+	// Fallback: derive a cache key from the file name to ensure file uniqueness
+	if r.Reader != nil && r.file != nil {
+		return fmt.Sprintf("%s:rowindex:%d", GenerateCacheKey(r.file.Name()), offset)
+	}
+	// Last resort: use offset only (may cause collisions if shared cache is used)
+	return fmt.Sprintf("rowindex:%d", offset)
 }
 
 // LookupRowID returns the row index for the given document ID
@@ -285,10 +316,10 @@ func (r *RowIndexReader) HasBlockCache() bool {
 	return r.version.HasFeature(format.FeatureBlockCache)
 }
 
-// BlockCacheStats returns cache statistics
+// BlockCacheStats returns cache statistics from the embedded Reader
 func (r *RowIndexReader) BlockCacheStats() format.BlockCacheStats {
-	if r.blockCache == nil {
+	if r.Reader == nil || r.Reader.blockCache == nil {
 		return format.BlockCacheStats{}
 	}
-	return r.blockCache.Stats()
+	return r.Reader.blockCache.Stats()
 }

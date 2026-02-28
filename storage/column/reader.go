@@ -31,6 +31,10 @@ type Reader struct {
 	fileID       string // 在 AsyncIO 中注册的文件 ID
 	useAsync     bool   // 是否启用异步模式
 	asyncEnabled bool   // AsyncIO 是否可用（文件已注册）
+
+	// BlockCache 支持（可选）
+	blockCache *format.BlockCache // 页面缓存实例
+	cacheKey   string             // 文件唯一标识（用于缓存键）
 }
 
 // NewReader creates a new column reader（同步模式）
@@ -68,6 +72,37 @@ func NewReader(filename string) (*Reader, error) {
 	}
 
 	return reader, nil
+}
+
+// NewReaderWithCache creates a new column reader with BlockCache support
+// The cache parameter can be shared across multiple readers for the same or different files
+func NewReaderWithCache(filename string, cache *format.BlockCache) (*Reader, error) {
+	reader, err := NewReader(filename)
+	if err != nil {
+		return nil, err
+	}
+
+	if cache != nil {
+		reader.blockCache = cache
+		reader.cacheKey = GenerateCacheKey(filename)
+	}
+
+	return reader, nil
+}
+
+// GenerateCacheKey generates a unique cache key for a file
+// Uses absolute path hash to ensure uniqueness
+// This is exported for cache invalidation purposes
+func GenerateCacheKey(filename string) string {
+	absPath, err := filepath.Abs(filename)
+	if err != nil {
+		absPath = filename
+	}
+
+	hash := fnv.New64a()
+	hash.Write([]byte(absPath))
+
+	return fmt.Sprintf("lance:%x", hash.Sum64())
 }
 
 // NewReaderWithAsyncIO 不需要自己打开文件
@@ -504,14 +539,74 @@ func (r *Reader) readPagesSync(pageIndices []format.PageIndex, dataType arrow.Da
 
 // readPage reads a single page from the file
 // 优先使用 AsyncIO（如果启用），否则使用同步 I/O
+// 如果 BlockCache 启用，优先从缓存读取
 func (r *Reader) readPage(pageIndex format.PageIndex) (*format.Page, error) {
-	// 如果 AsyncIO 启用，使用异步读取
-	if r.useAsync && r.asyncEnabled {
-		return r.readPageAsync(pageIndex)
+	// 1. 尝试从 BlockCache 读取
+	if r.blockCache != nil {
+		page, hit := r.readPageFromCache(pageIndex)
+		if hit {
+			return page, nil
+		}
 	}
 
-	// 同步读取
-	return r.readPageSync(pageIndex)
+	// 2. 缓存未命中，根据配置选择读取方式
+	var page *format.Page
+	var err error
+
+	if r.useAsync && r.asyncEnabled {
+		page, err = r.readPageAsync(pageIndex)
+	} else {
+		page, err = r.readPageSync(pageIndex)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. 写入缓存
+	if r.blockCache != nil {
+		r.writePageToCache(pageIndex, page)
+	}
+
+	return page, nil
+}
+
+// readPageFromCache 尝试从 BlockCache 读取 Page
+func (r *Reader) readPageFromCache(pageIndex format.PageIndex) (*format.Page, bool) {
+	cacheKey := r.generatePageCacheKey(pageIndex)
+
+	data, found := r.blockCache.Get(cacheKey)
+	if !found {
+		return nil, false
+	}
+
+	// 反序列化
+	page := &format.Page{}
+	if err := page.UnmarshalBinary(data); err != nil {
+		// 缓存数据损坏，移除该条目
+		r.blockCache.Remove(cacheKey)
+		return nil, false
+	}
+
+	return page, true
+}
+
+// writePageToCache 将 Page 写入 BlockCache
+func (r *Reader) writePageToCache(pageIndex format.PageIndex, page *format.Page) {
+	cacheKey := r.generatePageCacheKey(pageIndex)
+
+	data, err := page.MarshalBinary()
+	if err != nil {
+		return // 序列化失败，跳过缓存
+	}
+
+	r.blockCache.Put(cacheKey, data)
+}
+
+// generatePageCacheKey 生成 Page 的缓存键
+// 格式: {cacheKey}:page:{offset}:{size}
+func (r *Reader) generatePageCacheKey(pageIndex format.PageIndex) string {
+	return fmt.Sprintf("%s:page:%d:%d", r.cacheKey, pageIndex.Offset, pageIndex.Size)
 }
 
 // readPageSync 同步读取 Page
@@ -744,6 +839,129 @@ func (r *Reader) getFixedSizeListValues(arr *arrow.FixedSizeListArray, index int
 	}
 
 	return values
+}
+
+// ReadRowAt reads a single row at the specified index across all columns.
+// This enables O(1) random access when combined with RowIndex.
+func (r *Reader) ReadRowAt(rowIdx int64) ([]interface{}, error) {
+	if r.closed {
+		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+			Op("read_row_at").
+			Context("message", "reader is closed").
+			Build()
+	}
+
+	if rowIdx < 0 || rowIdx >= r.header.NumRows {
+		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+			Op("read_row_at").
+			Context("row_idx", rowIdx).
+			Context("num_rows", r.header.NumRows).
+			Context("message", "row index out of range").
+			Build()
+	}
+
+	schema := r.header.Schema
+	numColumns := schema.NumFields()
+	
+	// Read the specific row from each column
+	rowValues := make([]interface{}, numColumns)
+	
+	for colIdx := 0; colIdx < numColumns; colIdx++ {
+		value, err := r.readColumnRowAt(int32(colIdx), rowIdx)
+		if err != nil {
+			return nil, lerrors.New(lerrors.ErrIO).
+				Op("read_row_at_column").
+				Context("column", colIdx).
+				Context("row", rowIdx).
+				Wrap(err).
+				Build()
+		}
+		rowValues[colIdx] = value
+	}
+	
+	return rowValues, nil
+}
+
+// readColumnRowAt reads a single value from the specified column and row.
+func (r *Reader) readColumnRowAt(columnIndex int32, rowIdx int64) (interface{}, error) {
+	pageIndices := r.footer.GetColumnPages(columnIndex)
+	if len(pageIndices) == 0 {
+		return nil, lerrors.PageNotFound("", columnIndex, 0)
+	}
+
+	// Find which page contains the row
+	var targetPage format.PageIndex
+	var pageStartRow int64 = 0
+	found := false
+	
+	for _, pageIdx := range pageIndices {
+		if rowIdx < pageStartRow+int64(pageIdx.NumValues) {
+			targetPage = pageIdx
+			found = true
+			break
+		}
+		pageStartRow += int64(pageIdx.NumValues)
+	}
+	
+	if !found {
+		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+			Op("read_column_row_at").
+			Context("column", columnIndex).
+			Context("row", rowIdx).
+			Context("message", "row not found in any page").
+			Build()
+	}
+
+	// Read the page
+	page, err := r.readPage(targetPage)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get the field type
+	field := r.header.Schema.Field(int(columnIndex))
+	
+	// Read the page into an array
+	array, err := r.pageReader.ReadPage(page, field.Type)
+	if err != nil {
+		return nil, err
+	}
+	
+	// Extract the specific row value from the page
+	localRowIdx := int(rowIdx - pageStartRow)
+	if localRowIdx < 0 || localRowIdx >= array.Len() {
+		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+			Op("read_column_row_at").
+			Context("local_row_idx", localRowIdx).
+			Context("array_len", array.Len()).
+			Context("message", "local row index out of range").
+			Build()
+	}
+	
+	return r.extractValueFromArray(array, localRowIdx, field.Type)
+}
+
+// extractValueFromArray extracts a single value from an array at the given index.
+func (r *Reader) extractValueFromArray(arr arrow.Array, idx int, dataType arrow.DataType) (interface{}, error) {
+	switch arr := arr.(type) {
+	case *arrow.Int64Array:
+		return arr.Value(idx), nil
+	case *arrow.Int32Array:
+		return int64(arr.Value(idx)), nil
+	case *arrow.Float32Array:
+		return arr.Value(idx), nil
+	case *arrow.Float64Array:
+		return float32(arr.Value(idx)), nil
+	case *arrow.FixedSizeListArray:
+		// Handle vector type
+		return r.getFixedSizeListValues(arr, idx), nil
+	default:
+		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+			Op("extract_value").
+			Context("type", dataType.Name()).
+			Context("message", "unsupported array type").
+			Build()
+	}
 }
 
 // Close 方法
