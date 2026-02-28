@@ -841,6 +841,129 @@ func (r *Reader) getFixedSizeListValues(arr *arrow.FixedSizeListArray, index int
 	return values
 }
 
+// ReadRowAt reads a single row at the specified index across all columns.
+// This enables O(1) random access when combined with RowIndex.
+func (r *Reader) ReadRowAt(rowIdx int64) ([]interface{}, error) {
+	if r.closed {
+		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+			Op("read_row_at").
+			Context("message", "reader is closed").
+			Build()
+	}
+
+	if rowIdx < 0 || rowIdx >= r.header.NumRows {
+		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+			Op("read_row_at").
+			Context("row_idx", rowIdx).
+			Context("num_rows", r.header.NumRows).
+			Context("message", "row index out of range").
+			Build()
+	}
+
+	schema := r.header.Schema
+	numColumns := schema.NumFields()
+	
+	// Read the specific row from each column
+	rowValues := make([]interface{}, numColumns)
+	
+	for colIdx := 0; colIdx < numColumns; colIdx++ {
+		value, err := r.readColumnRowAt(int32(colIdx), rowIdx)
+		if err != nil {
+			return nil, lerrors.New(lerrors.ErrIO).
+				Op("read_row_at_column").
+				Context("column", colIdx).
+				Context("row", rowIdx).
+				Wrap(err).
+				Build()
+		}
+		rowValues[colIdx] = value
+	}
+	
+	return rowValues, nil
+}
+
+// readColumnRowAt reads a single value from the specified column and row.
+func (r *Reader) readColumnRowAt(columnIndex int32, rowIdx int64) (interface{}, error) {
+	pageIndices := r.footer.GetColumnPages(columnIndex)
+	if len(pageIndices) == 0 {
+		return nil, lerrors.PageNotFound("", columnIndex, 0)
+	}
+
+	// Find which page contains the row
+	var targetPage format.PageIndex
+	var pageStartRow int64 = 0
+	found := false
+	
+	for _, pageIdx := range pageIndices {
+		if rowIdx < pageStartRow+int64(pageIdx.NumValues) {
+			targetPage = pageIdx
+			found = true
+			break
+		}
+		pageStartRow += int64(pageIdx.NumValues)
+	}
+	
+	if !found {
+		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+			Op("read_column_row_at").
+			Context("column", columnIndex).
+			Context("row", rowIdx).
+			Context("message", "row not found in any page").
+			Build()
+	}
+
+	// Read the page
+	page, err := r.readPage(targetPage)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get the field type
+	field := r.header.Schema.Field(int(columnIndex))
+	
+	// Read the page into an array
+	array, err := r.pageReader.ReadPage(page, field.Type)
+	if err != nil {
+		return nil, err
+	}
+	
+	// Extract the specific row value from the page
+	localRowIdx := int(rowIdx - pageStartRow)
+	if localRowIdx < 0 || localRowIdx >= array.Len() {
+		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+			Op("read_column_row_at").
+			Context("local_row_idx", localRowIdx).
+			Context("array_len", array.Len()).
+			Context("message", "local row index out of range").
+			Build()
+	}
+	
+	return r.extractValueFromArray(array, localRowIdx, field.Type)
+}
+
+// extractValueFromArray extracts a single value from an array at the given index.
+func (r *Reader) extractValueFromArray(arr arrow.Array, idx int, dataType arrow.DataType) (interface{}, error) {
+	switch arr := arr.(type) {
+	case *arrow.Int64Array:
+		return arr.Value(idx), nil
+	case *arrow.Int32Array:
+		return int64(arr.Value(idx)), nil
+	case *arrow.Float32Array:
+		return arr.Value(idx), nil
+	case *arrow.Float64Array:
+		return float32(arr.Value(idx)), nil
+	case *arrow.FixedSizeListArray:
+		// Handle vector type
+		return r.getFixedSizeListValues(arr, idx), nil
+	default:
+		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+			Op("extract_value").
+			Context("type", dataType.Name()).
+			Context("message", "unsupported array type").
+			Build()
+	}
+}
+
 // Close 方法
 func (r *Reader) Close() error {
 	r.mu.Lock()

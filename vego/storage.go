@@ -218,6 +218,8 @@ func (s *DocumentStorage) PutBatch(docs []*Document) error {
 }
 
 // Get retrieves a document by ID.
+// For V1.1+ files with RowIndex, uses O(1) lookup.
+// Falls back to full scan for V1.0 files or when RowIndex is not available.
 func (s *DocumentStorage) Get(id string) (*Document, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -226,14 +228,29 @@ func (s *DocumentStorage) Get(id string) (*Document, error) {
 		return nil, fmt.Errorf("storage is closed")
 	}
 
-	// Check buffer first
+	// Check buffer first (most recent data)
 	for _, doc := range s.writeBuffer {
 		if doc.ID == id {
 			return doc.Clone(), nil
 		}
 	}
 
-	// Check metadata store
+	// Try RowIndex optimized path (V1.1+)
+	doc, usedRowIndex, err := s.tryReadByRowIndex(id)
+	if err == nil && doc != nil {
+		// Successfully found via RowIndex
+		return doc, nil
+	}
+	if err != nil && err != ErrDocumentNotFound {
+		return nil, err
+	}
+	// If RowIndex was used but document not found, return error
+	if usedRowIndex {
+		return nil, ErrDocumentNotFound
+	}
+	// Otherwise, continue to fallback path (file may not exist or doesn't have RowIndex)
+
+	// Fallback: Check metadata store + full scan (V1.0 style)
 	s.metaStore.mu.RLock()
 	idHash, exists := s.metaStore.idToHash[id]
 	if !exists {
@@ -585,6 +602,83 @@ func (s *DocumentStorage) readVectorByHash(idHash int64) ([]float32, int64, erro
 
 	return nil, 0, fmt.Errorf("vector not found for hash: %d", idHash)
 }
+
+// tryReadByRowIndex attempts to read a document using RowIndex.
+// Returns (doc, usedRowIndex, error). If RowIndex is not available, returns (nil, false, nil).
+func (s *DocumentStorage) tryReadByRowIndex(id string) (*Document, bool, error) {
+	dataFile := filepath.Join(s.path, dataFileName)
+	
+	// Check if file exists
+	if _, err := os.Stat(dataFile); err != nil {
+		return nil, false, nil
+	}
+	
+	// Open RowIndexReader with cache if available
+	var reader *column.RowIndexReader
+	var err error
+	if s.blockCache != nil {
+		reader, err = column.NewRowIndexReaderWithCache(dataFile, s.blockCache)
+	} else {
+		reader, err = column.NewRowIndexReader(dataFile)
+	}
+	if err != nil {
+		return nil, false, nil
+	}
+	defer reader.Close()
+	
+	// Check if file has RowIndex
+	if !reader.HasRowIndex() {
+		return nil, false, nil
+	}
+	
+	// Lookup row index by ID (O(1))
+	rowIdx, err := reader.LookupRowID(id)
+	if err != nil {
+		// ID not found in RowIndex
+		return nil, true, ErrDocumentNotFound
+	}
+	
+	// Read the specific row using O(1) random access
+	rowValues, err := reader.ReadRowAt(rowIdx)
+	if err != nil {
+		return nil, true, fmt.Errorf("read row %d: %w", rowIdx, err)
+	}
+	
+	// Extract values: [id_hash, vector, timestamp]
+	if len(rowValues) != 3 {
+		return nil, true, fmt.Errorf("expected 3 columns, got %d", len(rowValues))
+	}
+	
+	idHash, ok := rowValues[0].(int64)
+	if !ok {
+		return nil, true, fmt.Errorf("invalid id_hash type: %T", rowValues[0])
+	}
+	vector, ok := rowValues[1].([]float32)
+	if !ok {
+		return nil, true, fmt.Errorf("invalid vector type: %T", rowValues[1])
+	}
+	timestamp, ok := rowValues[2].(int64)
+	if !ok {
+		return nil, true, fmt.Errorf("invalid timestamp type: %T", rowValues[2])
+	}
+	
+	// Get metadata
+	s.metaStore.mu.RLock()
+	meta, exists := s.metaStore.entries[idHash]
+	s.metaStore.mu.RUnlock()
+	if !exists {
+		return nil, true, ErrDocumentNotFound
+	}
+	
+	return &Document{
+		ID:        meta.ID,
+		Vector:    vector,
+		Metadata:  meta.Metadata,
+		Timestamp: time.Unix(0, timestamp),
+	}, true, nil
+}
+
+
 
 // saveMetadata saves the metadata store to disk.
 func (s *DocumentStorage) saveMetadata() error {
