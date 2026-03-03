@@ -133,7 +133,8 @@ func main() {
 		"How do microservices communicate with each other?",
 	}
 
-	fmt.Println("💬 Processing user queries...\n")
+	fmt.Println("💬 Processing user queries...")
+	fmt.Println()
 
 	for i, query := range queries {
 		fmt.Printf("Query %d: %s\n", i+1, query)

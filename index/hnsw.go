@@ -143,7 +143,52 @@ func (h *HNSWIndex) Search(query []float32, k int, ef int) ([]SearchResult, erro
 	h.globalLock.RUnlock()
 
 	return h.search(query, k, ef, int(ep), int(maxLvl))
+}
 
+// SearchWithDV searches for k nearest neighbors with deletion vector filtering.
+// It retrieves more candidates (k*2) to compensate for deleted nodes, then filters
+// using the provided isDeleted callback. This allows the Collection layer to
+// filter deleted nodes using Storage's DeletionVector without HNSW maintaining
+// its own deletion state.
+//
+// The isDeleted callback receives a node ID and should return true if the node
+// is considered deleted and should be filtered out.
+func (h *HNSWIndex) SearchWithDV(query []float32, k int, ef int, isDeleted func(int) bool) ([]SearchResult, error) {
+	if len(query) != h.dimension {
+		return nil, ErrDimensionMismatch
+	}
+
+	if ef == 0 {
+		ef = max(200, k*2)
+	}
+
+	h.globalLock.RLock()
+	if h.entryPoint == -1 {
+		h.globalLock.RUnlock()
+		return nil, ErrEmptyIndex
+	}
+	ep := h.entryPoint
+	maxLvl := h.maxLevel
+	h.globalLock.RUnlock()
+
+	// Search for more candidates to compensate for deletions
+	candidates, err := h.search(query, k*2, ef, int(ep), int(maxLvl))
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter deleted nodes
+	filtered := make([]SearchResult, 0, k)
+	for _, cand := range candidates {
+		if !isDeleted(cand.ID) {
+			filtered = append(filtered, cand)
+			if len(filtered) >= k {
+				break
+			}
+		}
+	}
+
+	return filtered, nil
 }
 
 // Len returns the number of nodes in the HNSW index.
