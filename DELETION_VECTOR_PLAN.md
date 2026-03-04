@@ -798,13 +798,21 @@ func (c *Collection) Get(id string) (*Document, error) {
 
 ### 3.6 压缩策略（并发安全）
 
+> **设计文档**：详细的压缩策略对比见 [COMPACTION.md](COMPACTION.md)，包含 9 种策略的完整分析。
+
 **触发条件**：
 - 删除率 > 30%（可配置）
 - 手动触发：`collection.Compact()`
 
-**并发安全考虑**：
-- 压缩期间阻塞所有写操作（Insert/Update/Delete）
-- 读操作（Get/Search）可以使用旧数据或等待
+**当前实现策略（阻塞式）**：
+- 压缩期间阻塞所有读写操作（Insert/Update/Delete/Get/Search）
+- 实现简单，数据一致性最强
+- 适合维护窗口和批处理场景
+
+**未来优化方向**：
+- **轻量锁方案**：读取不阻塞，仅阻塞写入（4-5倍工程复杂度）
+- **后台双写**：读写都不阻塞，但实现复杂
+- 详见 [COMPACTION.md](COMPACTION.md) 方案对比
 
 **压缩流程**：
 

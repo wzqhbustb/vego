@@ -204,6 +204,13 @@ Enable the system to handle real-world data with basic CRUD and query capabiliti
 - **Tombstone Mechanism**: Soft-delete for documents with grace period
 - **Orphan Prevention**: Update uses DV to mark old version, inserts new version
 - **Index Compaction**: Background rebuild removes DV-marked nodes and optimizes graph
+  - **Implementation Strategy**: See [COMPACTION.md](COMPACTION.md) for detailed design of 9 compaction strategies
+  - **Phase 2 (Current)**: Blocking compaction (simple, reliable)
+    - Compact blocks all reads/writes during rebuild
+    - Suitable for maintenance windows and batch processing
+  - **Future Optimization**: Lightweight locking (Phase 4+) or Background dual-write (Phase 5+)
+    - Enables zero-downtime compaction for online services
+    - Higher engineering complexity (4-5x effort)
 
 #### I/O Scheduler Refactoring (Critical)
 - **Problem**: Current 4x concurrency = 4x performance degradation
