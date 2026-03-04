@@ -360,6 +360,18 @@ func (s *DocumentStorage) MarkDeleted(id string) error {
 		return fmt.Errorf("storage is closed")
 	}
 
+	// Check if document is in write buffer (not yet flushed)
+	for i, doc := range s.writeBuffer {
+		if doc.ID == id {
+			// Remove from buffer - document never makes it to disk
+			s.writeBuffer = append(s.writeBuffer[:i], s.writeBuffer[i+1:]...)
+			s.bufferSize--
+			s.dirty = true
+			return nil
+		}
+	}
+
+	// Document is in storage, use DV to mark as deleted
 	rowID, exists := s.getRowID(id)
 	if !exists {
 		return ErrDocumentNotFound

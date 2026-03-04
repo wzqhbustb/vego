@@ -374,19 +374,35 @@ func TestDocumentStorageDeletionWithBuffer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Try to mark as deleted (should fail because no row index assigned yet)
-	err = storage.MarkDeleted("doc-001")
-	if err == nil {
-		t.Error("MarkDeleted should fail for buffered document without row index")
+	// MarkDeleted should work for buffered document (removes from buffer directly)
+	if err := storage.MarkDeleted("doc-001"); err != nil {
+		t.Fatalf("MarkDeleted should work for buffered document: %v", err)
 	}
 
-	// After flush, it should work
+	// Document should be gone (not findable)
+	_, err = storage.Get("doc-001")
+	if err == nil {
+		t.Error("Document should not be found after deletion from buffer")
+	}
+
+	// Add another document, flush, then delete
+	doc2 := &Document{ID: "doc-002", Vector: make([]float32, 128)}
+	if err := storage.Put(doc2); err != nil {
+		t.Fatal(err)
+	}
+
+	// After flush, MarkDeleted should use DV
 	if err := storage.Flush(); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := storage.MarkDeleted("doc-001"); err != nil {
+	if err := storage.MarkDeleted("doc-002"); err != nil {
 		t.Fatalf("MarkDeleted should work after flush: %v", err)
+	}
+
+	// Verify doc-002 is marked as deleted via DV
+	if !storage.IsDeleted("doc-002") {
+		t.Error("doc-002 should be marked as deleted")
 	}
 }
 

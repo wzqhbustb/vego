@@ -228,7 +228,7 @@ func (c *Collection) DeleteBatch(ids []string) error {
 	return c.DeleteBatchContext(context.Background(), ids)
 }
 
-// DeleteBatchContext removes multiple documents with context support
+// DeleteBatchContext removes multiple documents with context support (logical deletion using DV)
 func (c *Collection) DeleteBatchContext(ctx context.Context, ids []string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -249,20 +249,22 @@ func (c *Collection) DeleteBatchContext(ctx context.Context, ids []string) error
 		default:
 		}
 
-		nodeID, exists := c.docToNode[id]
+		// Check if document exists
+		_, exists := c.docToNode[id]
 		if !exists {
 			continue // Skip non-existent documents
 		}
 
-		// Delete from storage
-		if err := c.storage.Delete(id); err != nil {
+		// Logical delete: Mark as deleted in Storage (DV)
+		// Note: nodeToDoc mapping is preserved for search filtering (delayed cleanup)
+		if err := c.storage.MarkDeleted(id); err != nil {
 			lastErr = err
 			continue // Continue with other deletions even if one fails
 		}
 
-		// Delete from index mapping
+		// Remove from docToNode (document is no longer accessible via ID)
+		// nodeToDoc is kept for search to filter out deleted nodes
 		delete(c.docToNode, id)
-		delete(c.nodeToDoc, nodeID)
 	}
 
 	return lastErr
@@ -295,7 +297,7 @@ func (c *Collection) Delete(id string) error {
 	return c.DeleteContext(context.Background(), id)
 }
 
-// DeleteContext removes a document from the collection with context support
+// DeleteContext removes a document from the collection with context support (logical deletion using DV)
 func (c *Collection) DeleteContext(ctx context.Context, id string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -307,33 +309,35 @@ func (c *Collection) DeleteContext(ctx context.Context, id string) error {
 	default:
 	}
 
-	nodeID, exists := c.docToNode[id]
+	// Check if document exists
+	_, exists := c.docToNode[id]
 	if !exists {
 		return wrapError("DeleteContext", c.name, id, ErrDocumentNotFound)
 	}
 
-	// Delete from storage
-	if err := c.storage.Delete(id); err != nil {
+	// Logical delete: Mark as deleted in Storage (DV)
+	// Note: nodeToDoc mapping is preserved for search filtering (delayed cleanup)
+	if err := c.storage.MarkDeleted(id); err != nil {
 		return wrapError("DeleteContext", c.name, id, err)
 	}
 
-	// Delete from index (soft delete - mark as deleted)
-	// Note: Full delete requires rebuilding index
+	// Remove from docToNode (document is no longer accessible via ID)
+	// nodeToDoc is kept for search to filter out deleted nodes
 	delete(c.docToNode, id)
-	delete(c.nodeToDoc, nodeID)
 
 	return nil
 }
 
-// Update updates a document's metadata and vector
-// WARNING: This creates a new node in the index. The old node remains (HNSW doesn't support delete).
-// For production use, consider: 1) Periodic index rebuild, 2) Or use Delete + Insert pattern
+// Update updates a document's metadata and vector using DV (logical delete + insert)
+// The old version is marked as deleted in DV, new version is inserted.
+// Note: HNSW old node is preserved (orphaned) until Compact rebuilds the index.
 // Deprecated: Use UpdateContext instead
 func (c *Collection) Update(doc *Document) error {
 	return c.UpdateContext(context.Background(), doc)
 }
 
-// UpdateContext updates a document with context support
+// UpdateContext updates a document with context support using DV
+// Critical ordering: Must MarkDeleted BEFORE Insert to use old RowIndex
 func (c *Collection) UpdateContext(ctx context.Context, doc *Document) error {
 	if err := doc.Validate(c.dimension); err != nil {
 		return err
@@ -353,22 +357,34 @@ func (c *Collection) UpdateContext(ctx context.Context, doc *Document) error {
 	if !exists {
 		return wrapError("UpdateContext", c.name, doc.ID, ErrDocumentNotFound)
 	}
+	_ = oldNodeID // Intentionally unused: preserved in nodeToDoc for concurrent search safety
 
-	// Update storage first
+	// ⚠️ CRITICAL ORDERING: MarkDeleted BEFORE Insert
+	// Reason: MarkDeleted uses the current docMeta.RowIndex (old value)
+	// If we Insert first, docMeta.RowIndex would be updated to new value
+	// causing the old version to NOT be marked as deleted
+	if err := c.storage.MarkDeleted(doc.ID); err != nil {
+		return wrapError("UpdateContext", c.name, doc.ID, err)
+	}
+
+	// Insert new version (creates new RowIndex and new node)
 	if err := c.storage.Put(doc); err != nil {
 		return wrapError("UpdateContext", c.name, doc.ID, err)
 	}
 
-	// Add new vector to index
+	// Add new vector to HNSW index
 	newNodeID, err := c.index.Add(doc.Vector)
 	if err != nil {
 		return wrapError("UpdateContext", c.name, doc.ID, err)
 	}
 
-	// Update mappings (old node becomes orphaned)
-	delete(c.nodeToDoc, oldNodeID)
+	// Update docToNode to point to new node
 	c.docToNode[doc.ID] = newNodeID
 	c.nodeToDoc[newNodeID] = doc.ID
+	// ⚠️ DELAYED CLEANUP: Keep nodeToDoc[oldNodeID]!
+	// Reason: Concurrent search may be using oldNodeID
+	// It will be filtered out by DV during search
+	// Full cleanup happens during Compact
 	doc.Timestamp = time.Now()
 
 	return nil
@@ -399,6 +415,7 @@ func (c *Collection) Search(query []float32, k int, opts ...SearchOption) ([]Sea
 }
 
 // SearchContext performs vector similarity search with context support
+// Filters out documents marked as deleted via DeletionVector (DV)
 func (c *Collection) SearchContext(ctx context.Context, query []float32, k int, opts ...SearchOption) ([]SearchResult, error) {
 	if len(query) != c.dimension {
 		return nil, wrapError("SearchContext", c.name, "", ErrDimensionMismatch)
@@ -421,8 +438,17 @@ func (c *Collection) SearchContext(ctx context.Context, query []float32, k int, 
 	default:
 	}
 
-	// Search HNSW index
-	hnswResults, err := c.index.Search(query, k, options.EF)
+	// Use SearchWithDV to search with deletion filtering
+	// This searches k*2 candidates to compensate for deleted documents
+	isDeleted := func(nodeID int) bool {
+		docID, exists := c.nodeToDoc[nodeID]
+		if !exists {
+			return true // Orphaned node (no mapping) - treat as deleted
+		}
+		return c.storage.IsDeleted(docID)
+	}
+
+	hnswResults, err := c.index.SearchWithDV(query, k, options.EF, isDeleted)
 	if err != nil {
 		return nil, wrapError("SearchContext", c.name, "", err)
 	}
@@ -440,7 +466,7 @@ func (c *Collection) SearchContext(ctx context.Context, query []float32, k int, 
 		docID, exists := c.nodeToDoc[hr.ID]
 		if !exists {
 			log.Printf("Warning: node %d has no document mapping (orphaned)", hr.ID)
-			continue // Skip deleted/orphaned nodes
+			continue // Skip orphaned nodes
 		}
 
 		doc, err := c.storage.Get(docID)
@@ -551,12 +577,14 @@ func (c *Collection) Count() int {
 
 // CollectionStats contains collection statistics
 type CollectionStats struct {
-	Name        string    // Collection name
-	Count       int       // Number of documents
-	Dimension   int       // Vector dimension
-	IndexNodes  int       // Total HNSW nodes (includes orphaned)
-	OrphanNodes int       // Orphaned nodes (from updates)
-	LastUpdate  time.Time // Last modification time
+	Name         string    // Collection name
+	Count        int       // Number of documents (active)
+	Dimension    int       // Vector dimension
+	IndexNodes   int       // Total HNSW nodes (includes orphaned)
+	OrphanNodes  int       // Orphaned nodes (from updates)
+	DeletedCount int       // Number of deleted documents (via DV)
+	DeletionRate float64   // Deletion rate (0.0 - 1.0)
+	LastUpdate   time.Time // Last modification time
 }
 
 // Stats returns collection statistics
@@ -572,13 +600,19 @@ func (c *Collection) Stats() CollectionStats {
 	totalIndexNodes := len(allNodes)
 	docCount := len(c.docToNode)
 
+	// Get deletion stats from storage
+	deletedCount, totalCount, deletionRate := c.storage.GetDeletionStats()
+	_ = totalCount // totalCount includes deleted docs, not used directly
+
 	return CollectionStats{
-		Name:        c.name,
-		Count:       docCount,
-		Dimension:   c.dimension,
-		IndexNodes:  totalIndexNodes,
-		OrphanNodes: 0, // Will need HNSW API to accurately count
-		LastUpdate:  time.Now(),
+		Name:         c.name,
+		Count:        docCount,
+		Dimension:    c.dimension,
+		IndexNodes:   totalIndexNodes,
+		OrphanNodes:  0, // Will need HNSW API to accurately count
+		DeletedCount: deletedCount,
+		DeletionRate: deletionRate,
+		LastUpdate:   time.Now(),
 	}
 }
 
