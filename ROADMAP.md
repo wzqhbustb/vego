@@ -189,21 +189,23 @@ Solidify the storage foundation, establish benchmarks, and ensure subsequent dev
 
 ---
 
-## Phase 2: MVP (Minimum Viable Product)
+## Phase 2: MVP (Minimum Viable Product) 🔄
 
 ### Goal
 Enable the system to handle real-world data with basic CRUD and query capabilities. Following Lance's design: separate vector storage (in-page) from multimodal storage (external), enable lazy loading for large objects.
 
 ### Key Tasks
 
-#### HNSW Index Hardening with Deletion Vector
-- **Deletion Vector Integration**: Replace physical deletion with logical deletion using DV
+#### HNSW Index Hardening with Deletion Vector ✅
+- **Deletion Vector Integration ✅**: Replace physical deletion with logical deletion using DV
   - HNSW nodes are marked deleted via DV, not removed from graph
   - Search results filtered by DV (O(1) check per result)
   - Background compaction reclaims space periodically
-- **Tombstone Mechanism**: Soft-delete for documents with grace period
-- **Orphan Prevention**: Update uses DV to mark old version, inserts new version
-- **Index Compaction**: Background rebuild removes DV-marked nodes and optimizes graph
+- **Tombstone Mechanism ⚠️**: Soft-delete for documents with grace period (basic implementation done, grace period not implemented)
+- **Orphan Prevention ✅**: Update uses DV to mark old version, inserts new version
+- **Index Compaction ✅**: Background rebuild removes DV-marked nodes and optimizes graph
+  - Blocking compaction implemented (auto-trigger + manual)
+  - Lightweight/background optimization for Phase 4+
   - **Implementation Strategy**: See [COMPACTION.md](COMPACTION.md) for detailed design of 9 compaction strategies
   - **Phase 2 (Current)**: Blocking compaction (simple, reliable)
     - Compact blocks all reads/writes during rebuild
@@ -212,13 +214,14 @@ Enable the system to handle real-world data with basic CRUD and query capabiliti
     - Enables zero-downtime compaction for online services
     - Higher engineering complexity (4-5x effort)
 
-#### I/O Scheduler Refactoring (Critical)
+#### I/O Scheduler Refactoring (Critical) ❌
 - **Problem**: Current 4x concurrency = 4x performance degradation
 - **Solution**: Implement Lance-style I/O scheduler with:
-  - **Request Coalescing**: Merge adjacent/small I/O requests
-  - **Priority Queue**: Row-number based priority for sequential scan optimization
-  - **Backpressure**: Limit in-flight I/O to prevent memory blowup
-  - **Per-file Scheduling**: Independent queues per file to avoid head-of-line blocking
+  - **Request Coalescing ❌**: Merge adjacent/small I/O requests
+  - **Priority Queue ❌**: Row-number based priority for sequential scan optimization
+  - **Backpressure ❌**: Limit in-flight I/O to prevent memory blowup
+  - **Per-file Scheduling ❌**: Independent queues per file to avoid head-of-line blocking
+- **Status**: Not implemented, postponed to Phase 3 or as standalone optimization
 - **API**:
   ```go
   type IOScheduler interface {
@@ -227,14 +230,15 @@ Enable the system to handle real-world data with basic CRUD and query capabiliti
   }
   ```
 
-#### Blob Storage Foundation (New)
+#### Blob Storage Foundation (New) ❌
 - **Goal**: Support multimodal data (images, videos, audio) following Lance Blob v2 design
 - **Storage Strategy** (3-tier, similar to Lance):
-  - **Inline**: < 64KB blobs stored directly in Page
-  - **Pack**: 64KB ~ 4MB blobs stored in `.pack` sidecar files (1GB max per file)
-  - **Dedicated**: > 4MB blobs stored in individual `.blob` files
+  - **Inline ❌**: < 64KB blobs stored directly in Page
+  - **Pack ❌**: 64KB ~ 4MB blobs stored in `.pack` sidecar files (1GB max per file)
+  - **Dedicated ❌**: > 4MB blobs stored in individual `.blob` files
 - **Descriptor Format**: `struct { kind uint8; position uint64; size uint64; fileID uint32 }`
 - **API Preview**:
+- **Status**: Not implemented, planned for Phase 3 or standalone feature module
   ```go
   type BlobStorage interface {
       Write(data []byte) (BlobDescriptor, error)
@@ -242,13 +246,13 @@ Enable the system to handle real-world data with basic CRUD and query capabiliti
   }
   ```
 
-#### Storage Engine Enhancements
-- **Accumulation Buffer**: Avoid small Pages (< 4KB)
-- **Basic Monitoring**: I/O count, cache hit rate, encoding latency
-- **Request Coalescing**: Merge adjacent I/O requests
-- **Table Abstraction Layer**: Higher-level API for users
-- **Manifest Basic Version**: File metadata management (foundation for Phase 5 MVCC)
-- **Column Pruning (Basic)**: Read only required columns
+#### Storage Engine Enhancements 🔄
+- **Accumulation Buffer 🔄**: Avoid small Pages (< 4KB) (Write Buffer partially implemented)
+- **Basic Monitoring ⚠️**: I/O count, cache hit rate, encoding latency (Stats interface partially implemented)
+- **Request Coalescing ❌**: Merge adjacent I/O requests (depends on I/O Scheduler)
+- **Table Abstraction Layer ⚠️**: Higher-level API for users (Collection API basic version available)
+- **Manifest Basic Version ❌**: File metadata management (foundation for Phase 5 MVCC)
+- **Column Pruning (Basic) ❌**: Read only required columns
 
 #### Performance Optimization
   - Async I/O memory overhead
@@ -260,14 +264,14 @@ Enable the system to handle real-world data with basic CRUD and query capabiliti
     ```
 
 ### Definition of Done
-- [ ] Single file 1GB vector data read/write without OOM
-- [ ] Repeated query performance improved 5x+ (cache hit)
-- [ ] Write 1M vectors (768-dim) < 30s
-- [ ] I/O Scheduler: 4x concurrency performance degradation < 20% (vs current 300%)
-- [ ] Delete operation uses Deletion Vector (no immediate index rebuild)
-- [ ] Update operation uses DV + Insert (no orphan nodes)
-- [ ] Blob Storage: Support inline (<64KB) and pack (64KB-4MB) storage
-- [ ] Index compaction reduces size after bulk deletes (>30% space reclaim)
+- [ ] Single file 1GB vector data read/write without OOM 🔄
+- [ ] Repeated query performance improved 5x+ (cache hit) 🔄
+- [ ] Write 1M vectors (768-dim) < 30s 🔄
+- [ ] I/O Scheduler: 4x concurrency performance degradation < 20% (vs current 300%) ❌
+- [x] **Delete operation uses Deletion Vector** ✅ (`MarkDeleted()` + DV implemented)
+- [x] **Update operation uses DV + Insert** ✅ (no orphan nodes)
+- [ ] Blob Storage: Support inline (<64KB) and pack (64KB-4MB) storage ❌
+- [x] **Index compaction reduces size after bulk deletes** ✅ (>30% space reclaim, `Compact()` implemented)
 
 ---
 
