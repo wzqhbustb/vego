@@ -31,6 +31,52 @@ type Collection struct {
 
 	mu     sync.RWMutex
 	config *Config
+
+	// Auto-compaction fields
+	compactStopCh    chan struct{}  // Signal to stop background compaction goroutine
+	compactTriggerCh chan struct{}  // Manual trigger channel
+	compactWg        sync.WaitGroup // Wait group for graceful shutdown
+	lastCompactTime  time.Time      // Last compaction timestamp
+	compacting       bool           // Whether compaction is in progress
+	compactMu        sync.RWMutex   // Protects compacting and lastCompactTime
+}
+
+// CompactState represents the state of compaction
+type CompactState int
+
+const (
+	CompactIdle CompactState = iota
+	CompactChecking
+	CompactCompacting
+	CompactCompleted
+	CompactFailed
+)
+
+// CompactStatus provides information about compaction status
+type CompactStatus struct {
+	State       CompactState  // Current state
+	Progress    float64       // Progress 0.0 - 1.0
+	Message     string        // Human-readable description
+	LastError   error         // Last error if failed
+	NextRunTime time.Time     // Estimated next run time
+}
+
+// String returns human-readable state name
+func (s CompactState) String() string {
+	switch s {
+	case CompactIdle:
+		return "Idle"
+	case CompactChecking:
+		return "Checking"
+	case CompactCompacting:
+		return "Compacting"
+	case CompactCompleted:
+		return "Completed"
+	case CompactFailed:
+		return "Failed"
+	default:
+		return "Unknown"
+	}
 }
 
 // NewCollection creates a new collection
@@ -40,12 +86,15 @@ func NewCollection(name, path string, config *Config) (*Collection, error) {
 	}
 
 	coll := &Collection{
-		name:      name,
-		path:      path,
-		dimension: config.Dimension,
-		docToNode: make(map[string]int),
-		nodeToDoc: make(map[int]string),
-		config:    config,
+		name:             name,
+		path:             path,
+		dimension:        config.Dimension,
+		docToNode:        make(map[string]int),
+		nodeToDoc:        make(map[int]string),
+		config:           config,
+		compactStopCh:    make(chan struct{}),
+		compactTriggerCh: make(chan struct{}, 1), // Buffered to avoid blocking
+		lastCompactTime:  time.Now(), // Initialize to prevent immediate max interval trigger
 	}
 
 	// Initialize HNSW index
@@ -70,6 +119,14 @@ func NewCollection(name, path string, config *Config) (*Collection, error) {
 	// Try to load existing data
 	if err := coll.load(); err != nil && !os.IsNotExist(err) {
 		return nil, wrapError("NewCollection", name, "", err)
+	}
+
+	// Start background auto-compaction if enabled
+	if config.AutoCompact {
+		coll.compactWg.Add(1)
+		go coll.compactLoop()
+		log.Printf("[Collection %s] Auto-compaction enabled (threshold: %.0f%%, interval: %ds)",
+			name, config.CompactThreshold*100, config.CompactMinInterval)
 	}
 
 	return coll, nil
@@ -228,7 +285,7 @@ func (c *Collection) DeleteBatch(ids []string) error {
 	return c.DeleteBatchContext(context.Background(), ids)
 }
 
-// DeleteBatchContext removes multiple documents with context support
+// DeleteBatchContext removes multiple documents with context support (logical deletion using DV)
 func (c *Collection) DeleteBatchContext(ctx context.Context, ids []string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -249,20 +306,22 @@ func (c *Collection) DeleteBatchContext(ctx context.Context, ids []string) error
 		default:
 		}
 
-		nodeID, exists := c.docToNode[id]
+		// Check if document exists
+		_, exists := c.docToNode[id]
 		if !exists {
 			continue // Skip non-existent documents
 		}
 
-		// Delete from storage
-		if err := c.storage.Delete(id); err != nil {
+		// Logical delete: Mark as deleted in Storage (DV)
+		// Note: nodeToDoc mapping is preserved for search filtering (delayed cleanup)
+		if err := c.storage.MarkDeleted(id); err != nil {
 			lastErr = err
 			continue // Continue with other deletions even if one fails
 		}
 
-		// Delete from index mapping
+		// Remove from docToNode (document is no longer accessible via ID)
+		// nodeToDoc is kept for search to filter out deleted nodes
 		delete(c.docToNode, id)
-		delete(c.nodeToDoc, nodeID)
 	}
 
 	return lastErr
@@ -295,7 +354,7 @@ func (c *Collection) Delete(id string) error {
 	return c.DeleteContext(context.Background(), id)
 }
 
-// DeleteContext removes a document from the collection with context support
+// DeleteContext removes a document from the collection with context support (logical deletion using DV)
 func (c *Collection) DeleteContext(ctx context.Context, id string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -307,33 +366,35 @@ func (c *Collection) DeleteContext(ctx context.Context, id string) error {
 	default:
 	}
 
-	nodeID, exists := c.docToNode[id]
+	// Check if document exists
+	_, exists := c.docToNode[id]
 	if !exists {
 		return wrapError("DeleteContext", c.name, id, ErrDocumentNotFound)
 	}
 
-	// Delete from storage
-	if err := c.storage.Delete(id); err != nil {
+	// Logical delete: Mark as deleted in Storage (DV)
+	// Note: nodeToDoc mapping is preserved for search filtering (delayed cleanup)
+	if err := c.storage.MarkDeleted(id); err != nil {
 		return wrapError("DeleteContext", c.name, id, err)
 	}
 
-	// Delete from index (soft delete - mark as deleted)
-	// Note: Full delete requires rebuilding index
+	// Remove from docToNode (document is no longer accessible via ID)
+	// nodeToDoc is kept for search to filter out deleted nodes
 	delete(c.docToNode, id)
-	delete(c.nodeToDoc, nodeID)
 
 	return nil
 }
 
-// Update updates a document's metadata and vector
-// WARNING: This creates a new node in the index. The old node remains (HNSW doesn't support delete).
-// For production use, consider: 1) Periodic index rebuild, 2) Or use Delete + Insert pattern
+// Update updates a document's metadata and vector using DV (logical delete + insert)
+// The old version is marked as deleted in DV, new version is inserted.
+// Note: HNSW old node is preserved (orphaned) until Compact rebuilds the index.
 // Deprecated: Use UpdateContext instead
 func (c *Collection) Update(doc *Document) error {
 	return c.UpdateContext(context.Background(), doc)
 }
 
-// UpdateContext updates a document with context support
+// UpdateContext updates a document with context support using DV
+// Critical ordering: Must MarkDeleted BEFORE Insert to use old RowIndex
 func (c *Collection) UpdateContext(ctx context.Context, doc *Document) error {
 	if err := doc.Validate(c.dimension); err != nil {
 		return err
@@ -353,22 +414,34 @@ func (c *Collection) UpdateContext(ctx context.Context, doc *Document) error {
 	if !exists {
 		return wrapError("UpdateContext", c.name, doc.ID, ErrDocumentNotFound)
 	}
+	_ = oldNodeID // Intentionally unused: preserved in nodeToDoc for concurrent search safety
 
-	// Update storage first
+	// ⚠️ CRITICAL ORDERING: MarkDeleted BEFORE Insert
+	// Reason: MarkDeleted uses the current docMeta.RowIndex (old value)
+	// If we Insert first, docMeta.RowIndex would be updated to new value
+	// causing the old version to NOT be marked as deleted
+	if err := c.storage.MarkDeleted(doc.ID); err != nil {
+		return wrapError("UpdateContext", c.name, doc.ID, err)
+	}
+
+	// Insert new version (creates new RowIndex and new node)
 	if err := c.storage.Put(doc); err != nil {
 		return wrapError("UpdateContext", c.name, doc.ID, err)
 	}
 
-	// Add new vector to index
+	// Add new vector to HNSW index
 	newNodeID, err := c.index.Add(doc.Vector)
 	if err != nil {
 		return wrapError("UpdateContext", c.name, doc.ID, err)
 	}
 
-	// Update mappings (old node becomes orphaned)
-	delete(c.nodeToDoc, oldNodeID)
+	// Update docToNode to point to new node
 	c.docToNode[doc.ID] = newNodeID
 	c.nodeToDoc[newNodeID] = doc.ID
+	// ⚠️ DELAYED CLEANUP: Keep nodeToDoc[oldNodeID]!
+	// Reason: Concurrent search may be using oldNodeID
+	// It will be filtered out by DV during search
+	// Full cleanup happens during Compact
 	doc.Timestamp = time.Now()
 
 	return nil
@@ -399,6 +472,7 @@ func (c *Collection) Search(query []float32, k int, opts ...SearchOption) ([]Sea
 }
 
 // SearchContext performs vector similarity search with context support
+// Filters out documents marked as deleted via DeletionVector (DV)
 func (c *Collection) SearchContext(ctx context.Context, query []float32, k int, opts ...SearchOption) ([]SearchResult, error) {
 	if len(query) != c.dimension {
 		return nil, wrapError("SearchContext", c.name, "", ErrDimensionMismatch)
@@ -421,8 +495,17 @@ func (c *Collection) SearchContext(ctx context.Context, query []float32, k int, 
 	default:
 	}
 
-	// Search HNSW index
-	hnswResults, err := c.index.Search(query, k, options.EF)
+	// Use SearchWithDV to search with deletion filtering
+	// This searches k*2 candidates to compensate for deleted documents
+	isDeleted := func(nodeID int) bool {
+		docID, exists := c.nodeToDoc[nodeID]
+		if !exists {
+			return true // Orphaned node (no mapping) - treat as deleted
+		}
+		return c.storage.IsDeleted(docID)
+	}
+
+	hnswResults, err := c.index.SearchWithDV(query, k, options.EF, isDeleted)
 	if err != nil {
 		return nil, wrapError("SearchContext", c.name, "", err)
 	}
@@ -440,7 +523,7 @@ func (c *Collection) SearchContext(ctx context.Context, query []float32, k int, 
 		docID, exists := c.nodeToDoc[hr.ID]
 		if !exists {
 			log.Printf("Warning: node %d has no document mapping (orphaned)", hr.ID)
-			continue // Skip deleted/orphaned nodes
+			continue // Skip orphaned nodes
 		}
 
 		doc, err := c.storage.Get(docID)
@@ -551,12 +634,14 @@ func (c *Collection) Count() int {
 
 // CollectionStats contains collection statistics
 type CollectionStats struct {
-	Name        string    // Collection name
-	Count       int       // Number of documents
-	Dimension   int       // Vector dimension
-	IndexNodes  int       // Total HNSW nodes (includes orphaned)
-	OrphanNodes int       // Orphaned nodes (from updates)
-	LastUpdate  time.Time // Last modification time
+	Name         string    // Collection name
+	Count        int       // Number of documents (active)
+	Dimension    int       // Vector dimension
+	IndexNodes   int       // Total HNSW nodes (includes orphaned)
+	OrphanNodes  int       // Orphaned nodes (from updates)
+	DeletedCount int       // Number of deleted documents (via DV)
+	DeletionRate float64   // Deletion rate (0.0 - 1.0)
+	LastUpdate   time.Time // Last modification time
 }
 
 // Stats returns collection statistics
@@ -572,13 +657,223 @@ func (c *Collection) Stats() CollectionStats {
 	totalIndexNodes := len(allNodes)
 	docCount := len(c.docToNode)
 
+	// Get deletion stats from storage
+	deletedCount, totalCount, deletionRate := c.storage.GetDeletionStats()
+	_ = totalCount // totalCount includes deleted docs, not used directly
+
 	return CollectionStats{
-		Name:        c.name,
-		Count:       docCount,
-		Dimension:   c.dimension,
-		IndexNodes:  totalIndexNodes,
-		OrphanNodes: 0, // Will need HNSW API to accurately count
-		LastUpdate:  time.Now(),
+		Name:         c.name,
+		Count:        docCount,
+		Dimension:    c.dimension,
+		IndexNodes:   totalIndexNodes,
+		OrphanNodes:  0, // Will need HNSW API to accurately count
+		DeletedCount: deletedCount,
+		DeletionRate: deletionRate,
+		LastUpdate:   time.Now(),
+	}
+}
+
+// Compact rebuilds the collection by removing deleted documents and optimizing storage.
+// This is a blocking operation that will lock the collection during execution.
+//
+// The compaction process:
+// 1. Retrieves all valid (non-deleted) documents from storage
+// 2. Rebuilds the HNSW index with only valid documents
+// 3. Rewrites the storage file to remove deleted rows
+// 4. Clears the deletion vector
+// 5. Rebuilds document-to-node mappings
+//
+// Note: This operation blocks all reads and writes during execution.
+// For large collections, consider running this during maintenance windows.
+func (c *Collection) Compact() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Step 1: Get all valid documents (not marked as deleted)
+	validDocs, err := c.storage.GetAllValidDocuments()
+	if err != nil {
+		return wrapError("Compact", c.name, "", fmt.Errorf("get valid documents: %w", err))
+	}
+
+	// Step 2: Create new HNSW index with only valid documents
+	newIndex := hnsw.NewHNSW(hnsw.Config{
+		Dimension:      c.dimension,
+		M:              c.config.M,
+		EfConstruction: c.config.EfConstruction,
+		DistanceFunc:   c.config.DistanceFunc,
+		Adaptive:       c.config.Adaptive,
+		ExpectedSize:   len(validDocs),
+	})
+
+	// Build new mappings
+	newDocToNode := make(map[string]int)
+	newNodeToDoc := make(map[int]string)
+
+	for _, doc := range validDocs {
+		nodeID, err := newIndex.Add(doc.Vector)
+		if err != nil {
+			return wrapError("Compact", c.name, doc.ID, fmt.Errorf("add to index: %w", err))
+		}
+		newDocToNode[doc.ID] = nodeID
+		newNodeToDoc[nodeID] = doc.ID
+	}
+
+	// Step 3: Rewrite storage (remove deleted rows)
+	if err := c.storage.Rewrite(validDocs); err != nil {
+		return wrapError("Compact", c.name, "", fmt.Errorf("rewrite storage: %w", err))
+	}
+
+	// Step 4: Clear deletion vector (deleted rows are now physically removed)
+	c.storage.ClearDeletionVector()
+
+	// Step 5: Atomic replacement of index and mappings
+	c.index = newIndex
+	c.docToNode = newDocToNode
+	c.nodeToDoc = newNodeToDoc
+
+	return nil
+}
+
+// compactLoop is the background goroutine for auto-compaction
+func (c *Collection) compactLoop() {
+	defer c.compactWg.Done()
+
+	// Initial delay before first check (10 seconds after startup)
+	select {
+	case <-time.After(10 * time.Second):
+	case <-c.compactStopCh:
+		return
+	}
+
+	ticker := time.NewTicker(30 * time.Second) // Check every 30 seconds
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if should, reason := c.shouldAutoCompact(); should {
+				c.doAutoCompact(reason)
+			}
+
+		case <-c.compactTriggerCh:
+			// Manual trigger
+			c.doAutoCompact("manual trigger")
+
+		case <-c.compactStopCh:
+			return
+		}
+	}
+}
+
+// shouldAutoCompact checks if compaction should be triggered
+func (c *Collection) shouldAutoCompact() (bool, string) {
+	c.compactMu.RLock()
+	defer c.compactMu.RUnlock()
+
+	// Check if auto-compact is enabled
+	if !c.config.AutoCompact {
+		return false, "auto-compact disabled"
+	}
+
+	// Check if already compacting
+	if c.compacting {
+		return false, "already compacting"
+	}
+
+	// Check minimum interval
+	minInterval := time.Duration(c.config.CompactMinInterval) * time.Second
+	if time.Since(c.lastCompactTime) < minInterval {
+		return false, "too frequent"
+	}
+
+	// Check maximum interval (force compact if exceeded)
+	if c.config.CompactMaxInterval > 0 {
+		maxInterval := time.Duration(c.config.CompactMaxInterval) * time.Second
+		if time.Since(c.lastCompactTime) > maxInterval {
+			return true, fmt.Sprintf("max interval reached (%.1fh > %.1fh)",
+				time.Since(c.lastCompactTime).Hours(), maxInterval.Hours())
+		}
+	}
+
+	// Check deletion rate
+	stats := c.Stats()
+	if stats.DeletionRate >= c.config.CompactThreshold {
+		return true, fmt.Sprintf("deletion rate %.2f%% >= %.2f%%",
+			stats.DeletionRate*100, c.config.CompactThreshold*100)
+	}
+
+	return false, "no condition met"
+}
+
+// doAutoCompact performs the actual compaction with double-check to prevent concurrent execution.
+func (c *Collection) doAutoCompact(reason string) {
+	// Double-check with write lock to prevent race condition where multiple
+	// goroutines pass shouldAutoCompact() before any sets compacting=true
+	c.compactMu.Lock()
+	if c.compacting {
+		c.compactMu.Unlock()
+		log.Printf("[Collection %s] Auto-compaction skipped: already in progress", c.name)
+		return
+	}
+	c.compacting = true
+	c.compactMu.Unlock()
+
+	log.Printf("[Collection %s] Auto-compaction started: %s", c.name, reason)
+	start := time.Now()
+
+	err := c.Compact()
+
+	c.compactMu.Lock()
+	c.compacting = false
+	c.lastCompactTime = time.Now()
+	c.compactMu.Unlock()
+
+	if err != nil {
+		log.Printf("[Collection %s] Auto-compaction failed: %v", c.name, err)
+	} else {
+		log.Printf("[Collection %s] Auto-compaction completed in %v", c.name, time.Since(start))
+	}
+}
+
+// GetCompactStatus returns the current compaction status
+func (c *Collection) GetCompactStatus() CompactStatus {
+	c.compactMu.RLock()
+	defer c.compactMu.RUnlock()
+
+	if !c.config.AutoCompact {
+		return CompactStatus{
+			State:   CompactIdle,
+			Message: "Auto-compaction disabled",
+		}
+	}
+
+	if c.compacting {
+		return CompactStatus{
+			State:    CompactCompacting,
+			Message:  "Compaction in progress",
+			Progress: 0.5, // Approximate
+		}
+	}
+
+	nextRun := c.lastCompactTime.Add(time.Duration(c.config.CompactMinInterval) * time.Second)
+	return CompactStatus{
+		State:       CompactIdle,
+		Message:     "Waiting for next check",
+		NextRunTime: nextRun,
+	}
+}
+
+// TriggerCompact manually triggers a compaction if not already running
+func (c *Collection) TriggerCompact() error {
+	if !c.config.AutoCompact {
+		return fmt.Errorf("auto-compaction is disabled")
+	}
+
+	select {
+	case c.compactTriggerCh <- struct{}{}:
+		return nil
+	default:
+		return fmt.Errorf("compact trigger channel full, try again later")
 	}
 }
 
@@ -609,6 +904,25 @@ func (c *Collection) Save() error {
 
 // Close closes the collection
 func (c *Collection) Close() error {
+	// Stop background auto-compaction if enabled
+	if c.config.AutoCompact {
+		close(c.compactStopCh)
+		
+		// Wait for compaction to finish with timeout
+		done := make(chan struct{})
+		go func() {
+			c.compactWg.Wait()
+			close(done)
+		}()
+		
+		select {
+		case <-done:
+			// Gracefully stopped
+		case <-time.After(30 * time.Second):
+			log.Printf("[Collection %s] Warning: Auto-compaction did not stop in time", c.name)
+		}
+	}
+
 	// Auto-save on close
 	if err := c.Save(); err != nil {
 		return err
