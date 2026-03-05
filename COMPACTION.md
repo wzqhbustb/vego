@@ -574,6 +574,296 @@ func (s *DocumentStorage) Compact() {
 - 支持自定义 Compaction 实现
 - 针对特定场景的高级优化
 
+#### Phase 4: 后台异步自动触发（高级优化）
+
+在 Phase 1-3 的基础上，实现真正的**零人工干预**自动 Compaction。
+
+##### 架构设计
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Collection                               │
+├─────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
+│  │   写入操作   │  │   读取操作   │  │   后台 Compact     │  │
+│  │  (Insert/   │  │  (Get/      │  │      协程          │  │
+│  │   Update/    │  │   Search)   │  │                    │  │
+│  │   Delete)    │  │             │  │  ┌──────────────┐  │  │
+│  └──────┬──────┘  └──────┬──────┘  │  │  1. 监控删除率  │  │  │
+│         │                │          │  │  2. 检查间隔   │  │  │
+│         ▼                ▼          │  │  3. 触发 Compact│  │  │
+│  ┌─────────────────────────────┐   │  │  4. 进度通知   │  │  │
+│  │      当前活跃索引            │   │  └──────────────┘  │  │
+│  │      (HNSWIndex)            │   │         │          │  │
+│  └─────────────────────────────┘   │         ▼          │  │
+│                                    │  ┌──────────────┐  │  │
+│  ┌─────────────────────────────┐   │  │   任务队列    │  │  │
+│  │   Compact 状态通道           │◄──┘  │  (Channel)   │  │  │
+│  │  (用于通知前台当前状态)       │      └──────────────┘  │  │
+│  └─────────────────────────────┘                         │  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+##### 核心组件
+
+**1. 自动触发器（AutoCompactor）**
+
+```go
+type AutoCompactor struct {
+    collection    *Collection
+    config        *CompactionConfig
+    
+    // 控制
+    stopCh        chan struct{}      // 停止信号
+    triggerCh     chan struct{}      // 手动触发通道
+    statusCh      chan CompactStatus // 状态通知
+    
+    // 状态
+    lastCompactTime time.Time
+    compacting      bool
+    mu              sync.RWMutex
+}
+
+type CompactStatus struct {
+    State       CompactState  // Idle, Checking, Compacting, Completed, Failed
+    Progress    float64       // 0.0 - 1.0
+    Message     string        // 描述信息
+    LastError   error         // 上次错误
+    NextRunTime time.Time     // 下次运行时间
+}
+
+type CompactState int
+
+const (
+    CompactIdle CompactState = iota
+    CompactChecking      // 检查条件
+    CompactCompacting    // 正在压缩
+    CompactCompleted     // 完成
+    CompactFailed        // 失败
+)
+```
+
+**2. 触发条件检查**
+
+```go
+func (ac *AutoCompactor) shouldCompact() (bool, string) {
+    ac.mu.RLock()
+    defer ac.mu.RUnlock()
+    
+    // 条件1: 自动压缩关闭
+    if !ac.config.AutoCompact {
+        return false, "auto-compact disabled"
+    }
+    
+    // 条件2: 正在压缩中
+    if ac.compacting {
+        return false, "already compacting"
+    }
+    
+    // 条件3: 最小间隔检查
+    if time.Since(ac.lastCompactTime) < ac.config.MinInterval {
+        return false, "too frequent"
+    }
+    
+    // 条件4: 最大间隔检查（强制压缩）
+    if time.Since(ac.lastCompactTime) > ac.config.MaxInterval {
+        return true, "max interval reached"
+    }
+    
+    // 条件5: 删除率阈值
+    stats := ac.collection.Stats()
+    if stats.DeletionRate >= ac.config.CompactThreshold {
+        return true, fmt.Sprintf("deletion rate %.2f >= %.2f", 
+            stats.DeletionRate, ac.config.CompactThreshold)
+    }
+    
+    return false, "no condition met"
+}
+```
+
+**3. 后台执行循环**
+
+```go
+func (ac *AutoCompactor) Run() {
+    ticker := time.NewTicker(ac.config.CheckInterval) // 默认 30 秒检查一次
+    defer ticker.Stop()
+    
+    for {
+        select {
+        case <-ac.stopCh:
+            return // 停止
+            
+        case <-ticker.C:
+            // 定期检查
+            if should, reason := ac.shouldCompact(); should {
+                ac.doCompact(reason)
+            }
+            
+        case <-ac.triggerCh:
+            // 手动触发
+            ac.doCompact("manual trigger")
+        }
+    }
+}
+
+func (ac *AutoCompactor) doCompact(reason string) {
+    ac.mu.Lock()
+    ac.compacting = true
+    ac.mu.Unlock()
+    
+    // 发送开始状态
+    ac.statusCh <- CompactStatus{
+        State:    CompactCompacting,
+        Message:  fmt.Sprintf("Starting compact: %s", reason),
+        Progress: 0.0,
+    }
+    
+    // 执行压缩
+    err := ac.collection.Compact()
+    
+    // 更新状态
+    ac.mu.Lock()
+    ac.compacting = false
+    ac.lastCompactTime = time.Now()
+    ac.mu.Unlock()
+    
+    // 发送完成状态
+    if err != nil {
+        ac.statusCh <- CompactStatus{
+            State:     CompactFailed,
+            Message:   fmt.Sprintf("Compact failed: %v", err),
+            LastError: err,
+        }
+    } else {
+        ac.statusCh <- CompactStatus{
+            State:       CompactCompleted,
+            Message:     "Compact completed successfully",
+            Progress:    1.0,
+            NextRunTime: ac.lastCompactTime.Add(ac.config.MinInterval),
+        }
+    }
+}
+```
+
+**4. 与 Collection 集成**
+
+```go
+type Collection struct {
+    // ... 现有字段 ...
+    
+    autoCompactor *AutoCompactor  // 可选，nil 表示不启用自动压缩
+}
+
+func NewCollection(name, path string, config *Config) (*Collection, error) {
+    // ... 创建 Collection ...
+    
+    // 初始化自动压缩器
+    if config.AutoCompact {
+        coll.autoCompactor = &AutoCompactor{
+            collection: coll,
+            config:     config,
+            stopCh:     make(chan struct{}),
+            triggerCh:  make(chan struct{}),
+            statusCh:   make(chan CompactStatus, 10),
+        }
+        go coll.autoCompactor.Run()
+    }
+    
+    return coll, nil
+}
+
+func (c *Collection) Close() error {
+    // 停止自动压缩器
+    if c.autoCompactor != nil {
+        close(c.autoCompactor.stopCh)
+        // 等待当前 Compact 完成（带超时）
+        select {
+        case <-c.autoCompactor.waitDone():
+        case <-time.After(30 * time.Second):
+            log.Println("Warning: AutoCompactor did not stop in time")
+        }
+    }
+    
+    return c.saveAndCleanup()
+}
+
+// 公开 API：获取 Compact 状态
+func (c *Collection) CompactStatus() CompactStatus {
+    if c.autoCompactor == nil {
+        return CompactStatus{State: CompactIdle, Message: "Auto-compact disabled"}
+    }
+    return c.autoCompactor.CurrentStatus()
+}
+
+// 公开 API：手动触发
+func (c *Collection) TriggerCompact() error {
+    if c.autoCompactor == nil {
+        return errors.New("auto-compact not enabled")
+    }
+    select {
+    case c.autoCompactor.triggerCh <- struct{}{}:
+        return nil
+    default:
+        return errors.New("trigger channel full, try later")
+    }
+}
+```
+
+##### 使用示例
+
+```go
+// 启用自动压缩
+coll, err := db.Collection("docs", 
+    vego.WithAutoCompact(true),
+    vego.WithCompactThreshold(0.3),
+    vego.WithCompactMinInterval(5*time.Minute),
+)
+
+// 查询压缩状态
+status := coll.CompactStatus()
+fmt.Printf("Compact state: %s, progress: %.1f%%\n", 
+    status.State, status.Progress*100)
+
+// 手动触发（如果需要立即压缩）
+if err := coll.TriggerCompact(); err != nil {
+    log.Printf("Trigger compact failed: %v", err)
+}
+```
+
+##### 优点
+- **真正的自动化**：无需人工干预，后台自动维护
+- **可观测性**：状态通道提供实时进度和通知
+- **可控性**：支持手动触发、配置调整、优雅停止
+- **非侵入性**：不影响现有读写操作（基于 Phase 1 阻塞式）
+
+##### 缺点
+- **实现复杂**：需要管理 goroutine 生命周期、状态机、并发安全
+- **资源竞争**：后台 Compact 仍会与前台操作竞争资源
+- **调试困难**：异步问题难以复现和调试
+- **测试复杂**：需要模拟时间、并发触发、优雅关闭等场景
+
+##### 适用场景
+- 长期运行的在线服务
+- 运维人力有限的场景
+- 需要"设置后忘记"的简单运维
+
+##### 实现时机建议
+
+**Phase 4.1（Week 7+）**：基础版本
+- 简单的定时检查 + 条件触发
+- 基础状态通知
+- 单 Collection 独立运行
+
+**Phase 4.2（Week 8+）**：增强版本
+- 支持跨 Collection 资源协调
+- 添加 Prometheus 指标导出
+- Web UI 查看 Compact 状态
+
+**Phase 4.3（Week 9+）**：智能版本
+- 基于负载的动态调整
+- 预测性 Compact（在高峰期前完成）
+- 与集群调度器集成
+
 ### 配置建议
 
 ```go

@@ -31,6 +31,52 @@ type Collection struct {
 
 	mu     sync.RWMutex
 	config *Config
+
+	// Auto-compaction fields
+	compactStopCh    chan struct{}  // Signal to stop background compaction goroutine
+	compactTriggerCh chan struct{}  // Manual trigger channel
+	compactWg        sync.WaitGroup // Wait group for graceful shutdown
+	lastCompactTime  time.Time      // Last compaction timestamp
+	compacting       bool           // Whether compaction is in progress
+	compactMu        sync.RWMutex   // Protects compacting and lastCompactTime
+}
+
+// CompactState represents the state of compaction
+type CompactState int
+
+const (
+	CompactIdle CompactState = iota
+	CompactChecking
+	CompactCompacting
+	CompactCompleted
+	CompactFailed
+)
+
+// CompactStatus provides information about compaction status
+type CompactStatus struct {
+	State       CompactState  // Current state
+	Progress    float64       // Progress 0.0 - 1.0
+	Message     string        // Human-readable description
+	LastError   error         // Last error if failed
+	NextRunTime time.Time     // Estimated next run time
+}
+
+// String returns human-readable state name
+func (s CompactState) String() string {
+	switch s {
+	case CompactIdle:
+		return "Idle"
+	case CompactChecking:
+		return "Checking"
+	case CompactCompacting:
+		return "Compacting"
+	case CompactCompleted:
+		return "Completed"
+	case CompactFailed:
+		return "Failed"
+	default:
+		return "Unknown"
+	}
 }
 
 // NewCollection creates a new collection
@@ -40,12 +86,15 @@ func NewCollection(name, path string, config *Config) (*Collection, error) {
 	}
 
 	coll := &Collection{
-		name:      name,
-		path:      path,
-		dimension: config.Dimension,
-		docToNode: make(map[string]int),
-		nodeToDoc: make(map[int]string),
-		config:    config,
+		name:             name,
+		path:             path,
+		dimension:        config.Dimension,
+		docToNode:        make(map[string]int),
+		nodeToDoc:        make(map[int]string),
+		config:           config,
+		compactStopCh:    make(chan struct{}),
+		compactTriggerCh: make(chan struct{}, 1), // Buffered to avoid blocking
+		lastCompactTime:  time.Now(), // Initialize to prevent immediate max interval trigger
 	}
 
 	// Initialize HNSW index
@@ -70,6 +119,14 @@ func NewCollection(name, path string, config *Config) (*Collection, error) {
 	// Try to load existing data
 	if err := coll.load(); err != nil && !os.IsNotExist(err) {
 		return nil, wrapError("NewCollection", name, "", err)
+	}
+
+	// Start background auto-compaction if enabled
+	if config.AutoCompact {
+		coll.compactWg.Add(1)
+		go coll.compactLoop()
+		log.Printf("[Collection %s] Auto-compaction enabled (threshold: %.0f%%, interval: %ds)",
+			name, config.CompactThreshold*100, config.CompactMinInterval)
 	}
 
 	return coll, nil
@@ -616,6 +673,210 @@ func (c *Collection) Stats() CollectionStats {
 	}
 }
 
+// Compact rebuilds the collection by removing deleted documents and optimizing storage.
+// This is a blocking operation that will lock the collection during execution.
+//
+// The compaction process:
+// 1. Retrieves all valid (non-deleted) documents from storage
+// 2. Rebuilds the HNSW index with only valid documents
+// 3. Rewrites the storage file to remove deleted rows
+// 4. Clears the deletion vector
+// 5. Rebuilds document-to-node mappings
+//
+// Note: This operation blocks all reads and writes during execution.
+// For large collections, consider running this during maintenance windows.
+func (c *Collection) Compact() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Step 1: Get all valid documents (not marked as deleted)
+	validDocs, err := c.storage.GetAllValidDocuments()
+	if err != nil {
+		return wrapError("Compact", c.name, "", fmt.Errorf("get valid documents: %w", err))
+	}
+
+	// Step 2: Create new HNSW index with only valid documents
+	newIndex := hnsw.NewHNSW(hnsw.Config{
+		Dimension:      c.dimension,
+		M:              c.config.M,
+		EfConstruction: c.config.EfConstruction,
+		DistanceFunc:   c.config.DistanceFunc,
+		Adaptive:       c.config.Adaptive,
+		ExpectedSize:   len(validDocs),
+	})
+
+	// Build new mappings
+	newDocToNode := make(map[string]int)
+	newNodeToDoc := make(map[int]string)
+
+	for _, doc := range validDocs {
+		nodeID, err := newIndex.Add(doc.Vector)
+		if err != nil {
+			return wrapError("Compact", c.name, doc.ID, fmt.Errorf("add to index: %w", err))
+		}
+		newDocToNode[doc.ID] = nodeID
+		newNodeToDoc[nodeID] = doc.ID
+	}
+
+	// Step 3: Rewrite storage (remove deleted rows)
+	if err := c.storage.Rewrite(validDocs); err != nil {
+		return wrapError("Compact", c.name, "", fmt.Errorf("rewrite storage: %w", err))
+	}
+
+	// Step 4: Clear deletion vector (deleted rows are now physically removed)
+	c.storage.ClearDeletionVector()
+
+	// Step 5: Atomic replacement of index and mappings
+	c.index = newIndex
+	c.docToNode = newDocToNode
+	c.nodeToDoc = newNodeToDoc
+
+	return nil
+}
+
+// compactLoop is the background goroutine for auto-compaction
+func (c *Collection) compactLoop() {
+	defer c.compactWg.Done()
+
+	// Initial delay before first check (10 seconds after startup)
+	select {
+	case <-time.After(10 * time.Second):
+	case <-c.compactStopCh:
+		return
+	}
+
+	ticker := time.NewTicker(30 * time.Second) // Check every 30 seconds
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if should, reason := c.shouldAutoCompact(); should {
+				c.doAutoCompact(reason)
+			}
+
+		case <-c.compactTriggerCh:
+			// Manual trigger
+			c.doAutoCompact("manual trigger")
+
+		case <-c.compactStopCh:
+			return
+		}
+	}
+}
+
+// shouldAutoCompact checks if compaction should be triggered
+func (c *Collection) shouldAutoCompact() (bool, string) {
+	c.compactMu.RLock()
+	defer c.compactMu.RUnlock()
+
+	// Check if auto-compact is enabled
+	if !c.config.AutoCompact {
+		return false, "auto-compact disabled"
+	}
+
+	// Check if already compacting
+	if c.compacting {
+		return false, "already compacting"
+	}
+
+	// Check minimum interval
+	minInterval := time.Duration(c.config.CompactMinInterval) * time.Second
+	if time.Since(c.lastCompactTime) < minInterval {
+		return false, "too frequent"
+	}
+
+	// Check maximum interval (force compact if exceeded)
+	if c.config.CompactMaxInterval > 0 {
+		maxInterval := time.Duration(c.config.CompactMaxInterval) * time.Second
+		if time.Since(c.lastCompactTime) > maxInterval {
+			return true, fmt.Sprintf("max interval reached (%.1fh > %.1fh)",
+				time.Since(c.lastCompactTime).Hours(), maxInterval.Hours())
+		}
+	}
+
+	// Check deletion rate
+	stats := c.Stats()
+	if stats.DeletionRate >= c.config.CompactThreshold {
+		return true, fmt.Sprintf("deletion rate %.2f%% >= %.2f%%",
+			stats.DeletionRate*100, c.config.CompactThreshold*100)
+	}
+
+	return false, "no condition met"
+}
+
+// doAutoCompact performs the actual compaction with double-check to prevent concurrent execution.
+func (c *Collection) doAutoCompact(reason string) {
+	// Double-check with write lock to prevent race condition where multiple
+	// goroutines pass shouldAutoCompact() before any sets compacting=true
+	c.compactMu.Lock()
+	if c.compacting {
+		c.compactMu.Unlock()
+		log.Printf("[Collection %s] Auto-compaction skipped: already in progress", c.name)
+		return
+	}
+	c.compacting = true
+	c.compactMu.Unlock()
+
+	log.Printf("[Collection %s] Auto-compaction started: %s", c.name, reason)
+	start := time.Now()
+
+	err := c.Compact()
+
+	c.compactMu.Lock()
+	c.compacting = false
+	c.lastCompactTime = time.Now()
+	c.compactMu.Unlock()
+
+	if err != nil {
+		log.Printf("[Collection %s] Auto-compaction failed: %v", c.name, err)
+	} else {
+		log.Printf("[Collection %s] Auto-compaction completed in %v", c.name, time.Since(start))
+	}
+}
+
+// GetCompactStatus returns the current compaction status
+func (c *Collection) GetCompactStatus() CompactStatus {
+	c.compactMu.RLock()
+	defer c.compactMu.RUnlock()
+
+	if !c.config.AutoCompact {
+		return CompactStatus{
+			State:   CompactIdle,
+			Message: "Auto-compaction disabled",
+		}
+	}
+
+	if c.compacting {
+		return CompactStatus{
+			State:    CompactCompacting,
+			Message:  "Compaction in progress",
+			Progress: 0.5, // Approximate
+		}
+	}
+
+	nextRun := c.lastCompactTime.Add(time.Duration(c.config.CompactMinInterval) * time.Second)
+	return CompactStatus{
+		State:       CompactIdle,
+		Message:     "Waiting for next check",
+		NextRunTime: nextRun,
+	}
+}
+
+// TriggerCompact manually triggers a compaction if not already running
+func (c *Collection) TriggerCompact() error {
+	if !c.config.AutoCompact {
+		return fmt.Errorf("auto-compaction is disabled")
+	}
+
+	select {
+	case c.compactTriggerCh <- struct{}{}:
+		return nil
+	default:
+		return fmt.Errorf("compact trigger channel full, try again later")
+	}
+}
+
 // Save persists collection to disk
 func (c *Collection) Save() error {
 	c.mu.Lock()
@@ -643,6 +904,25 @@ func (c *Collection) Save() error {
 
 // Close closes the collection
 func (c *Collection) Close() error {
+	// Stop background auto-compaction if enabled
+	if c.config.AutoCompact {
+		close(c.compactStopCh)
+		
+		// Wait for compaction to finish with timeout
+		done := make(chan struct{})
+		go func() {
+			c.compactWg.Wait()
+			close(done)
+		}()
+		
+		select {
+		case <-done:
+			// Gracefully stopped
+		case <-time.After(30 * time.Second):
+			log.Printf("[Collection %s] Warning: Auto-compaction did not stop in time", c.name)
+		}
+	}
+
 	// Auto-save on close
 	if err := c.Save(); err != nil {
 		return err

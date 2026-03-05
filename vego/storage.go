@@ -2,12 +2,15 @@ package vego
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	hnsw "github.com/wzqhbustb/vego/index"
@@ -89,6 +92,25 @@ type StorageStats struct {
 	DeletionRate  float64 // Deletion rate (0.0 - 1.0)
 }
 
+// cleanupTempFiles removes stale temporary files from previous crashed writes.
+// Only removes temp files for the data file (vectors.lance.tmp.*), not other .tmp.* files.
+func cleanupTempFiles(dir string) {
+	// Use precise pattern: only match data file temp files (vectors.lance.tmp.*)
+	// Avoid matching user files like backup.tmp.bak or config.tmp.json
+	pattern := filepath.Join(dir, dataFileName+".tmp.*")
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return // Glob error, skip cleanup
+	}
+	for _, m := range matches {
+		if err := os.Remove(m); err != nil {
+			log.Printf("[Storage] Warning: failed to remove temp file %s: %v", m, err)
+		} else {
+			log.Printf("[Storage] Cleaned up temp file: %s", m)
+		}
+	}
+}
+
 // NewDocumentStorage creates a new document storage instance.
 // Optionally accepts a shared BlockCache for page-level caching.
 // Optionally accepts a format version (defaults to V1_2 for RowIndex + BlockCache support).
@@ -96,6 +118,9 @@ func NewDocumentStorage(path string, dimension int, cache ...*format.BlockCache)
 	if err := os.MkdirAll(path, 0755); err != nil {
 		return nil, fmt.Errorf("create storage directory: %w", err)
 	}
+
+	// Clean up any stale temp files from previous crashes
+	cleanupTempFiles(path)
 
 	metaStore := &metadataStore{
 		entries:  make(map[int64]docMeta),
@@ -488,6 +513,13 @@ func (s *DocumentStorage) GetAllValidDocuments() ([]*Document, error) {
 		return nil, fmt.Errorf("storage is closed")
 	}
 
+	// Check if data file exists
+	dataFile := filepath.Join(s.path, dataFileName)
+	if _, err := os.Stat(dataFile); os.IsNotExist(err) {
+		// No data file yet, return empty slice
+		return []*Document{}, nil
+	}
+
 	// Read all documents from storage
 	docs, err := s.readAllDocuments()
 	if err != nil {
@@ -585,6 +617,20 @@ func (s *DocumentStorage) flush() error {
 	return nil
 }
 
+// Rewrite rewrites the entire storage with the given documents.
+// This is used during compaction to remove deleted documents and optimize storage layout.
+// All existing data will be replaced by the provided documents.
+func (s *DocumentStorage) Rewrite(docs []*Document) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return fmt.Errorf("storage is closed")
+	}
+
+	return s.rewriteStorage(docs)
+}
+
 // rewriteStorage writes all documents to column storage and metadata store.
 // This is called during Flush and potentially during compaction.
 func (s *DocumentStorage) rewriteStorage(docs []*Document) error {
@@ -638,23 +684,49 @@ func (s *DocumentStorage) rewriteStorage(docs []*Document) error {
 }
 
 // writeColumnStorage writes vectors to columnar format with RowIndex support.
+// This method uses atomic write pattern: write to temp file, fsync, rename.
+// On failure, original data file remains intact.
 func (s *DocumentStorage) writeColumnStorage(docs []*Document) error {
 	if len(docs) == 0 {
 		return nil
 	}
 
 	dataFile := filepath.Join(s.path, dataFileName)
+	// Use timestamp to avoid conflicts with stale temp files
+	tempFile := dataFile + ".tmp." + strconv.FormatInt(time.Now().UnixNano(), 10)
 	schema := s.createSchema()
 
-	// Remove existing file to ensure clean write
-	if _, err := os.Stat(dataFile); err == nil {
-		if err := os.Remove(dataFile); err != nil {
-			return fmt.Errorf("remove existing file: %w", err)
-		}
+	// Step 1: Write to temporary file
+	if err := s.doWriteColumnStorage(tempFile, schema, docs); err != nil {
+		os.Remove(tempFile) // Best effort cleanup
+		return fmt.Errorf("write temp file: %w", err)
 	}
 
+	// Step 2: Fsync temp file to ensure data is on disk
+	if err := fsyncFile(tempFile); err != nil {
+		os.Remove(tempFile) // Best effort cleanup
+		return fmt.Errorf("fsync temp file: %w", err)
+	}
+
+	// Step 3: Atomic rename (POSIX guarantee)
+	if err := os.Rename(tempFile, dataFile); err != nil {
+		os.Remove(tempFile) // Best effort cleanup
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+
+	// Step 4: Fsync directory to ensure rename is persisted
+	if err := fsyncDir(s.path); err != nil {
+		// Don't fail here, data is already safe
+		log.Printf("[Storage] Warning: fsync directory failed: %v", err)
+	}
+
+	return nil
+}
+
+// doWriteColumnStorage performs the actual write operation to the specified file.
+func (s *DocumentStorage) doWriteColumnStorage(filePath string, schema *arrow.Schema, docs []*Document) error {
 	// Use RowIndexWriter for V1.1+ format support
-	writer, err := column.NewRowIndexWriter(dataFile, schema, s.version, s.factory)
+	writer, err := column.NewRowIndexWriter(filePath, schema, s.version, s.factory)
 	if err != nil {
 		return fmt.Errorf("create row index writer: %w", err)
 	}
@@ -711,6 +783,33 @@ func (s *DocumentStorage) writeColumnStorage(docs []*Document) error {
 		return fmt.Errorf("close writer: %w", err)
 	}
 
+	return nil
+}
+
+// fsyncFile performs fsync on a file to ensure data is persisted to disk.
+func fsyncFile(path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return file.Sync()
+}
+
+// fsyncDir performs fsync on a directory to ensure metadata changes are persisted.
+// On Windows, directory fsync may not be supported and is silently ignored.
+func fsyncDir(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	
+	err = dir.Sync()
+	// Windows does not support directory sync, ignore EINVAL
+	if err != nil && !errors.Is(err, syscall.EINVAL) {
+		return err
+	}
 	return nil
 }
 
