@@ -52,6 +52,12 @@
    - Supports L2, Cosine, InnerProduct distance metrics
    - Automatic memory management, no complex configuration
 
+5. **🛡️ Production Ready**
+   - **Logical Delete with DeletionVector**: Fast deletes without rewriting data
+   - **Auto-Compaction**: Background compaction with configurable thresholds
+   - **Crash Safe**: Atomic file writes with temp file + fsync + rename pattern
+   - **Data Integrity**: Automatic cleanup of stale temp files on startup
+
 ---
 
 ## 📦 Use Cases
@@ -553,6 +559,40 @@ if err := coll.DeleteBatch(ids); err != nil {
 }
 ```
 
+#### Compaction
+
+**Manual Compaction:**
+
+Compaction reclaims space from deleted documents and optimizes the index:
+
+```go
+// Trigger compaction (blocking operation)
+if err := coll.Compact(); err != nil {
+    log.Fatal(err)
+}
+
+// Check compaction status
+status := coll.GetCompactStatus()
+fmt.Printf("Status: %s\n", status.State) // Idle, Checking, Compacting, Completed, Failed
+
+// Trigger async compaction
+if err := coll.TriggerCompact(); err != nil {
+    log.Fatal(err)
+}
+```
+
+**Auto-Compaction Configuration:**
+
+```go
+db, _ := vego.Open("./mydb", 
+    vego.WithDimension(128),
+    vego.WithAutoCompact(true),              // Enable auto-compaction (default: true)
+    vego.WithCompactThreshold(0.3),          // Trigger when 30% deleted (default: 0.30)
+    vego.WithCompactMinInterval(300),        // Min 5 min between compactions (default: 300s)
+    vego.WithCompactMaxInterval(604800),     // Max 7 days (default: 604800s)
+)
+```
+
 #### Search Operations
 
 **Basic Search:**
@@ -992,12 +1032,17 @@ While Vego is production-ready for many use cases, please be aware of these curr
 - **Note**: Updates create new HNSW nodes; old nodes become orphaned until index rebuild
 - **Low-level API**: Update/Delete planned for v0.5 in index package
 
-### 4. Incremental Persistence
+### 4. Compaction & Space Reclamation
+- **Status**: ✅ **Available** - Manual `Compact()` and auto-compaction with configurable thresholds
+- **Note**: Compaction rebuilds the full index; for large datasets, consider off-peak hours
+- **Best Practice**: Enable auto-compaction with default thresholds (30% deleted ratio)
+
+### 5. Incremental Persistence
 - **Issue**: `SaveToLance` performs full export; no incremental save
 - **Impact**: Large datasets take longer to persist
 - **Status**: Under investigation
 
-### 5. Distance Functions
+### 6. Distance Functions
 - **Issue**: Only L2, Cosine, and InnerProduct are supported
 - **Status**: Hamming, Jaccard in backlog
 
@@ -1029,6 +1074,9 @@ Vego is actively evolving. For the detailed development roadmap including:
 | Collection API (document-oriented) | ✅ Available | v0.1 |
 | Context support (timeout/cancellation) | ✅ Available | v0.1 |
 | Batch operations (Insert/Get/Delete) | ✅ Available | v0.1 |
+| **DeletionVector (logical delete)** | ✅ **Available** | **v0.2** |
+| **Auto/Manual Compaction** | ✅ **Available** | **v0.2** |
+| **Crash-safe atomic writes** | ✅ **Available** | **v0.2** |
 | Structured error handling | ✅ Available | v0.1 |
 | Metadata filtering | ✅ Available | v0.1 |
 | Lance-compatible columnar storage | ✅ Available | v0.1 |
