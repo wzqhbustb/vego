@@ -26,3 +26,6 @@ Thumbs.db
 *.lance
 testdata/
 bench_results/
+
+# Conversation logs
+conversation-*.txt
