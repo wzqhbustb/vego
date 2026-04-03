@@ -115,8 +115,10 @@ func (h *HNSWIndex) searchLayerAggressive(query []float32, ep int, ef int, level
 	results := &MaxHeap{}
 	heap.Init(results)
 
-	// Calculate entry point distance
+	// Calculate entry point distance (RLock to protect h.nodes access)
+	h.globalLock.RLock()
 	epDist := h.distFunc(query, h.nodes[ep].Vector())
+	h.globalLock.RUnlock()
 
 	heap.Push(candidates, &Item{value: ep, priority: epDist})
 	heap.Push(results, &Item{value: ep, priority: epDist})
@@ -134,26 +136,34 @@ func (h *HNSWIndex) searchLayerAggressive(query []float32, ep int, ef int, level
 			}
 		}
 
+		// Note: Boundary check is intentionally done inside RLock to avoid TOCTOU
+		// In practice, HNSW doesn't delete nodes (only appends), so this is defensive
+		h.globalLock.RLock()
 		if current.value < 0 || current.value >= len(h.nodes) {
+			h.globalLock.RUnlock()
 			continue // Skip invalid nodes
 		}
-
-		// Check all neighbors of current node
 		neighbors := h.nodes[current.value].GetConnections(level)
+		h.globalLock.RUnlock()
 
 		for _, neighborID := range neighbors {
 			if visited[neighborID] {
 				continue
 			}
 
-			if neighborID < 0 || neighborID >= len(h.nodes) {
+			h.globalLock.RLock()
+			validNeighbor := neighborID >= 0 && neighborID < len(h.nodes)
+			var dist float32
+			if validNeighbor {
+				dist = h.distFunc(query, h.nodes[neighborID].Vector())
+			}
+			h.globalLock.RUnlock()
+
+			if !validNeighbor {
 				continue // Skip invalid neighbors
 			}
 
 			visited[neighborID] = true
-
-			// Calculate distance
-			dist := h.distFunc(query, h.nodes[neighborID].Vector())
 
 			// If result set not full or current distance is closer, add to candidates
 			if results.Len() < ef {
@@ -193,7 +203,10 @@ func (h *HNSWIndex) searchLayer(query []float32, ep int, ef int, level int) []Se
 	heap.Init(candidates)
 	heap.Init(results)
 
+	// RLock to protect h.nodes access
+	h.globalLock.RLock()
 	epDist := h.distFunc(query, h.nodes[ep].vector)
+	h.globalLock.RUnlock()
 	heap.Push(candidates, &Item{value: ep, priority: epDist})
 	heap.Push(results, &Item{value: ep, priority: epDist})
 	visited[ep] = true
@@ -201,8 +214,11 @@ func (h *HNSWIndex) searchLayer(query []float32, ep int, ef int, level int) []Se
 	for candidates.Len() > 0 {
 		current := heap.Pop(candidates).(*Item)
 
-		// Boundary check
-		if current.value < 0 || current.value >= len(h.nodes) {
+		// Boundary check (RLock to protect h.nodes access)
+		h.globalLock.RLock()
+		validCurrent := current.value >= 0 && current.value < len(h.nodes)
+		h.globalLock.RUnlock()
+		if !validCurrent {
 			continue
 		}
 
@@ -214,18 +230,30 @@ func (h *HNSWIndex) searchLayer(query []float32, ep int, ef int, level int) []Se
 			}
 		}
 
-		// Iterate through neighbors
-		for _, neighborID := range h.nodes[current.value].connections[level] {
+		// Iterate through neighbors (use GetConnections for thread-safe access)
+		h.globalLock.RLock()
+		currentNode := h.nodes[current.value]
+		h.globalLock.RUnlock()
+		connections := currentNode.GetConnections(level)
+
+		for _, neighborID := range connections {
 			if visited[neighborID] {
 				continue
 			}
 
-			if neighborID < 0 || neighborID >= len(h.nodes) {
+			h.globalLock.RLock()
+			validNeighbor := neighborID >= 0 && neighborID < len(h.nodes)
+			var dist float32
+			if validNeighbor {
+				dist = h.distFunc(query, h.nodes[neighborID].vector)
+			}
+			h.globalLock.RUnlock()
+
+			if !validNeighbor {
 				continue
 			}
 
 			visited[neighborID] = true
-			dist := h.distFunc(query, h.nodes[neighborID].vector)
 
 			// More precise floating-point tolerance
 			shouldAdd := false
@@ -284,13 +312,23 @@ func (h *HNSWIndex) selectNeighborsHeuristic(query []float32, candidates []Searc
 		}
 
 		good := true
-		candidateVec := h.nodes[candidate.ID].Vector()
+		// RLock to protect h.nodes access and copy vector while holding lock
+		// Note: We copy the vector to avoid holding lock during distance computation
+		h.globalLock.RLock()
+		node := h.nodes[candidate.ID]
+		candidateVec := make([]float32, len(node.vector))
+		copy(candidateVec, node.vector)
+		h.globalLock.RUnlock()
 
 		// Explicitly document heuristic logic
 		// Rejection condition: if candidate is closer to selected neighbor than to query
 		// Purpose: ensure diversity and coverage of neighbors
 		for _, selected := range result {
-			selectedVec := h.nodes[selected.ID].Vector()
+			h.globalLock.RLock()
+			selectedNode := h.nodes[selected.ID]
+			selectedVec := make([]float32, len(selectedNode.vector))
+			copy(selectedVec, selectedNode.vector)
+			h.globalLock.RUnlock()
 			distToSelected := h.distFunc(candidateVec, selectedVec)
 
 			// candidate.Distance is the distance from candidate to query

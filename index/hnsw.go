@@ -109,15 +109,16 @@ func (h *HNSWIndex) Add(vector []float32) (int, error) {
 	nodeID := len(h.nodes)
 	newNode := NewNode(nodeID, vectorCopy, level)
 	h.nodes = append(h.nodes, newNode)
-	h.globalLock.Unlock()
 
+	// If this is the first node, set it as entry point immediately while holding the lock
+	// This prevents race conditions where concurrent Add() calls see inconsistent state
 	if nodeID == 0 {
-		h.globalLock.Lock()
 		h.entryPoint = int32(nodeID)
 		h.maxLevel = int32(level)
 		h.globalLock.Unlock()
 		return nodeID, nil
 	}
+	h.globalLock.Unlock()
 
 	h.insert(newNode)
 
