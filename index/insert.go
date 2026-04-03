@@ -39,8 +39,10 @@ func (h *HNSWIndex) insert(newNode *Node) {
 			// New node -> neighbor
 			newNode.AddConnection(lc, neighbor.ID)
 
-			// Neighbor -> new node
+			// Neighbor -> new node (need RLock to protect h.nodes access)
+			h.globalLock.RLock()
 			neighborNode := h.nodes[neighbor.ID]
+			h.globalLock.RUnlock()
 			neighborNode.AddConnection(lc, newNodeID)
 
 			// If neighbor's connection count exceeds limit, pruning is needed
@@ -54,12 +56,24 @@ func (h *HNSWIndex) insert(newNode *Node) {
 				neighborConnections := neighborNode.GetConnections(lc)
 				candidatesForPrune := make([]SearchResult, len(neighborConnections))
 
+				// Pre-fetch neighborNode's vector with proper locking
+				h.globalLock.RLock()
+				neighborVec := make([]float32, len(neighborNode.vector))
+				copy(neighborVec, neighborNode.vector)
+				h.globalLock.RUnlock()
+
 				for i, connID := range neighborConnections {
-					dist := h.distFunc(neighborNode.Vector(), h.nodes[connID].Vector())
+					// RLock to protect h.nodes access and copy vector safely
+					h.globalLock.RLock()
+					connNode := h.nodes[connID]
+					connVec := make([]float32, len(connNode.vector))
+					copy(connVec, connNode.vector)
+					h.globalLock.RUnlock()
+					dist := h.distFunc(neighborVec, connVec)
 					candidatesForPrune[i] = SearchResult{ID: connID, Distance: dist}
 				}
 
-				prunedNeighbors := h.selectNeighborsHeuristic(neighborNode.Vector(), candidatesForPrune, maxConn)
+				prunedNeighbors := h.selectNeighborsHeuristic(neighborVec, candidatesForPrune, maxConn)
 				prunedIDs := make([]int, len(prunedNeighbors))
 				for i, n := range prunedNeighbors {
 					prunedIDs[i] = n.ID
@@ -75,10 +89,11 @@ func (h *HNSWIndex) insert(newNode *Node) {
 	}
 
 	// If new node's level is higher, update global entry point and max level
-	if newNodeLevel > maxLvl {
-		h.globalLock.Lock()
+	// Note: Must re-read h.maxLevel inside the lock to avoid TOCTOU race
+	h.globalLock.Lock()
+	if int32(newNodeLevel) > h.maxLevel {
 		h.entryPoint = int32(newNodeID)
 		h.maxLevel = int32(newNodeLevel)
-		h.globalLock.Unlock()
 	}
+	h.globalLock.Unlock()
 }

@@ -6,8 +6,16 @@ import (
 	"time"
 )
 
+// skipIfShort skips time-sensitive tests in short mode
+func skipIfShort(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping time-sensitive test in short mode")
+	}
+}
+
 // TestCompactMaxInterval verifies that compaction triggers when max interval is reached
 func TestCompactMaxInterval(t *testing.T) {
+	skipIfShort(t) // Skip in short mode due to long sleep times
 	tmpDir := t.TempDir()
 
 	config := DefaultConfig()

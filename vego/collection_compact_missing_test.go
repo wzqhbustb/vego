@@ -10,6 +10,7 @@ import (
 // TestAutoCompactActualExecution verifies that auto-compaction actually triggers
 // when conditions are met (deletion rate > threshold)
 func TestAutoCompactActualExecution(t *testing.T) {
+	skipIfShort(t)
 	tmpDir := t.TempDir()
 
 	// Create collection with auto-compact enabled and short interval
@@ -279,6 +280,7 @@ func TestCompactConcurrency(t *testing.T) {
 
 // TestCompactMinInterval verifies minimum interval enforcement
 func TestCompactMinInterval(t *testing.T) {
+	skipIfShort(t)
 	tmpDir := t.TempDir()
 
 	config := DefaultConfig()

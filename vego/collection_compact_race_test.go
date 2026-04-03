@@ -7,6 +7,14 @@ import (
 	"time"
 )
 
+// getRaceTestScale returns appropriate scale factor based on test mode
+func getRaceTestScale(normal, short int) int {
+	if testing.Short() {
+		return short
+	}
+	return normal
+}
+
 // TestCompactConcurrencyPrevention verifies that concurrent triggers don't start multiple compactions
 func TestCompactConcurrencyPrevention(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -21,7 +29,9 @@ func TestCompactConcurrencyPrevention(t *testing.T) {
 	defer coll.Close()
 
 	// Insert many documents to make compaction slower
-	for i := 1; i <= 200; i++ {
+	// Scale down for race detector: 200 -> 50 in short mode
+	docCount := getRaceTestScale(200, 50)
+	for i := 1; i <= docCount; i++ {
 		doc := &Document{
 			ID:     fmt.Sprintf("doc-%04d", i),
 			Vector: randomVector(128, i),
@@ -33,7 +43,9 @@ func TestCompactConcurrencyPrevention(t *testing.T) {
 	flushCollection(t, coll)
 
 	// Delete many documents to trigger compaction
-	for i := 1; i <= 100; i++ {
+	// Scale down for race detector: 100 -> 25 in short mode
+	deleteCount := getRaceTestScale(100, 25)
+	for i := 1; i <= deleteCount; i++ {
 		if err := coll.Delete(fmt.Sprintf("doc-%04d", i)); err != nil {
 			t.Fatalf("Failed to delete: %v", err)
 		}
@@ -78,9 +90,10 @@ func TestCompactConcurrencyPrevention(t *testing.T) {
 		t.Logf("Concurrent prevention worked: %d compaction(s) executed", compactCount)
 	}
 
-	// Verify data is consistent
-	if count := coll.Count(); count != 100 {
-		t.Errorf("Expected 100 documents, got %d", count)
+	// Verify data is consistent (docCount - deleteCount)
+	expectedCount := docCount - deleteCount
+	if count := coll.Count(); count != expectedCount {
+		t.Errorf("Expected %d documents, got %d", expectedCount, count)
 	}
 }
 

@@ -9,6 +9,15 @@ import (
 	"time"
 )
 
+// getTestDuration returns appropriate duration based on test mode
+// Use -short flag for race detector: go test -race -short
+func getTestDuration(normal, short time.Duration) time.Duration {
+	if testing.Short() {
+		return short
+	}
+	return normal
+}
+
 // ==================== P1: 持久化测试 ====================
 
 // TestCollectionPersistence tests collection data persistence across reopening
@@ -268,7 +277,7 @@ func TestCollectionConcurrentReadWrite(t *testing.T) {
 
 	const numReaders = 5
 	const numWriters = 3
-	const duration = 2 * time.Second
+	duration := getTestDuration(2*time.Second, 200*time.Millisecond)
 
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
