@@ -272,7 +272,7 @@ func (r *Reader) readColumnsSync(columns []arrow.Array) error {
 	for colIdx := 0; colIdx < schema.NumFields(); colIdx++ {
 		column, err := r.readColumn(int32(colIdx))
 		if err != nil {
-			lerrors.New(lerrors.ErrColumnNotFound).
+			return lerrors.New(lerrors.ErrColumnNotFound).
 				Op("read_columns_sync").
 				Context("column_index", colIdx).
 				Wrap(err).

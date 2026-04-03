@@ -24,11 +24,6 @@ func (e *RLEEncoder) Encode(array arrow.Array) (*EncodedData, error) {
 		return nil, ErrEmptyArray
 	}
 
-	// 不支持 null
-	if array.NullN() > 0 {
-		return nil, ErrNullNotSupported
-	}
-
 	switch arr := array.(type) {
 	case *arrow.Int32Array:
 		return e.encodeInt32(arr)
@@ -43,32 +38,101 @@ func (e *RLEEncoder) Encode(array arrow.Array) (*EncodedData, error) {
 
 func (e *RLEEncoder) encodeInt32(arr *arrow.Int32Array) (*EncodedData, error) {
 	values := arr.Values()
-	if len(values) == 0 {
-		return nil, ErrEmptyArray
-	}
+	numValues := arr.Len()
+	nullN := arr.NullN()
 
-	// 编码 runs
-	type run struct {
+	// Handle nulls: extract non-null values and their positions
+	var runs []struct {
 		value int32
 		count uint32
 	}
-	var runs []run
 
-	current := values[0]
+	if nullN == 0 {
+		// No nulls: simple RLE on all values
+		if len(values) == 0 {
+			return nil, ErrEmptyArray
+		}
+
+		current := values[0]
+		count := uint32(1)
+
+		for i := 1; i < len(values); i++ {
+			if values[i] == current {
+				count++
+			} else {
+				runs = append(runs, struct {
+					value int32
+					count uint32
+				}{value: current, count: count})
+				current = values[i]
+				count = 1
+			}
+		}
+		runs = append(runs, struct {
+			value int32
+			count uint32
+		}{value: current, count: count})
+
+		// Pack: [numRuns:4][(value, count)...]
+		buf := new(bytes.Buffer)
+		binary.Write(buf, binary.LittleEndian, uint32(len(runs)))
+		for _, r := range runs {
+			binary.Write(buf, binary.LittleEndian, r.value)
+			binary.Write(buf, binary.LittleEndian, r.count)
+		}
+
+		return &EncodedData{
+			Data:      buf.Bytes(),
+			Type:      format.EncodingRLE,
+			NumValues: numValues,
+			NullCount: 0,
+		}, nil
+	}
+
+	// Has nulls: extract null bitmap and filter non-null values
+	nullBitmap := ExtractNullBitmap(arr)
+
+	// Filter non-null values and encode runs
+	var nonNullValues []int32
+	for i := 0; i < numValues; i++ {
+		if !IsNull(nullBitmap, i) {
+			nonNullValues = append(nonNullValues, values[i])
+		}
+	}
+
+	if len(nonNullValues) == 0 {
+		// All nulls: no runs to encode
+		return &EncodedData{
+			Data:       nil,
+			Type:       format.EncodingRLE,
+			NullBitmap: nullBitmap,
+			NumValues:  numValues,
+			NullCount:  nullN,
+		}, nil
+	}
+
+	// RLE encode non-null values
+	current := nonNullValues[0]
 	count := uint32(1)
 
-	for i := 1; i < len(values); i++ {
-		if values[i] == current {
+	for i := 1; i < len(nonNullValues); i++ {
+		if nonNullValues[i] == current {
 			count++
 		} else {
-			runs = append(runs, run{value: current, count: count})
-			current = values[i]
+			runs = append(runs, struct {
+				value int32
+				count uint32
+			}{value: current, count: count})
+			current = nonNullValues[i]
 			count = 1
 		}
 	}
-	runs = append(runs, run{value: current, count: count})
+	runs = append(runs, struct {
+		value int32
+		count uint32
+	}{value: current, count: count})
 
-	// 打包: [numRuns:4][(value, count)...]
+	// Pack
 	buf := new(bytes.Buffer)
 	binary.Write(buf, binary.LittleEndian, uint32(len(runs)))
 	for _, r := range runs {
@@ -77,37 +141,104 @@ func (e *RLEEncoder) encodeInt32(arr *arrow.Int32Array) (*EncodedData, error) {
 	}
 
 	return &EncodedData{
-		Data:     buf.Bytes(),
-		Type:     format.EncodingRLE,
-		Metadata: nil,
+		Data:       buf.Bytes(),
+		Type:       format.EncodingRLE,
+		NullBitmap: nullBitmap,
+		NumValues:  numValues,
+		NullCount:  nullN,
 	}, nil
 }
 
 func (e *RLEEncoder) encodeInt64(arr *arrow.Int64Array) (*EncodedData, error) {
 	values := arr.Values()
-	if len(values) == 0 {
-		return nil, ErrEmptyArray
-	}
+	numValues := arr.Len()
+	nullN := arr.NullN()
 
-	type run struct {
+	var runs []struct {
 		value int64
 		count uint32
 	}
-	var runs []run
 
-	current := values[0]
+	if nullN == 0 {
+		// No nulls
+		if len(values) == 0 {
+			return nil, ErrEmptyArray
+		}
+
+		current := values[0]
+		count := uint32(1)
+
+		for i := 1; i < len(values); i++ {
+			if values[i] == current {
+				count++
+			} else {
+				runs = append(runs, struct {
+					value int64
+					count uint32
+				}{value: current, count: count})
+				current = values[i]
+				count = 1
+			}
+		}
+		runs = append(runs, struct {
+			value int64
+			count uint32
+		}{value: current, count: count})
+
+		buf := new(bytes.Buffer)
+		binary.Write(buf, binary.LittleEndian, uint32(len(runs)))
+		for _, r := range runs {
+			binary.Write(buf, binary.LittleEndian, r.value)
+			binary.Write(buf, binary.LittleEndian, r.count)
+		}
+
+		return &EncodedData{
+			Data:      buf.Bytes(),
+			Type:      format.EncodingRLE,
+			NumValues: numValues,
+			NullCount: 0,
+		}, nil
+	}
+
+	// Has nulls
+	nullBitmap := ExtractNullBitmap(arr)
+
+	var nonNullValues []int64
+	for i := 0; i < numValues; i++ {
+		if !IsNull(nullBitmap, i) {
+			nonNullValues = append(nonNullValues, values[i])
+		}
+	}
+
+	if len(nonNullValues) == 0 {
+		return &EncodedData{
+			Data:       nil,
+			Type:       format.EncodingRLE,
+			NullBitmap: nullBitmap,
+			NumValues:  numValues,
+			NullCount:  nullN,
+		}, nil
+	}
+
+	current := nonNullValues[0]
 	count := uint32(1)
 
-	for i := 1; i < len(values); i++ {
-		if values[i] == current {
+	for i := 1; i < len(nonNullValues); i++ {
+		if nonNullValues[i] == current {
 			count++
 		} else {
-			runs = append(runs, run{value: current, count: count})
-			current = values[i]
+			runs = append(runs, struct {
+				value int64
+				count uint32
+			}{value: current, count: count})
+			current = nonNullValues[i]
 			count = 1
 		}
 	}
-	runs = append(runs, run{value: current, count: count})
+	runs = append(runs, struct {
+		value int64
+		count uint32
+	}{value: current, count: count})
 
 	buf := new(bytes.Buffer)
 	binary.Write(buf, binary.LittleEndian, uint32(len(runs)))
@@ -117,16 +248,18 @@ func (e *RLEEncoder) encodeInt64(arr *arrow.Int64Array) (*EncodedData, error) {
 	}
 
 	return &EncodedData{
-		Data:     buf.Bytes(),
-		Type:     format.EncodingRLE,
-		Metadata: nil,
+		Data:       buf.Bytes(),
+		Type:       format.EncodingRLE,
+		NullBitmap: nullBitmap,
+		NumValues:  numValues,
+		NullCount:  nullN,
 	}, nil
 }
 
 func (e *RLEEncoder) EstimateSize(array arrow.Array) int {
-	// 保守估计：每个值一个 run
 	numValues := array.Len()
 	valueSize := GetValueSize(array.DataType().ID())
+	// Conservative: each value could be a separate run
 	return 4 + numValues*(valueSize+4) // numRuns + (value + count) per run
 }
 

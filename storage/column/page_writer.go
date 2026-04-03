@@ -68,8 +68,8 @@ func (w *PageWriter) WritePages(array arrow.Array, columnIndex int32) ([]*format
 
 	// Step 5: Create and populate page
 	page := format.NewPage(columnIndex, format.PageTypeData, encodedData.Type)
-	page.NumValues = int32(array.Len())
-	page.SetData(encodedData.Data, int32(uncompressedSize))
+	page.NumValues = int32(encodedData.NumValues)
+	page.SetDataWithNullBitmap(encodedData.Data, encodedData.NullBitmap, int32(uncompressedSize))
 
 	return []*format.Page{page}, nil
 }
@@ -85,8 +85,8 @@ func (w *PageWriter) writeWithZstd(array arrow.Array, columnIndex int32) ([]*for
 
 	uncompressedSize := w.calculateUncompressedSize(array)
 	page := format.NewPage(columnIndex, format.PageTypeData, encodedData.Type)
-	page.NumValues = int32(array.Len())
-	page.SetData(encodedData.Data, int32(uncompressedSize))
+	page.NumValues = int32(encodedData.NumValues)
+	page.SetDataWithNullBitmap(encodedData.Data, encodedData.NullBitmap, int32(uncompressedSize))
 
 	return []*format.Page{page}, nil
 }
@@ -169,12 +169,11 @@ func (w *PageWriter) EstimatePageSize(array arrow.Array) (int, error) {
 // Currently only Zstd supports null values. All specialized encoders
 // (RLE, BitPacking, BSS, Dictionary) reject arrays with nulls.
 func (w *PageWriter) encoderSupportsNulls(encoder encoding.Encoder) bool {
+	// 所有编码器都已实现完整的 null 支持
 	switch encoder.Type() {
-	case format.EncodingZstd:
-		return true
-	case format.EncodingRLE, format.EncodingBitPacked,
+	case format.EncodingZstd, format.EncodingRLE, format.EncodingBitPacked,
 		format.EncodingBSSEncoding, format.EncodingDictionary:
-		return false
+		return true
 	default:
 		return false
 	}

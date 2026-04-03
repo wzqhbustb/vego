@@ -225,12 +225,21 @@ func (e *CombinedEncoder) Encode(array arrow.Array) (*EncodedData, error) {
 				return nil, decErr
 			}
 			if decoder != nil {
-				current, err = decoder.Decode(result.Data, current.DataType())
+				// Pass null bitmap and numValues for proper null handling
+				current, err = decoder.Decode(result.Data, current.DataType(), result.NullBitmap, result.NumValues)
 				if err != nil {
 					return nil, err
 				}
 			}
 		}
+	}
+
+	// 对于非 Zstd 的最终编码，需要单独存储 null bitmap
+	// 如果最终是 Zstd，null 信息已经嵌入在压缩流中，不需要重复存储
+	if result != nil && result.Type != format.EncodingZstd && array.NullN() > 0 {
+		result.NumValues = array.Len()
+		result.NullCount = array.NullN()
+		result.NullBitmap = ExtractNullBitmap(array) // 使用复制版本，避免引用外部内存
 	}
 
 	return result, nil

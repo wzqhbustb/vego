@@ -71,9 +71,12 @@ func (e *ZstdEncoder) Encode(array arrow.Array) (*EncodedData, error) {
 	compressed := encoder.EncodeAll(data, make([]byte, 0, len(data)/2))
 
 	return &EncodedData{
-		Data:     compressed,
-		Type:     format.EncodingZstd,
-		Metadata: nil,
+		Data:      compressed,
+		Type:      format.EncodingZstd,
+		Metadata:  nil,
+		NumValues: array.Len(),
+		NullCount: array.NullN(),
+		// Note: NullBitmap is nil for Zstd encoding because null info is embedded in Data
 	}, nil
 }
 

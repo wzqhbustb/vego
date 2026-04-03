@@ -24,9 +24,9 @@ func (e *DictionaryEncoder) Encode(array arrow.Array) (*EncodedData, error) {
 		return nil, ErrEmptyArray
 	}
 
-	// 不支持 null
+	// 如果有 null，使用带 null 支持的编码
 	if array.NullN() > 0 {
-		return nil, ErrNullNotSupported
+		return e.encodeWithNulls(array)
 	}
 
 	switch arr := array.(type) {
@@ -45,10 +45,36 @@ func (e *DictionaryEncoder) Encode(array arrow.Array) (*EncodedData, error) {
 	}
 }
 
-func (e *DictionaryEncoder) encodeInt32(arr *arrow.Int32Array) (*EncodedData, error) {
-	values := arr.Values()
+func (e *DictionaryEncoder) encodeWithNulls(array arrow.Array) (*EncodedData, error) {
+	nullBitmap := ExtractNullBitmap(array) // 使用复制版本
+	nulls := DecodeNullBitmap(nullBitmap, array.Len())
 
-	// 构建字典
+	switch arr := array.(type) {
+	case *arrow.Int32Array:
+		values := FilterInt32(arr.Values(), nulls)
+		return e.encodeInt32WithValues(values, nullBitmap, array.Len(), array.NullN())
+	case *arrow.Int64Array:
+		values := FilterInt64(arr.Values(), nulls)
+		return e.encodeInt64WithValues(values, nullBitmap, array.Len(), array.NullN())
+	case *arrow.Float32Array:
+		values := FilterFloat32(arr.Values(), nulls)
+		return e.encodeFloat32WithValues(values, nullBitmap, array.Len(), array.NullN())
+	case *arrow.Float64Array:
+		values := FilterFloat64(arr.Values(), nulls)
+		return e.encodeFloat64WithValues(values, nullBitmap, array.Len(), array.NullN())
+	default:
+		return nil, lerrors.New(lerrors.ErrUnsupportedType).
+			Op("dictionary_encode_with_nulls").
+			Build()
+	}
+}
+
+func (e *DictionaryEncoder) encodeInt32(arr *arrow.Int32Array) (*EncodedData, error) {
+	return e.encodeInt32WithValues(arr.Values(), nil, arr.Len(), 0)
+}
+
+func (e *DictionaryEncoder) encodeInt32WithValues(values []int32, nullBitmap []byte, numValues, nullCount int) (*EncodedData, error) {
+	// 构建字典（只包含非 null 值）
 	dict := make(map[int32]uint32)
 	var dictValues []int32
 	indices := make([]uint32, len(values))
@@ -64,12 +90,14 @@ func (e *DictionaryEncoder) encodeInt32(arr *arrow.Int32Array) (*EncodedData, er
 		}
 	}
 
-	return e.packDictionary(dictValues, indices, 4)
+	return e.packDictionaryWithNulls(dictValues, indices, 4, nullBitmap, numValues, nullCount)
 }
 
 func (e *DictionaryEncoder) encodeInt64(arr *arrow.Int64Array) (*EncodedData, error) {
-	values := arr.Values()
+	return e.encodeInt64WithValues(arr.Values(), nil, arr.Len(), 0)
+}
 
+func (e *DictionaryEncoder) encodeInt64WithValues(values []int64, nullBitmap []byte, numValues, nullCount int) (*EncodedData, error) {
 	dict := make(map[int64]uint32)
 	var dictValues []int64
 	indices := make([]uint32, len(values))
@@ -91,12 +119,14 @@ func (e *DictionaryEncoder) encodeInt64(arr *arrow.Int64Array) (*EncodedData, er
 		binary.LittleEndian.PutUint64(dictBytes[i*8:], uint64(v))
 	}
 
-	return e.packDictionaryBytes(dictBytes, indices, 8, uint32(len(dictValues)))
+	return e.packDictionaryBytesWithNulls(dictBytes, indices, 8, uint32(len(dictValues)), nullBitmap, numValues, nullCount)
 }
 
 func (e *DictionaryEncoder) encodeFloat32(arr *arrow.Float32Array) (*EncodedData, error) {
-	values := arr.Values()
+	return e.encodeFloat32WithValues(arr.Values(), nil, arr.Len(), 0)
+}
 
+func (e *DictionaryEncoder) encodeFloat32WithValues(values []float32, nullBitmap []byte, numValues, nullCount int) (*EncodedData, error) {
 	dict := make(map[float32]uint32)
 	var dictValues []float32
 	indices := make([]uint32, len(values))
@@ -118,12 +148,14 @@ func (e *DictionaryEncoder) encodeFloat32(arr *arrow.Float32Array) (*EncodedData
 		binary.LittleEndian.PutUint32(dictBytes[i*4:], math.Float32bits(v))
 	}
 
-	return e.packDictionaryBytes(dictBytes, indices, 4, uint32(len(dictValues)))
+	return e.packDictionaryBytesWithNulls(dictBytes, indices, 4, uint32(len(dictValues)), nullBitmap, numValues, nullCount)
 }
 
 func (e *DictionaryEncoder) encodeFloat64(arr *arrow.Float64Array) (*EncodedData, error) {
-	values := arr.Values()
+	return e.encodeFloat64WithValues(arr.Values(), nil, arr.Len(), 0)
+}
 
+func (e *DictionaryEncoder) encodeFloat64WithValues(values []float64, nullBitmap []byte, numValues, nullCount int) (*EncodedData, error) {
 	dict := make(map[float64]uint32)
 	var dictValues []float64
 	indices := make([]uint32, len(values))
@@ -144,10 +176,14 @@ func (e *DictionaryEncoder) encodeFloat64(arr *arrow.Float64Array) (*EncodedData
 		binary.LittleEndian.PutUint64(dictBytes[i*8:], math.Float64bits(v))
 	}
 
-	return e.packDictionaryBytes(dictBytes, indices, 8, uint32(len(dictValues)))
+	return e.packDictionaryBytesWithNulls(dictBytes, indices, 8, uint32(len(dictValues)), nullBitmap, numValues, nullCount)
 }
 
 func (e *DictionaryEncoder) packDictionary(dictValues []int32, indices []uint32, valueSize int) (*EncodedData, error) {
+	return e.packDictionaryWithNulls(dictValues, indices, valueSize, nil, len(indices), 0)
+}
+
+func (e *DictionaryEncoder) packDictionaryWithNulls(dictValues []int32, indices []uint32, valueSize int, nullBitmap []byte, numValues, nullCount int) (*EncodedData, error) {
 	// 确定索引大小
 	indexSize := 2
 	if len(dictValues) > 65535 {
@@ -155,7 +191,7 @@ func (e *DictionaryEncoder) packDictionary(dictValues []int32, indices []uint32,
 	}
 
 	// 计算大小
-	headerSize := 10 // valueSize(1) + numEntries(4) + numValues(4) + indexSize(1)
+	headerSize := 10 // valueSize(1) + numEntries(4) + packedNumValues(4) + indexSize(1)
 	dictSize := len(dictValues) * valueSize
 	indexArraySize := len(indices) * indexSize
 
@@ -167,7 +203,7 @@ func (e *DictionaryEncoder) packDictionary(dictValues []int32, indices []uint32,
 	offset++
 	binary.LittleEndian.PutUint32(buf[offset:offset+4], uint32(len(dictValues)))
 	offset += 4
-	binary.LittleEndian.PutUint32(buf[offset:offset+4], uint32(len(indices)))
+	binary.LittleEndian.PutUint32(buf[offset:offset+4], uint32(len(indices))) // packedNumValues (non-null count)
 	offset += 4
 	buf[offset] = byte(indexSize)
 	offset++
@@ -178,7 +214,7 @@ func (e *DictionaryEncoder) packDictionary(dictValues []int32, indices []uint32,
 		offset += 4
 	}
 
-	// Indices
+	// Indices (only for non-null values)
 	for _, idx := range indices {
 		if indexSize == 2 {
 			binary.LittleEndian.PutUint16(buf[offset:offset+2], uint16(idx))
@@ -190,13 +226,20 @@ func (e *DictionaryEncoder) packDictionary(dictValues []int32, indices []uint32,
 	}
 
 	return &EncodedData{
-		Data:     buf,
-		Type:     format.EncodingDictionary,
-		Metadata: nil,
+		Data:       buf,
+		Type:       format.EncodingDictionary,
+		Metadata:   nil,
+		NullBitmap: nullBitmap,
+		NumValues:  numValues,
+		NullCount:  nullCount,
 	}, nil
 }
 
 func (e *DictionaryEncoder) packDictionaryBytes(dictBytes []byte, indices []uint32, valueSize int, numEntries uint32) (*EncodedData, error) {
+	return e.packDictionaryBytesWithNulls(dictBytes, indices, valueSize, numEntries, nil, len(indices), 0)
+}
+
+func (e *DictionaryEncoder) packDictionaryBytesWithNulls(dictBytes []byte, indices []uint32, valueSize int, numEntries uint32, nullBitmap []byte, numValues, nullCount int) (*EncodedData, error) {
 	indexSize := 2
 	if numEntries > 65535 {
 		indexSize = 4
@@ -213,7 +256,7 @@ func (e *DictionaryEncoder) packDictionaryBytes(dictBytes []byte, indices []uint
 	offset++
 	binary.LittleEndian.PutUint32(buf[offset:offset+4], numEntries)
 	offset += 4
-	binary.LittleEndian.PutUint32(buf[offset:offset+4], uint32(len(indices)))
+	binary.LittleEndian.PutUint32(buf[offset:offset+4], uint32(len(indices))) // packedNumValues
 	offset += 4
 	buf[offset] = byte(indexSize)
 	offset++
@@ -232,9 +275,12 @@ func (e *DictionaryEncoder) packDictionaryBytes(dictBytes []byte, indices []uint
 	}
 
 	return &EncodedData{
-		Data:     buf,
-		Type:     format.EncodingDictionary,
-		Metadata: nil,
+		Data:       buf,
+		Type:       format.EncodingDictionary,
+		Metadata:   nil,
+		NullBitmap: nullBitmap,
+		NumValues:  numValues,
+		NullCount:  nullCount,
 	}, nil
 }
 

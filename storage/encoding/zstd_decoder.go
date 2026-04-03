@@ -29,7 +29,12 @@ func NewZstdDecoder() (*ZstdDecoder, error) {
 	return &ZstdDecoder{decoderPool: pool}, nil
 }
 
-func (d *ZstdDecoder) Decode(data []byte, dtype arrow.DataType) (arrow.Array, error) {
+// Decode decompresses zstd data and reconstructs the Arrow array.
+// Note: Zstd encoding embeds null information within the compressed data itself
+// (format: [numValues:4][values...][bitmapLen:2][bitmap...]), so the nullBitmap
+// and numValues parameters are ignored. This is different from other encoders
+// (RLE/BitPacking/BSS/Dictionary) which store null bitmap separately.
+func (d *ZstdDecoder) Decode(data []byte, dtype arrow.DataType, nullBitmap []byte, numValues int) (arrow.Array, error) {
 	if len(data) < 6 {
 		return nil, lerrors.New(lerrors.ErrCorruptedFile).
 			Op("zstd_decode").

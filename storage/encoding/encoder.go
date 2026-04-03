@@ -26,16 +26,48 @@ type Encoder interface {
 }
 
 // Decoder defines the interface for decoding data.
-// V2: Decode method reconstructs arrow.Array directly.
+// V2: Decode method reconstructs arrow.Array directly with null support.
 type Decoder interface {
 	// Decode decompresses data and reconstructs an Arrow array of the specified type.
 	// The dtype parameter tells the decoder what type of array to create.
-	Decode(data []byte, dtype arrow.DataType) (arrow.Array, error)
+	// If nullBitmap is provided and numValues > 0, the decoded values are expanded to include nulls.
+	Decode(data []byte, dtype arrow.DataType, nullBitmap []byte, numValues int) (arrow.Array, error)
 }
 
 // EncodedData represents the result of encoding data.
+// V2: Added support for null values through NullBitmap.
 type EncodedData struct {
-	Data     []byte              // Encoded data bytes
-	Metadata []byte              // Additional metadata if any
-	Type     format.EncodingType // Encoding type
+	Data       []byte              // Encoded non-null values
+	Metadata   []byte              // Additional metadata if any
+	Type       format.EncodingType // Encoding type
+	NullBitmap []byte              // Bitmap where bit=1 means value exists, bit=0 means null (optional)
+	NumValues  int                 // Total number of values (including nulls)
+	NullCount  int                 // Number of null values
+}
+
+// HasNulls returns true if the encoded data contains null values.
+func (e *EncodedData) HasNulls() bool {
+	return e.NullCount > 0 && e.NullBitmap != nil
+}
+
+// Validate checks if the encoded data is valid.
+func (e *EncodedData) Validate() error {
+	if e.NumValues < 0 {
+		return ErrInvalidData
+	}
+	if e.NullCount < 0 || e.NullCount > e.NumValues {
+		return ErrInvalidData
+	}
+	// Zstd 编码特殊处理：null 信息嵌入在 Data 中，不需要单独的 NullBitmap
+	// 对于其他编码，如果 NullCount > 0 则需要 NullBitmap
+	if e.Type != format.EncodingZstd && e.NullCount > 0 && e.NullBitmap == nil {
+		return ErrInvalidData
+	}
+	if e.NullBitmap != nil {
+		expectedSize := BitmapSize(e.NumValues)
+		if len(e.NullBitmap) != expectedSize {
+			return ErrInvalidData
+		}
+	}
+	return nil
 }
