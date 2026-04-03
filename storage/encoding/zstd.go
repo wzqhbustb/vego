@@ -11,6 +11,8 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
+// ZstdEncoder compresses data using Zstandard algorithm with embedded null support.
+// Null information is embedded within the compressed stream (not stored separately).
 type ZstdEncoder struct {
 	level       int
 	encoderPool *sync.Pool

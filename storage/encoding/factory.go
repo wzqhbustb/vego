@@ -184,7 +184,8 @@ func (f *EncoderFactory) GetCompressionLevel() int {
 // Combined Encoder
 // ====================
 
-// CombinedEncoder chains multiple encoders (e.g., BSS + Zstd)
+// CombinedEncoder chains multiple encoders (e.g., BSS + Zstd) with null preservation.
+// Null bitmap is preserved through the encoding chain and stored only for non-Zstd final encoders.
 type CombinedEncoder struct {
 	encoders []Encoder
 }

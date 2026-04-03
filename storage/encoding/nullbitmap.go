@@ -4,6 +4,7 @@
 package encoding
 
 import (
+	"encoding/binary"
 	"math/bits"
 
 	"github.com/wzqhbustb/vego/storage/arrow"
@@ -86,10 +87,20 @@ func CountNulls(bitmap []byte, n int) int {
 	remainingBits := usedBits % 8
 	
 	count := 0
-	// 完整字节使用 popcount
-	for i := 0; i < fullBytes && i < len(bitmap); i++ {
+	
+	// 64-bit 批处理优化：一次处理 8 字节
+	fullUint64s := fullBytes / 8
+	for i := 0; i < fullUint64s; i++ {
+		idx := i * 8
+		u64 := binary.LittleEndian.Uint64(bitmap[idx:])
+		count += bits.OnesCount64(u64)
+	}
+	
+	// 处理剩余的字节（不足 8 字节）
+	for i := fullUint64s * 8; i < fullBytes && i < len(bitmap); i++ {
 		count += bits.OnesCount8(bitmap[i])
 	}
+	
 	// 处理最后一个不完整的字节
 	if remainingBits > 0 && fullBytes < len(bitmap) {
 		// 屏蔽尾部未使用的位（高位），只计算低 remainingBits 位

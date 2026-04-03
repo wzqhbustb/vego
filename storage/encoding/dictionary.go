@@ -9,6 +9,8 @@ import (
 	"github.com/wzqhbustb/vego/storage/format"
 )
 
+// DictionaryEncoder encodes values as dictionary indices with full null support.
+// Null values are excluded from the dictionary and restored using null bitmap.
 type DictionaryEncoder struct{}
 
 func NewDictionaryEncoder() *DictionaryEncoder {

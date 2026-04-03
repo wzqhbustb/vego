@@ -10,6 +10,8 @@ import (
 	"github.com/wzqhbustb/vego/storage/format"
 )
 
+// BSSEncoder (Byte-Stream-Split) separates float bytes into streams with null support.
+// Null values are filtered before splitting and restored during decoding.
 type BSSEncoder struct{}
 
 func NewBSSEncoder() *BSSEncoder {

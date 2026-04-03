@@ -9,6 +9,8 @@ import (
 	"github.com/wzqhbustb/vego/storage/format"
 )
 
+// BitPackingEncoder packs integers using the minimum number of bits needed.
+// Supports null values by filtering them out and storing null bitmap separately.
 type BitPackingEncoder struct {
 	bitWidth uint8
 }

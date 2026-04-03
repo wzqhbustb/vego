@@ -1,3 +1,20 @@
+// Package encoding provides various encoders for Arrow arrays.
+//
+// RLE (Run-Length Encoding) Encoder
+//
+// The RLE encoder compresses data by storing runs of repeated values.
+// Format: [numRuns:4][(value, count)...]
+//
+// Null Support:
+//   - Null values are filtered out before encoding
+//   - Null bitmap is stored separately in EncodedData.NullBitmap
+//   - During decoding, nulls are expanded back using ExpandInt32/Int64
+//   - Supports full null arrays (no runs to encode)
+//
+// Supported Types:
+//   - Int32, Int64
+//
+// Use Case: Best for data with long runs of repeated values (e.g., sorted data)
 package encoding
 
 import (
@@ -9,6 +26,8 @@ import (
 	"github.com/wzqhbustb/vego/storage/format"
 )
 
+// RLEEncoder implements Run-Length Encoding for integer arrays with full null support.
+// Null values are filtered before encoding runs and restored during decoding.
 type RLEEncoder struct{}
 
 func NewRLEEncoder() *RLEEncoder {
