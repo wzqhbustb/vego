@@ -18,8 +18,14 @@ type Page struct {
 	UncompressedSize int32        // Uncompressed data size
 	CompressedSize   int32        // Compressed data size (or same as uncompressed if not compressed)
 	Checksum         uint32       // CRC32 checksum
-	Data             []byte       // Page data
+	Data             []byte       // Page data (encoded values only)
+	NullBitmap       []byte       // Null bitmap for nullable data (optional, v2 format)
 	Offset           int64        // Offset in file (for reading)
+}
+
+// NullBitmapSize returns the size of the null bitmap in bytes
+func (p *Page) NullBitmapSize() int32 {
+	return int32(len(p.NullBitmap))
 }
 
 // PageHeader is the fixed-size header for each page
@@ -53,6 +59,16 @@ func (p *Page) SetData(data []byte, uncompressedSize int32) {
 	p.Checksum = crc32.ChecksumIEEE(data)
 }
 
+// SetDataWithNullBitmap sets the page data and null bitmap, updates sizes
+func (p *Page) SetDataWithNullBitmap(data []byte, nullBitmap []byte, uncompressedSize int32) {
+	p.Data = data
+	p.NullBitmap = nullBitmap
+	p.UncompressedSize = uncompressedSize
+	p.CompressedSize = int32(len(data))
+	// Checksum only covers the data, null bitmap is stored separately
+	p.Checksum = crc32.ChecksumIEEE(data)
+}
+
 // Validate validates the page
 func (p *Page) Validate() error {
 	if p.NumValues < 0 {
@@ -77,7 +93,7 @@ func (p *Page) Validate() error {
 			Build()
 	}
 
-	// Verify checksum
+	// Verify checksum (only for Data, NullBitmap is stored separately)
 	computed := crc32.ChecksumIEEE(p.Data)
 	if computed != p.Checksum {
 		return lerrors.FormatCorrupted("", p.Offset,
@@ -87,12 +103,13 @@ func (p *Page) Validate() error {
 	return nil
 }
 
-// EncodedSize returns the total encoded size (header + data)
+// EncodedSize returns the total encoded size (header + data + null bitmap)
 func (p *Page) EncodedSize() int {
-	return PageHeaderSize + int(p.CompressedSize)
+	return PageHeaderSize + int(p.CompressedSize) + len(p.NullBitmap)
 }
 
 // WriteTo writes the page to a writer
+// Format: [Header(30 bytes)][Data(CompressedSize bytes)][NullBitmap(variable, optional)]
 func (p *Page) WriteTo(w io.Writer) (int64, error) {
 	if err := p.Validate(); err != nil {
 		return 0, NewFileError("write page", err)
@@ -101,6 +118,17 @@ func (p *Page) WriteTo(w io.Writer) (int64, error) {
 	buf := new(bytes.Buffer)
 
 	// Write header
+	// Use Reserved field to store null bitmap metadata:
+	// - reserved[0:4]: nullBitmapSize
+	// - reserved[4:8]: nullBitmapChecksum (CRC32)
+	var reserved [8]byte
+	nullBitmapSize := int32(len(p.NullBitmap))
+	binary.LittleEndian.PutUint32(reserved[0:4], uint32(nullBitmapSize))
+	if nullBitmapSize > 0 {
+		nullBitmapChecksum := crc32.ChecksumIEEE(p.NullBitmap)
+		binary.LittleEndian.PutUint32(reserved[4:8], nullBitmapChecksum)
+	}
+
 	header := PageHeader{
 		Type:             p.Type,
 		Encoding:         p.Encoding,
@@ -109,6 +137,7 @@ func (p *Page) WriteTo(w io.Writer) (int64, error) {
 		UncompressedSize: p.UncompressedSize,
 		CompressedSize:   p.CompressedSize,
 		Checksum:         p.Checksum,
+		Reserved:         reserved,
 	}
 
 	buf.WriteByte(byte(header.Type))
@@ -123,11 +152,17 @@ func (p *Page) WriteTo(w io.Writer) (int64, error) {
 	// Write data
 	buf.Write(p.Data)
 
+	// Write null bitmap if present
+	if len(p.NullBitmap) > 0 {
+		buf.Write(p.NullBitmap)
+	}
+
 	n, err := w.Write(buf.Bytes())
 	return int64(n), err
 }
 
 // ReadFrom reads the page from a reader
+// Format: [Header(30 bytes)][Data(CompressedSize bytes)][NullBitmap(variable, optional)]
 func (p *Page) ReadFrom(r io.Reader) (int64, error) {
 	// Read header
 	headerBuf := make([]byte, PageHeaderSize)
@@ -150,11 +185,33 @@ func (p *Page) ReadFrom(r io.Reader) (int64, error) {
 	var reserved [8]byte
 	binary.Read(reader, ByteOrder, &reserved)
 
+	// Extract null bitmap size and checksum from reserved field
+	nullBitmapSize := binary.LittleEndian.Uint32(reserved[0:4])
+	storedNullBitmapChecksum := binary.LittleEndian.Uint32(reserved[4:8])
+
 	// Read data
 	p.Data = make([]byte, p.CompressedSize)
 	dataRead, err := io.ReadFull(r, p.Data)
 	if err != nil {
 		return int64(n + dataRead), NewFileError("read page data", err)
+	}
+
+	// Read null bitmap if present
+	if nullBitmapSize > 0 {
+		p.NullBitmap = make([]byte, nullBitmapSize)
+		bitmapRead, err := io.ReadFull(r, p.NullBitmap)
+		if err != nil {
+			return int64(n + dataRead + bitmapRead), NewFileError("read null bitmap", err)
+		}
+		n += bitmapRead
+
+		// Verify null bitmap checksum
+		computedChecksum := crc32.ChecksumIEEE(p.NullBitmap)
+		if computedChecksum != storedNullBitmapChecksum {
+			return int64(n + dataRead), lerrors.FormatCorrupted("", p.Offset,
+				fmt.Sprintf("null bitmap checksum mismatch: computed 0x%08X vs stored 0x%08X", 
+					computedChecksum, storedNullBitmapChecksum))
+		}
 	}
 
 	// Validate

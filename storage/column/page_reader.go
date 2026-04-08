@@ -1,6 +1,9 @@
 package column
 
 import (
+	"bytes"
+	"encoding/binary"
+
 	"github.com/wzqhbustb/vego/storage/arrow"
 	"github.com/wzqhbustb/vego/storage/encoding"
 	lerrors "github.com/wzqhbustb/vego/storage/errors"
@@ -24,7 +27,12 @@ func (r *PageReader) ReadPage(page *format.Page, dataType arrow.DataType) (arrow
 			Build()
 	}
 
+	// Handle all-null case: empty data but valid null bitmap
 	if len(page.Data) == 0 {
+		// Check if this is an all-null page
+		if page.NullBitmap != nil && int(page.NumValues) > 0 {
+			return r.createAllNullArray(dataType, int(page.NumValues), page.NullBitmap)
+		}
 		return nil, lerrors.New(lerrors.ErrInvalidArgument).
 			Op("read_page").
 			Context("message", "page data is empty").
@@ -49,8 +57,8 @@ func (r *PageReader) ReadPage(page *format.Page, dataType arrow.DataType) (arrow
 			Build()
 	}
 
-	// Decode the data
-	array, err := decoder.Decode(page.Data, dataType)
+	// Decode the data, passing null bitmap from page if available
+	array, err := decoder.Decode(page.Data, dataType, page.NullBitmap, int(page.NumValues))
 	if err != nil {
 		return nil, lerrors.New(lerrors.ErrDecodeFailed).
 			Op("decode_page").
@@ -75,9 +83,8 @@ func (r *PageReader) ReadPage(page *format.Page, dataType arrow.DataType) (arrow
 // page_reader.go - 修正后的 ReadPageFromData
 
 // ReadPageFromData 直接从编码后的数据解码 Array（用于 AsyncIO 返回的数据）
-// 注意：data 是完整的 Page 字节流（包含 30 字节 header），需要跳过 header
+// 注意：data 是完整的 Page 字节流（包含 30 字节 header + encoded data + optional null bitmap)
 func (r *PageReader) ReadPageFromData(data []byte, encodingType format.EncodingType, numValues int32, dataType arrow.DataType) (arrow.Array, error) {
-	// PageHeaderSize = 30 字节
 	const PageHeaderSize = 30
 
 	if len(data) < PageHeaderSize {
@@ -89,13 +96,54 @@ func (r *PageReader) ReadPageFromData(data []byte, encodingType format.EncodingT
 			Build()
 	}
 
-	// 跳过 30 字节的 header，获取实际的编码数据
-	encodedData := data[PageHeaderSize:]
+	// 解析 header 获取 compressed size 和 null bitmap size
+	var compressedSize int32
+	binary.Read(bytes.NewReader(data[14:18]), binary.LittleEndian, &compressedSize)
 
-	if len(encodedData) == 0 {
+	// 从 reserved 字段获取 null bitmap size
+	// Header 布局: [Type:1][Encoding:1][ColumnIndex:4][NumValues:4][UncompressedSize:4][CompressedSize:4][Checksum:4][Reserved:8]
+	// Checksum 在偏移 18-21，Reserved 在偏移 22-29，取 Reserved 前 4 字节
+	nullBitmapSize := binary.LittleEndian.Uint32(data[22:26])
+
+	// 提取 encoded data (header 之后，null bitmap 之前)
+	dataStart := PageHeaderSize
+	dataEnd := PageHeaderSize + int(compressedSize)
+
+	if dataEnd > len(data) {
 		return nil, lerrors.New(lerrors.ErrInvalidArgument).
 			Op("read_page_from_data").
-			Context("message", "page data is empty after header").
+			Context("expected_data_end", dataEnd).
+			Context("actual_data_len", len(data)).
+			Context("message", "page data truncated").
+			Build()
+	}
+
+	encodedData := data[dataStart:dataEnd]
+
+	// 提取 null bitmap
+	var nullBitmap []byte
+	if nullBitmapSize > 0 {
+		bitmapStart := dataEnd
+		bitmapEnd := dataEnd + int(nullBitmapSize)
+		if bitmapEnd > len(data) {
+			return nil, lerrors.New(lerrors.ErrInvalidArgument).
+				Op("read_page_from_data").
+				Context("expected_bitmap_end", bitmapEnd).
+				Context("actual_data_len", len(data)).
+				Context("message", "null bitmap truncated").
+				Build()
+		}
+		nullBitmap = data[bitmapStart:bitmapEnd]
+	}
+
+	// 处理全 null 情况：encoded data 为空但有 null bitmap
+	if len(encodedData) == 0 {
+		if nullBitmap != nil && int(numValues) > 0 {
+			return r.createAllNullArray(dataType, int(numValues), nullBitmap)
+		}
+		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+			Op("read_page_from_data").
+			Context("message", "page data is empty and no null bitmap").
 			Build()
 	}
 
@@ -117,8 +165,8 @@ func (r *PageReader) ReadPageFromData(data []byte, encodingType format.EncodingT
 			Build()
 	}
 
-	// Decode
-	array, err := decoder.Decode(encodedData, dataType)
+	// Decode with null bitmap
+	array, err := decoder.Decode(encodedData, dataType, nullBitmap, int(numValues))
 	if err != nil {
 		return nil, lerrors.New(lerrors.ErrDecodeFailed).
 			Op("decode_page_from_data").
@@ -137,4 +185,65 @@ func (r *PageReader) ReadPageFromData(data []byte, encodingType format.EncodingT
 	}
 
 	return array, nil
+}
+
+// createAllNullArray creates an array with all null values
+func (r *PageReader) createAllNullArray(dataType arrow.DataType, numValues int, nullBitmap []byte) (arrow.Array, error) {
+	bitmap := arrow.NewBitmapFromBytes(nullBitmap, numValues)
+	
+	switch dataType.ID() {
+	case arrow.INT32:
+		values := make([]int32, numValues)
+		return arrow.NewInt32Array(values, bitmap), nil
+	case arrow.INT64:
+		values := make([]int64, numValues)
+		return arrow.NewInt64Array(values, bitmap), nil
+	case arrow.FLOAT32:
+		values := make([]float32, numValues)
+		return arrow.NewFloat32Array(values, bitmap), nil
+	case arrow.FLOAT64:
+		values := make([]float64, numValues)
+		return arrow.NewFloat64Array(values, bitmap), nil
+	case arrow.FIXED_SIZE_LIST:
+		// 全 null FixedSizeList 数组：需要创建嵌套的全 null 子数组
+		listType := dataType.(*arrow.FixedSizeListType)
+		return r.createAllNullFixedSizeListArray(listType, numValues, bitmap)
+	default:
+		return nil, lerrors.New(lerrors.ErrUnsupportedType).
+			Op("create_all_null_array").
+			Context("data_type", dataType.Name()).
+			Build()
+	}
+}
+
+// createAllNullFixedSizeListArray 创建全 null 的 FixedSizeList 数组
+func (r *PageReader) createAllNullFixedSizeListArray(listType *arrow.FixedSizeListType, numValues int, bitmap *arrow.Bitmap) (arrow.Array, error) {
+	elemType := listType.Elem()
+	elemSize := listType.Size()
+	
+	// 创建全 null 的子数组
+	totalElemCount := numValues * elemSize
+	var elemArray arrow.Array
+	
+	switch elemType.ID() {
+	case arrow.FLOAT32:
+		elemValues := make([]float32, totalElemCount)
+		elemArray = arrow.NewFloat32Array(elemValues, nil)
+	case arrow.FLOAT64:
+		elemValues := make([]float64, totalElemCount)
+		elemArray = arrow.NewFloat64Array(elemValues, nil)
+	case arrow.INT32:
+		elemValues := make([]int32, totalElemCount)
+		elemArray = arrow.NewInt32Array(elemValues, nil)
+	case arrow.INT64:
+		elemValues := make([]int64, totalElemCount)
+		elemArray = arrow.NewInt64Array(elemValues, nil)
+	default:
+		return nil, lerrors.New(lerrors.ErrUnsupportedType).
+			Op("create_all_null_fixed_size_list").
+			Context("elem_type", elemType.Name()).
+			Build()
+	}
+	
+	return arrow.NewFixedSizeListArray(listType, elemArray, bitmap), nil
 }

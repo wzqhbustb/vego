@@ -38,7 +38,7 @@ func TestZstdEncoder_Encode_Int32(t *testing.T) {
 	}
 
 	// 解码验证
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32())
+	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32(), nil, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestZstdEncoder_Encode_Float64(t *testing.T) {
 		t.Fatalf("Encode failed: %v", err)
 	}
 
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimFloat64())
+	decoded, err := decoder.Decode(encoded.Data, arrow.PrimFloat64(), nil, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestZstdEncoder_WithNulls(t *testing.T) {
 		t.Fatalf("Encode failed: %v", err)
 	}
 
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32())
+	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32(), nil, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestZstdEncoder_WithAllNulls(t *testing.T) {
 		t.Fatalf("Encode failed: %v", err)
 	}
 
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32())
+	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32(), nil, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestZstdEncoder_WithComplexNulls(t *testing.T) {
 		t.Fatalf("Encode failed: %v", err)
 	}
 
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32())
+	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32(), nil, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
@@ -312,6 +312,6 @@ func BenchmarkZstdDecoder_Decode(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		decoder.Decode(encoded.Data, arrow.PrimInt32())
+		decoder.Decode(encoded.Data, arrow.PrimInt32(), nil, encoded.NumValues)
 	}
 }

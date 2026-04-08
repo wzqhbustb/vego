@@ -10,6 +10,8 @@ import (
 	"github.com/wzqhbustb/vego/storage/format"
 )
 
+// BSSEncoder (Byte-Stream-Split) separates float bytes into streams with null support.
+// Null values are filtered before splitting and restored during decoding.
 type BSSEncoder struct{}
 
 func NewBSSEncoder() *BSSEncoder {
@@ -25,11 +27,6 @@ func (e *BSSEncoder) Encode(array arrow.Array) (*EncodedData, error) {
 		return nil, ErrEmptyArray
 	}
 
-	// 不支持 null
-	if array.NullN() > 0 {
-		return nil, ErrNullNotSupported
-	}
-
 	switch arr := array.(type) {
 	case *arrow.Float32Array:
 		return e.encodeFloat32(arr)
@@ -43,13 +40,32 @@ func (e *BSSEncoder) Encode(array arrow.Array) (*EncodedData, error) {
 }
 
 func (e *BSSEncoder) encodeFloat32(arr *arrow.Float32Array) (*EncodedData, error) {
-	values := arr.Values()
-	numValues := len(values)
+	numValues := arr.Len()
+	nullN := arr.NullN()
+
+	// Handle nulls: extract non-null values
+	var values []float32
+	var nullBitmap []byte
+
+	if nullN > 0 {
+		nullBitmap = ExtractNullBitmap(arr)
+		// Filter out null values
+		allValues := arr.Values()
+		for i := 0; i < numValues; i++ {
+			if !IsNull(nullBitmap, i) {
+				values = append(values, allValues[i])
+			}
+		}
+	} else {
+		values = arr.Values()
+	}
+
+	packedNumValues := len(values)
 
 	// 创建 4 个 byte stream
 	streams := make([][]byte, 4)
 	for i := 0; i < 4; i++ {
-		streams[i] = make([]byte, numValues)
+		streams[i] = make([]byte, packedNumValues)
 	}
 
 	// Byte Stream Split
@@ -63,26 +79,47 @@ func (e *BSSEncoder) encodeFloat32(arr *arrow.Float32Array) (*EncodedData, error
 
 	// 打包: [numValues:4][stream0...][stream1...][stream2...][stream3...]
 	buf := new(bytes.Buffer)
-	binary.Write(buf, binary.LittleEndian, uint32(numValues))
+	binary.Write(buf, binary.LittleEndian, uint32(packedNumValues))
 	for _, s := range streams {
 		buf.Write(s)
 	}
 
 	return &EncodedData{
-		Data:     buf.Bytes(),
-		Type:     format.EncodingBSSEncoding,
-		Metadata: nil,
+		Data:       buf.Bytes(),
+		Type:       format.EncodingBSSEncoding,
+		NullBitmap: nullBitmap,
+		NumValues:  numValues,
+		NullCount:  nullN,
 	}, nil
 }
 
 func (e *BSSEncoder) encodeFloat64(arr *arrow.Float64Array) (*EncodedData, error) {
-	values := arr.Values()
-	numValues := len(values)
+	numValues := arr.Len()
+	nullN := arr.NullN()
+
+	// Handle nulls: extract non-null values
+	var values []float64
+	var nullBitmap []byte
+
+	if nullN > 0 {
+		nullBitmap = ExtractNullBitmap(arr)
+		// Filter out null values
+		allValues := arr.Values()
+		for i := 0; i < numValues; i++ {
+			if !IsNull(nullBitmap, i) {
+				values = append(values, allValues[i])
+			}
+		}
+	} else {
+		values = arr.Values()
+	}
+
+	packedNumValues := len(values)
 
 	// 创建 8 个 byte stream
 	streams := make([][]byte, 8)
 	for i := 0; i < 8; i++ {
-		streams[i] = make([]byte, numValues)
+		streams[i] = make([]byte, packedNumValues)
 	}
 
 	// Byte Stream Split
@@ -100,20 +137,26 @@ func (e *BSSEncoder) encodeFloat64(arr *arrow.Float64Array) (*EncodedData, error
 
 	// 打包
 	buf := new(bytes.Buffer)
-	binary.Write(buf, binary.LittleEndian, uint32(numValues))
+	binary.Write(buf, binary.LittleEndian, uint32(packedNumValues))
 	for _, s := range streams {
 		buf.Write(s)
 	}
 
 	return &EncodedData{
-		Data:     buf.Bytes(),
-		Type:     format.EncodingBSSEncoding,
-		Metadata: nil,
+		Data:       buf.Bytes(),
+		Type:       format.EncodingBSSEncoding,
+		NullBitmap: nullBitmap,
+		NumValues:  numValues,
+		NullCount:  nullN,
 	}, nil
 }
 
 func (e *BSSEncoder) EstimateSize(array arrow.Array) int {
-	return array.Len() * GetValueSize(array.DataType().ID())
+	numValues := array.Len()
+	nullN := array.NullN()
+	// Estimate non-null values
+	estimatedNonNull := numValues - nullN
+	return estimatedNonNull * GetValueSize(array.DataType().ID())
 }
 
 func (e *BSSEncoder) SupportsType(dtype arrow.DataType) bool {

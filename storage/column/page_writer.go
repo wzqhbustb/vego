@@ -68,8 +68,8 @@ func (w *PageWriter) WritePages(array arrow.Array, columnIndex int32) ([]*format
 
 	// Step 5: Create and populate page
 	page := format.NewPage(columnIndex, format.PageTypeData, encodedData.Type)
-	page.NumValues = int32(array.Len())
-	page.SetData(encodedData.Data, int32(uncompressedSize))
+	page.NumValues = int32(encodedData.NumValues)
+	page.SetDataWithNullBitmap(encodedData.Data, encodedData.NullBitmap, int32(uncompressedSize))
 
 	return []*format.Page{page}, nil
 }
@@ -85,29 +85,27 @@ func (w *PageWriter) writeWithZstd(array arrow.Array, columnIndex int32) ([]*for
 
 	uncompressedSize := w.calculateUncompressedSize(array)
 	page := format.NewPage(columnIndex, format.PageTypeData, encodedData.Type)
-	page.NumValues = int32(array.Len())
-	page.SetData(encodedData.Data, int32(uncompressedSize))
+	page.NumValues = int32(encodedData.NumValues)
+	page.SetDataWithNullBitmap(encodedData.Data, encodedData.NullBitmap, int32(uncompressedSize))
 
 	return []*format.Page{page}, nil
 }
 
 // encodeWithFallback attempts to encode with the given encoder and falls back to Zstd if needed.
-// This handles cases where specialized encoders don't support null values or certain data patterns.
+// All encoders now support null values, but fallback is kept as defensive programming
+// for unexpected errors or edge cases.
 func (w *PageWriter) encodeWithFallback(array arrow.Array, encoder encoding.Encoder) (*encoding.EncodedData, error) {
 	encodedData, err := encoder.Encode(array)
 	if err != nil {
-		// If specialized encoder fails due to null or type issues, fallback to Zstd
-		if err == encoding.ErrNullNotSupported || err == encoding.ErrUnsupportedType {
-			// TODO: Add logging here
-			// log.Warnf("Encoder %v failed (%v), falling back to Zstd", encoder.Type(), err)
-			zstdEncoder := encoding.NewZstdEncoder(w.factory.GetCompressionLevel())
-			encodedData, err = zstdEncoder.Encode(array)
-			if err != nil {
-				return nil, lerrors.EncodeFailed("zstd_fallback", array.DataType().Name(), err)
-			}
-			return encodedData, nil
+		// Fallback to Zstd for any encoding failure (defensive programming)
+		// TODO: Add logging here for monitoring fallback frequency
+		// log.Warnf("Encoder %v failed (%v), falling back to Zstd", encoder.Type(), err)
+		zstdEncoder := encoding.NewZstdEncoder(w.factory.GetCompressionLevel())
+		encodedData, err = zstdEncoder.Encode(array)
+		if err != nil {
+			return nil, lerrors.EncodeFailed("zstd_fallback", array.DataType().Name(), err)
 		}
-		return nil, err
+		return encodedData, nil
 	}
 	return encodedData, nil
 }
@@ -166,15 +164,12 @@ func (w *PageWriter) EstimatePageSize(array arrow.Array) (int, error) {
 }
 
 // encoderSupportsNulls checks if an encoder can handle null values.
-// Currently only Zstd supports null values. All specialized encoders
-// (RLE, BitPacking, BSS, Dictionary) reject arrays with nulls.
+// All built-in encoders (Zstd, RLE, BitPacking, BSS, Dictionary) now support null values.
 func (w *PageWriter) encoderSupportsNulls(encoder encoding.Encoder) bool {
 	switch encoder.Type() {
-	case format.EncodingZstd:
-		return true
-	case format.EncodingRLE, format.EncodingBitPacked,
+	case format.EncodingZstd, format.EncodingRLE, format.EncodingBitPacked,
 		format.EncodingBSSEncoding, format.EncodingDictionary:
-		return false
+		return true
 	default:
 		return false
 	}

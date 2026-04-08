@@ -14,7 +14,7 @@ func NewBSSDecoder() *BSSDecoder {
 	return &BSSDecoder{}
 }
 
-func (d *BSSDecoder) Decode(data []byte, dtype arrow.DataType) (arrow.Array, error) {
+func (d *BSSDecoder) Decode(data []byte, dtype arrow.DataType, nullBitmap []byte, numValues int) (arrow.Array, error) {
 	if len(data) < 4 {
 		return nil, lerrors.New(lerrors.ErrCorruptedFile).
 			Op("bss_decode").
@@ -24,15 +24,15 @@ func (d *BSSDecoder) Decode(data []byte, dtype arrow.DataType) (arrow.Array, err
 			Build()
 	}
 
-	// Read numValues
-	numValues := binary.LittleEndian.Uint32(data[0:4])
+	// Read packedNumValues (when null support is added, this may differ from numValues)
+	packedNumValues := int(binary.LittleEndian.Uint32(data[0:4]))
 	headerSize := 4
 
 	switch dtype.ID() {
 	case arrow.FLOAT32:
-		return d.decodeFloat32(data[headerSize:], int(numValues))
+		return d.decodeFloat32(data[headerSize:], packedNumValues, nullBitmap, numValues)
 	case arrow.FLOAT64:
-		return d.decodeFloat64(data[headerSize:], int(numValues))
+		return d.decodeFloat64(data[headerSize:], packedNumValues, nullBitmap, numValues)
 	default:
 		return nil, lerrors.New(lerrors.ErrUnsupportedType).
 			Op("bss_decode").
@@ -40,10 +40,10 @@ func (d *BSSDecoder) Decode(data []byte, dtype arrow.DataType) (arrow.Array, err
 	}
 }
 
-func (d *BSSDecoder) decodeFloat32(data []byte, numValues int) (arrow.Array, error) {
+func (d *BSSDecoder) decodeFloat32(data []byte, packedNumValues int, nullBitmap []byte, numValues int) (arrow.Array, error) {
 	// Format: [stream0...][stream1...][stream2...][stream3...]
-	// Each stream has numValues bytes
-	expectedSize := numValues * 4
+	// Each stream has packedNumValues bytes
+	expectedSize := packedNumValues * 4
 	if len(data) < expectedSize {
 		return nil, lerrors.New(lerrors.ErrCorruptedFile).
 			Op("bss_decode_float32").
@@ -53,23 +53,34 @@ func (d *BSSDecoder) decodeFloat32(data []byte, numValues int) (arrow.Array, err
 			Build()
 	}
 
-	values := make([]float32, numValues)
+	values := make([]float32, packedNumValues)
 
 	// Reconstruct from byte streams
-	for i := 0; i < numValues; i++ {
+	for i := 0; i < packedNumValues; i++ {
 		bits := uint32(data[i]) |
-			uint32(data[numValues+i])<<8 |
-			uint32(data[numValues*2+i])<<16 |
-			uint32(data[numValues*3+i])<<24
+			uint32(data[packedNumValues+i])<<8 |
+			uint32(data[packedNumValues*2+i])<<16 |
+			uint32(data[packedNumValues*3+i])<<24
 		values[i] = math.Float32frombits(bits)
+	}
+
+	if nullBitmap != nil && numValues > 0 {
+		expandedValues, err := ExpandFloat32(values, nullBitmap, numValues)
+		if err != nil {
+			return nil, lerrors.New(lerrors.ErrCorruptedFile).
+				Op("bss_decode_float32").
+				Wrap(err).
+				Build()
+		}
+		bitmap := arrow.NewBitmapFromBytes(nullBitmap, numValues)
+		return arrow.NewFloat32Array(expandedValues, bitmap), nil
 	}
 
 	return arrow.NewFloat32Array(values, nil), nil
 }
 
-func (d *BSSDecoder) decodeFloat64(data []byte, numValues int) (arrow.Array, error) {
-	// Format: [stream0...]...[stream7...]
-	expectedSize := numValues * 8
+func (d *BSSDecoder) decodeFloat64(data []byte, packedNumValues int, nullBitmap []byte, numValues int) (arrow.Array, error) {
+	expectedSize := packedNumValues * 8
 	if len(data) < expectedSize {
 		return nil, lerrors.New(lerrors.ErrCorruptedFile).
 			Op("bss_decode_float64").
@@ -79,18 +90,30 @@ func (d *BSSDecoder) decodeFloat64(data []byte, numValues int) (arrow.Array, err
 			Build()
 	}
 
-	values := make([]float64, numValues)
+	values := make([]float64, packedNumValues)
 
-	for i := 0; i < numValues; i++ {
+	for i := 0; i < packedNumValues; i++ {
 		bits := uint64(data[i]) |
-			uint64(data[numValues+i])<<8 |
-			uint64(data[numValues*2+i])<<16 |
-			uint64(data[numValues*3+i])<<24 |
-			uint64(data[numValues*4+i])<<32 |
-			uint64(data[numValues*5+i])<<40 |
-			uint64(data[numValues*6+i])<<48 |
-			uint64(data[numValues*7+i])<<56
+			uint64(data[packedNumValues+i])<<8 |
+			uint64(data[packedNumValues*2+i])<<16 |
+			uint64(data[packedNumValues*3+i])<<24 |
+			uint64(data[packedNumValues*4+i])<<32 |
+			uint64(data[packedNumValues*5+i])<<40 |
+			uint64(data[packedNumValues*6+i])<<48 |
+			uint64(data[packedNumValues*7+i])<<56
 		values[i] = math.Float64frombits(bits)
+	}
+
+	if nullBitmap != nil && numValues > 0 {
+		expandedValues, err := ExpandFloat64(values, nullBitmap, numValues)
+		if err != nil {
+			return nil, lerrors.New(lerrors.ErrCorruptedFile).
+				Op("bss_decode_float64").
+				Wrap(err).
+				Build()
+		}
+		bitmap := arrow.NewBitmapFromBytes(nullBitmap, numValues)
+		return arrow.NewFloat64Array(expandedValues, bitmap), nil
 	}
 
 	return arrow.NewFloat64Array(values, nil), nil

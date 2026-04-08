@@ -35,7 +35,7 @@ func TestRLEEncoder_Encode_Int32(t *testing.T) {
 	}
 
 	// 解码验证
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32())
+	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32(), nil, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestRLEEncoder_Encode_Int64(t *testing.T) {
 		t.Fatalf("Encode failed: %v", err)
 	}
 
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt64())
+	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt64(), nil, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
@@ -83,8 +83,9 @@ func TestRLEEncoder_Encode_Int64(t *testing.T) {
 	}
 }
 
-func TestRLEEncoder_NullNotSupported(t *testing.T) {
+func TestRLEEncoder_WithNulls(t *testing.T) {
 	encoder := NewRLEEncoder()
+	decoder := NewRLEDecoder()
 
 	builder := arrow.NewInt32Builder()
 	for i := 0; i < 10; i++ {
@@ -96,9 +97,43 @@ func TestRLEEncoder_NullNotSupported(t *testing.T) {
 	}
 	array := builder.NewArray()
 
-	_, err := encoder.Encode(array)
-	if err != ErrNullNotSupported {
-		t.Errorf("Expected ErrNullNotSupported, got %v", err)
+	encoded, err := encoder.Encode(array)
+	if err != nil {
+		t.Fatalf("Encode failed: %v", err)
+	}
+
+	if encoded.NullCount != 5 {
+		t.Errorf("Expected NullCount=5, got %d", encoded.NullCount)
+	}
+	if encoded.NumValues != 10 {
+		t.Errorf("Expected NumValues=10, got %d", encoded.NumValues)
+	}
+
+	// 解码并验证
+	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32(), encoded.NullBitmap, encoded.NumValues)
+	if err != nil {
+		t.Fatalf("Decode failed: %v", err)
+	}
+
+	result := decoded.(*arrow.Int32Array)
+	if result.Len() != 10 {
+		t.Fatalf("Expected 10 values, got %d", result.Len())
+	}
+
+	// 验证 null 位置
+	for i := 0; i < 10; i++ {
+		if i%2 == 0 {
+			if result.IsNull(i) {
+				t.Errorf("Expected non-null at %d", i)
+			}
+			if result.Value(i) != int32(i) {
+				t.Errorf("Value mismatch at %d: expected %d, got %d", i, i, result.Value(i))
+			}
+		} else {
+			if !result.IsNull(i) {
+				t.Errorf("Expected null at %d", i)
+			}
+		}
 	}
 }
 
@@ -177,7 +212,7 @@ func TestRLEEncoder_SingleRun(t *testing.T) {
 		t.Logf("Single run compression: %d bytes for 1000 values", len(encoded.Data))
 	}
 
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32())
+	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32(), nil, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
@@ -221,6 +256,6 @@ func BenchmarkRLEDecoder_Decode(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		decoder.Decode(encoded.Data, arrow.PrimInt32())
+		decoder.Decode(encoded.Data, arrow.PrimInt32(), nil, encoded.NumValues)
 	}
 }

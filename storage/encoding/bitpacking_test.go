@@ -70,7 +70,7 @@ func TestBitPacking_Roundtrip(t *testing.T) {
 				t.Errorf("Expected encoded length %d, got %d", 1+4+expectedBytes, len(encoded.Data))
 			}
 
-			decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32())
+			decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32(), nil, encoded.NumValues)
 			if err != nil {
 				t.Fatalf("Decode failed: %v", err)
 			}
@@ -107,7 +107,7 @@ func TestBitPackingEncoder_Encode_Int64(t *testing.T) {
 		t.Fatalf("Encode failed: %v", err)
 	}
 
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt64())
+	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt64(), nil, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
@@ -121,23 +121,63 @@ func TestBitPackingEncoder_Encode_Int64(t *testing.T) {
 	}
 }
 
-func TestBitPackingEncoder_NullNotSupported(t *testing.T) {
+func TestBitPackingEncoder_WithNulls(t *testing.T) {
 	encoder := NewBitPackingEncoder(8)
+	decoder := NewBitPackingDecoder()
 
 	// 创建包含 null 的数组
 	builder := arrow.NewInt32Builder()
+	expectedValues := make([]int32, 0, 5)
 	for i := 0; i < 10; i++ {
 		if i%2 == 0 {
 			builder.Append(int32(i))
+			expectedValues = append(expectedValues, int32(i))
 		} else {
 			builder.AppendNull()
 		}
 	}
 	array := builder.NewArray()
 
-	_, err := encoder.Encode(array)
-	if err != ErrNullNotSupported {
-		t.Errorf("Expected ErrNullNotSupported, got %v", err)
+	encoded, err := encoder.Encode(array)
+	if err != nil {
+		t.Fatalf("Encode failed: %v", err)
+	}
+
+	if encoded.NullCount != 5 {
+		t.Errorf("Expected NullCount=5, got %d", encoded.NullCount)
+	}
+	if encoded.NumValues != 10 {
+		t.Errorf("Expected NumValues=10, got %d", encoded.NumValues)
+	}
+	if encoded.NullBitmap == nil {
+		t.Error("Expected NullBitmap to be set")
+	}
+
+	// 解码并验证
+	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32(), encoded.NullBitmap, encoded.NumValues)
+	if err != nil {
+		t.Fatalf("Decode failed: %v", err)
+	}
+
+	result := decoded.(*arrow.Int32Array)
+	if result.Len() != 10 {
+		t.Fatalf("Expected 10 values, got %d", result.Len())
+	}
+
+	// 验证 null 位置
+	for i := 0; i < 10; i++ {
+		if i%2 == 0 {
+			if result.IsNull(i) {
+				t.Errorf("Expected non-null at %d", i)
+			}
+			if result.Value(i) != int32(i) {
+				t.Errorf("Value mismatch at %d: expected %d, got %d", i, i, result.Value(i))
+			}
+		} else {
+			if !result.IsNull(i) {
+				t.Errorf("Expected null at %d", i)
+			}
+		}
 	}
 }
 
@@ -218,7 +258,7 @@ func TestBitPackingDecoder_CorruptedData(t *testing.T) {
 	decoder := NewBitPackingDecoder()
 
 	// Data too short for header
-	_, err := decoder.Decode([]byte{0x01, 0x02, 0x03}, arrow.PrimInt32())
+	_, err := decoder.Decode([]byte{0x01, 0x02, 0x03}, arrow.PrimInt32(), nil, 0)
 	if err == nil {
 		t.Error("Expected error for corrupted data (too short)")
 	}
@@ -227,7 +267,7 @@ func TestBitPackingDecoder_CorruptedData(t *testing.T) {
 	// Header: bitWidth=8, len=100. Data: only 1 byte.
 	header := []byte{8, 100, 0, 0, 0}
 	data := append(header, 0xAA)
-	_, err = decoder.Decode(data, arrow.PrimInt32())
+	_, err = decoder.Decode(data, arrow.PrimInt32(), nil, 0)
 	if err == nil {
 		t.Error("Expected error for corrupted data (length mismatch)")
 	}
@@ -266,6 +306,6 @@ func BenchmarkBitPackingDecoder_Decode(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		decoder.Decode(encoded.Data, arrow.PrimInt32())
+		decoder.Decode(encoded.Data, arrow.PrimInt32(), nil, encoded.NumValues)
 	}
 }

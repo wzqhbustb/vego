@@ -272,7 +272,7 @@ func (r *Reader) readColumnsSync(columns []arrow.Array) error {
 	for colIdx := 0; colIdx < schema.NumFields(); colIdx++ {
 		column, err := r.readColumn(int32(colIdx))
 		if err != nil {
-			lerrors.New(lerrors.ErrColumnNotFound).
+			return lerrors.New(lerrors.ErrColumnNotFound).
 				Op("read_columns_sync").
 				Context("column_index", colIdx).
 				Wrap(err).
@@ -942,7 +942,13 @@ func (r *Reader) readColumnRowAt(columnIndex int32, rowIdx int64) (interface{}, 
 }
 
 // extractValueFromArray extracts a single value from an array at the given index.
+// Returns nil if the value at idx is null.
 func (r *Reader) extractValueFromArray(arr arrow.Array, idx int, dataType arrow.DataType) (interface{}, error) {
+	// Check for null first
+	if arr.IsNull(idx) {
+		return nil, nil
+	}
+
 	switch arr := arr.(type) {
 	case *arrow.Int64Array:
 		return arr.Value(idx), nil
@@ -951,7 +957,7 @@ func (r *Reader) extractValueFromArray(arr arrow.Array, idx int, dataType arrow.
 	case *arrow.Float32Array:
 		return arr.Value(idx), nil
 	case *arrow.Float64Array:
-		return float32(arr.Value(idx)), nil
+		return arr.Value(idx), nil
 	case *arrow.FixedSizeListArray:
 		// Handle vector type
 		return r.getFixedSizeListValues(arr, idx), nil

@@ -21,6 +21,18 @@ var (
 		Op("encode").
 		Context("reason", "empty array").
 		Build()
+
+	// ErrInvalidData indicates the encoded data is invalid or corrupted.
+	ErrInvalidData = lerrors.New(lerrors.ErrInvalidArgument).
+		Op("encode").
+		Context("reason", "invalid data").
+		Build()
+
+	// ErrCorruptedNullBitmap indicates the null bitmap doesn't match the values (data corruption).
+	ErrCorruptedNullBitmap = lerrors.New(lerrors.ErrCorruptedFile).
+		Op("expand_nulls").
+		Context("reason", "null bitmap count mismatch").
+		Build()
 )
 
 // EncodeError creates a structured encoding error

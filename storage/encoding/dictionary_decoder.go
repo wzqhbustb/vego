@@ -14,7 +14,7 @@ func NewDictionaryDecoder() *DictionaryDecoder {
 	return &DictionaryDecoder{}
 }
 
-func (d *DictionaryDecoder) Decode(data []byte, dtype arrow.DataType) (arrow.Array, error) {
+func (d *DictionaryDecoder) Decode(data []byte, dtype arrow.DataType, nullBitmap []byte, numValues int) (arrow.Array, error) {
 	if len(data) < 10 {
 		return nil, lerrors.New(lerrors.ErrCorruptedFile).
 			Op("dictionary_decode").
@@ -26,7 +26,7 @@ func (d *DictionaryDecoder) Decode(data []byte, dtype arrow.DataType) (arrow.Arr
 
 	valueSize := int(data[0])
 	numEntries := binary.LittleEndian.Uint32(data[1:5])
-	numValues := binary.LittleEndian.Uint32(data[5:9])
+	packedNumValues := int(binary.LittleEndian.Uint32(data[5:9]))
 	indexSize := int(data[9])
 
 	headerSize := 10
@@ -42,7 +42,7 @@ func (d *DictionaryDecoder) Decode(data []byte, dtype arrow.DataType) (arrow.Arr
 				Context("actual", valueSize).
 				Build()
 		}
-		return d.decodeInt32(data[offset:], int(numEntries), int(numValues), indexSize)
+		return d.decodeInt32(data[offset:], int(numEntries), packedNumValues, indexSize, nullBitmap, numValues)
 	case arrow.INT64:
 		if valueSize != 8 {
 			return nil, lerrors.New(lerrors.ErrCorruptedFile).
@@ -52,7 +52,7 @@ func (d *DictionaryDecoder) Decode(data []byte, dtype arrow.DataType) (arrow.Arr
 				Context("actual", valueSize).
 				Build()
 		}
-		return d.decodeInt64(data[offset:], int(numEntries), int(numValues), indexSize)
+		return d.decodeInt64(data[offset:], int(numEntries), packedNumValues, indexSize, nullBitmap, numValues)
 	case arrow.FLOAT32:
 		if valueSize != 4 {
 			return nil, lerrors.New(lerrors.ErrCorruptedFile).
@@ -62,7 +62,7 @@ func (d *DictionaryDecoder) Decode(data []byte, dtype arrow.DataType) (arrow.Arr
 				Context("actual", valueSize).
 				Build()
 		}
-		return d.decodeFloat32(data[offset:], int(numEntries), int(numValues), indexSize)
+		return d.decodeFloat32(data[offset:], int(numEntries), packedNumValues, indexSize, nullBitmap, numValues)
 	case arrow.FLOAT64:
 		if valueSize != 8 {
 			return nil, lerrors.New(lerrors.ErrCorruptedFile).
@@ -72,7 +72,7 @@ func (d *DictionaryDecoder) Decode(data []byte, dtype arrow.DataType) (arrow.Arr
 				Context("actual", valueSize).
 				Build()
 		}
-		return d.decodeFloat64(data[offset:], int(numEntries), int(numValues), indexSize)
+		return d.decodeFloat64(data[offset:], int(numEntries), packedNumValues, indexSize, nullBitmap, numValues)
 	default:
 		return nil, lerrors.New(lerrors.ErrUnsupportedType).
 			Op("dictionary_decode").
@@ -80,7 +80,7 @@ func (d *DictionaryDecoder) Decode(data []byte, dtype arrow.DataType) (arrow.Arr
 	}
 }
 
-func (d *DictionaryDecoder) decodeInt32(data []byte, numEntries, numValues, indexSize int) (arrow.Array, error) {
+func (d *DictionaryDecoder) decodeInt32(data []byte, numEntries, packedNumValues, indexSize int, nullBitmap []byte, numValues int) (arrow.Array, error) {
 	// Read dictionary
 	dictSize := numEntries * 4
 	if len(data) < dictSize {
@@ -99,7 +99,7 @@ func (d *DictionaryDecoder) decodeInt32(data []byte, numEntries, numValues, inde
 
 	// Read indices
 	offset := dictSize
-	indexArraySize := numValues * indexSize
+	indexArraySize := packedNumValues * indexSize
 	if len(data) < dictSize+indexArraySize {
 		return nil, lerrors.New(lerrors.ErrCorruptedFile).
 			Op("dictionary_decode_int32").
@@ -110,8 +110,8 @@ func (d *DictionaryDecoder) decodeInt32(data []byte, numEntries, numValues, inde
 	}
 
 	// Expand values using indices
-	values := make([]int32, numValues)
-	for i := 0; i < numValues; i++ {
+	values := make([]int32, packedNumValues)
+	for i := 0; i < packedNumValues; i++ {
 		var idx int
 		if indexSize == 2 {
 			idx = int(binary.LittleEndian.Uint16(data[offset+i*2:]))
@@ -129,10 +129,22 @@ func (d *DictionaryDecoder) decodeInt32(data []byte, numEntries, numValues, inde
 		values[i] = dict[idx]
 	}
 
+	if nullBitmap != nil && numValues > 0 {
+		expandedValues, err := ExpandInt32(values, nullBitmap, numValues)
+		if err != nil {
+			return nil, lerrors.New(lerrors.ErrCorruptedFile).
+				Op("dictionary_decode_int32").
+				Wrap(err).
+				Build()
+		}
+		bitmap := arrow.NewBitmapFromBytes(nullBitmap, numValues)
+		return arrow.NewInt32Array(expandedValues, bitmap), nil
+	}
+
 	return arrow.NewInt32Array(values, nil), nil
 }
 
-func (d *DictionaryDecoder) decodeInt64(data []byte, numEntries, numValues, indexSize int) (arrow.Array, error) {
+func (d *DictionaryDecoder) decodeInt64(data []byte, numEntries, packedNumValues, indexSize int, nullBitmap []byte, numValues int) (arrow.Array, error) {
 	dictSize := numEntries * 8
 	if len(data) < dictSize {
 		return nil, lerrors.New(lerrors.ErrCorruptedFile).
@@ -149,8 +161,18 @@ func (d *DictionaryDecoder) decodeInt64(data []byte, numEntries, numValues, inde
 	}
 
 	offset := dictSize
-	values := make([]int64, numValues)
-	for i := 0; i < numValues; i++ {
+	indexArraySize := packedNumValues * indexSize
+	if len(data) < dictSize+indexArraySize {
+		return nil, lerrors.New(lerrors.ErrCorruptedFile).
+			Op("dictionary_decode_int64").
+			Context("reason", "insufficient data for indices").
+			Context("expected", dictSize+indexArraySize).
+			Context("actual", len(data)).
+			Build()
+	}
+
+	values := make([]int64, packedNumValues)
+	for i := 0; i < packedNumValues; i++ {
 		var idx int
 		if indexSize == 2 {
 			idx = int(binary.LittleEndian.Uint16(data[offset+i*2:]))
@@ -168,10 +190,22 @@ func (d *DictionaryDecoder) decodeInt64(data []byte, numEntries, numValues, inde
 		values[i] = dict[idx]
 	}
 
+	if nullBitmap != nil && numValues > 0 {
+		expandedValues, err := ExpandInt64(values, nullBitmap, numValues)
+		if err != nil {
+			return nil, lerrors.New(lerrors.ErrCorruptedFile).
+				Op("dictionary_decode_int64").
+				Wrap(err).
+				Build()
+		}
+		bitmap := arrow.NewBitmapFromBytes(nullBitmap, numValues)
+		return arrow.NewInt64Array(expandedValues, bitmap), nil
+	}
+
 	return arrow.NewInt64Array(values, nil), nil
 }
 
-func (d *DictionaryDecoder) decodeFloat32(data []byte, numEntries, numValues, indexSize int) (arrow.Array, error) {
+func (d *DictionaryDecoder) decodeFloat32(data []byte, numEntries, packedNumValues, indexSize int, nullBitmap []byte, numValues int) (arrow.Array, error) {
 	dictSize := numEntries * 4
 	if len(data) < dictSize {
 		return nil, lerrors.New(lerrors.ErrCorruptedFile).
@@ -189,8 +223,18 @@ func (d *DictionaryDecoder) decodeFloat32(data []byte, numEntries, numValues, in
 	}
 
 	offset := dictSize
-	values := make([]float32, numValues)
-	for i := 0; i < numValues; i++ {
+	indexArraySize := packedNumValues * indexSize
+	if len(data) < dictSize+indexArraySize {
+		return nil, lerrors.New(lerrors.ErrCorruptedFile).
+			Op("dictionary_decode_float32").
+			Context("reason", "insufficient data for indices").
+			Context("expected", dictSize+indexArraySize).
+			Context("actual", len(data)).
+			Build()
+	}
+
+	values := make([]float32, packedNumValues)
+	for i := 0; i < packedNumValues; i++ {
 		var idx int
 		if indexSize == 2 {
 			idx = int(binary.LittleEndian.Uint16(data[offset+i*2:]))
@@ -208,10 +252,22 @@ func (d *DictionaryDecoder) decodeFloat32(data []byte, numEntries, numValues, in
 		values[i] = dict[idx]
 	}
 
+	if nullBitmap != nil && numValues > 0 {
+		expandedValues, err := ExpandFloat32(values, nullBitmap, numValues)
+		if err != nil {
+			return nil, lerrors.New(lerrors.ErrCorruptedFile).
+				Op("dictionary_decode_float32").
+				Wrap(err).
+				Build()
+		}
+		bitmap := arrow.NewBitmapFromBytes(nullBitmap, numValues)
+		return arrow.NewFloat32Array(expandedValues, bitmap), nil
+	}
+
 	return arrow.NewFloat32Array(values, nil), nil
 }
 
-func (d *DictionaryDecoder) decodeFloat64(data []byte, numEntries, numValues, indexSize int) (arrow.Array, error) {
+func (d *DictionaryDecoder) decodeFloat64(data []byte, numEntries, packedNumValues, indexSize int, nullBitmap []byte, numValues int) (arrow.Array, error) {
 	dictSize := numEntries * 8
 	if len(data) < dictSize {
 		return nil, lerrors.New(lerrors.ErrCorruptedFile).
@@ -229,8 +285,18 @@ func (d *DictionaryDecoder) decodeFloat64(data []byte, numEntries, numValues, in
 	}
 
 	offset := dictSize
-	values := make([]float64, numValues)
-	for i := 0; i < numValues; i++ {
+	indexArraySize := packedNumValues * indexSize
+	if len(data) < dictSize+indexArraySize {
+		return nil, lerrors.New(lerrors.ErrCorruptedFile).
+			Op("dictionary_decode_float64").
+			Context("reason", "insufficient data for indices").
+			Context("expected", dictSize+indexArraySize).
+			Context("actual", len(data)).
+			Build()
+	}
+
+	values := make([]float64, packedNumValues)
+	for i := 0; i < packedNumValues; i++ {
 		var idx int
 		if indexSize == 2 {
 			idx = int(binary.LittleEndian.Uint16(data[offset+i*2:]))
@@ -246,6 +312,18 @@ func (d *DictionaryDecoder) decodeFloat64(data []byte, numEntries, numValues, in
 				Build()
 		}
 		values[i] = dict[idx]
+	}
+
+	if nullBitmap != nil && numValues > 0 {
+		expandedValues, err := ExpandFloat64(values, nullBitmap, numValues)
+		if err != nil {
+			return nil, lerrors.New(lerrors.ErrCorruptedFile).
+				Op("dictionary_decode_float64").
+				Wrap(err).
+				Build()
+		}
+		bitmap := arrow.NewBitmapFromBytes(nullBitmap, numValues)
+		return arrow.NewFloat64Array(expandedValues, bitmap), nil
 	}
 
 	return arrow.NewFloat64Array(values, nil), nil

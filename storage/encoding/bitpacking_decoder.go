@@ -14,7 +14,7 @@ func NewBitPackingDecoder() *BitPackingDecoder {
 	return &BitPackingDecoder{}
 }
 
-func (d *BitPackingDecoder) Decode(data []byte, dtype arrow.DataType) (arrow.Array, error) {
+func (d *BitPackingDecoder) Decode(data []byte, dtype arrow.DataType, nullBitmap []byte, numValues int) (arrow.Array, error) {
 	if len(data) < 5 {
 		return nil, lerrors.New(lerrors.ErrCorruptedFile).
 			Op("bitpacking_decode").
@@ -32,12 +32,12 @@ func (d *BitPackingDecoder) Decode(data []byte, dtype arrow.DataType) (arrow.Arr
 			Context("bit_width", bitWidth).
 			Build()
 	}
-	numValues := binary.LittleEndian.Uint32(data[1:5])
+	packedNumValues := binary.LittleEndian.Uint32(data[1:5])
 
 	packedData := data[5:]
 
 	// 验证数据长度是否足够
-	expectedBits := uint64(numValues) * uint64(bitWidth)
+	expectedBits := uint64(packedNumValues) * uint64(bitWidth)
 	expectedBytes := (expectedBits + 7) / 8
 	if uint64(len(packedData)) < expectedBytes {
 		return nil, lerrors.New(lerrors.ErrCorruptedFile).
@@ -50,9 +50,9 @@ func (d *BitPackingDecoder) Decode(data []byte, dtype arrow.DataType) (arrow.Arr
 
 	switch dtype.ID() {
 	case arrow.INT32:
-		return d.decodeInt32(packedData, int(numValues), bitWidth)
+		return d.decodeInt32(packedData, int(packedNumValues), bitWidth, nullBitmap, numValues)
 	case arrow.INT64:
-		return d.decodeInt64(packedData, int(numValues), bitWidth)
+		return d.decodeInt64(packedData, int(packedNumValues), bitWidth, nullBitmap, numValues)
 	default:
 		return nil, lerrors.New(lerrors.ErrUnsupportedType).
 			Op("bitpacking_decode").
@@ -61,14 +61,44 @@ func (d *BitPackingDecoder) Decode(data []byte, dtype arrow.DataType) (arrow.Arr
 	}
 }
 
-func (d *BitPackingDecoder) decodeInt32(data []byte, numValues int, bitWidth uint8) (arrow.Array, error) {
-	values := unpackBitsToInt32(data, numValues, bitWidth)
-	return arrow.NewInt32Array(values, nil), nil
+func (d *BitPackingDecoder) decodeInt32(data []byte, packedNumValues int, bitWidth uint8, nullBitmap []byte, numValues int) (arrow.Array, error) {
+	values := unpackBitsToInt32(data, packedNumValues, bitWidth)
+	
+	// If no null bitmap, return directly
+	if nullBitmap == nil || numValues == 0 {
+		return arrow.NewInt32Array(values, nil), nil
+	}
+	
+	// Expand with nulls: insert values back to their original positions
+	expandedValues, err := ExpandInt32(values, nullBitmap, numValues)
+	if err != nil {
+		return nil, lerrors.New(lerrors.ErrCorruptedFile).
+			Op("bitpacking_decode_int32").
+			Wrap(err).
+			Build()
+	}
+	bitmap := arrow.NewBitmapFromBytes(nullBitmap, numValues)
+	return arrow.NewInt32Array(expandedValues, bitmap), nil
 }
 
-func (d *BitPackingDecoder) decodeInt64(data []byte, numValues int, bitWidth uint8) (arrow.Array, error) {
-	values := unpackBitsToInt64(data, numValues, bitWidth)
-	return arrow.NewInt64Array(values, nil), nil
+func (d *BitPackingDecoder) decodeInt64(data []byte, packedNumValues int, bitWidth uint8, nullBitmap []byte, numValues int) (arrow.Array, error) {
+	values := unpackBitsToInt64(data, packedNumValues, bitWidth)
+	
+	// If no null bitmap, return directly
+	if nullBitmap == nil || numValues == 0 {
+		return arrow.NewInt64Array(values, nil), nil
+	}
+	
+	// Expand with nulls
+	expandedValues, err := ExpandInt64(values, nullBitmap, numValues)
+	if err != nil {
+		return nil, lerrors.New(lerrors.ErrCorruptedFile).
+			Op("bitpacking_decode_int64").
+			Wrap(err).
+			Build()
+	}
+	bitmap := arrow.NewBitmapFromBytes(nullBitmap, numValues)
+	return arrow.NewInt64Array(expandedValues, bitmap), nil
 }
 
 // unpackBitsToInt32 从字节流中解包出多个 int32 值

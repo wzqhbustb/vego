@@ -31,7 +31,7 @@ func TestDictionaryEncoder_Basic_Int32(t *testing.T) {
 	}
 
 	// Decode
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32())
+	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32(), nil, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestDictionaryEncoder_Basic_Float64(t *testing.T) {
 		t.Fatalf("Encode failed: %v", err)
 	}
 
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimFloat64())
+	decoded, err := decoder.Decode(encoded.Data, arrow.PrimFloat64(), nil, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestDictionaryEncoder_SingleValue(t *testing.T) {
 		t.Errorf("Expected 1 dictionary entry for single value, got %d", numEntries)
 	}
 
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32())
+	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32(), nil, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
@@ -130,19 +130,53 @@ func TestDictionaryEncoder_SingleValue(t *testing.T) {
 	}
 }
 
-func TestDictionaryEncoder_NullNotSupported(t *testing.T) {
+func TestDictionaryEncoder_WithNulls(t *testing.T) {
 	encoder := NewDictionaryEncoder()
+	decoder := NewDictionaryDecoder()
 
 	// Create array with nulls
 	builder := arrow.NewInt32Builder()
 	builder.Append(1)
 	builder.AppendNull()
 	builder.Append(2)
+	builder.AppendNull()
+	builder.Append(1)
 	array := builder.NewArray()
 
-	_, err := encoder.Encode(array)
-	if err != ErrNullNotSupported {
-		t.Errorf("Expected ErrNullNotSupported, got %v", err)
+	encoded, err := encoder.Encode(array)
+	if err != nil {
+		t.Fatalf("Encode failed: %v", err)
+	}
+
+	if encoded.NullCount != 2 {
+		t.Errorf("Expected NullCount=2, got %d", encoded.NullCount)
+	}
+	if encoded.NumValues != 5 {
+		t.Errorf("Expected NumValues=5, got %d", encoded.NumValues)
+	}
+
+	// 解码并验证
+	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32(), encoded.NullBitmap, encoded.NumValues)
+	if err != nil {
+		t.Fatalf("Decode failed: %v", err)
+	}
+
+	result := decoded.(*arrow.Int32Array)
+	if result.Len() != 5 {
+		t.Fatalf("Expected 5 values, got %d", result.Len())
+	}
+
+	// 验证值和 null 位置
+	expectedValues := []int32{1, 0, 2, 0, 1} // 0 for null positions
+	expectedNulls := []bool{false, true, false, true, false}
+
+	for i := 0; i < 5; i++ {
+		if result.IsNull(i) != expectedNulls[i] {
+			t.Errorf("Null mismatch at %d: expected IsNull=%v", i, expectedNulls[i])
+		}
+		if !expectedNulls[i] && result.Value(i) != expectedValues[i] {
+			t.Errorf("Value mismatch at %d: expected %d, got %d", i, expectedValues[i], result.Value(i))
+		}
 	}
 }
 
@@ -167,7 +201,7 @@ func TestDictionaryEncoder_Int64(t *testing.T) {
 		t.Errorf("Expected valueSize 8 for Int64, got %d", encoded.Data[0])
 	}
 
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt64())
+	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt64(), nil, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
@@ -198,7 +232,7 @@ func TestDictionaryEncoder_Float32(t *testing.T) {
 		t.Errorf("Expected valueSize 4 for Float32, got %d", encoded.Data[0])
 	}
 
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimFloat32())
+	decoded, err := decoder.Decode(encoded.Data, arrow.PrimFloat32(), nil, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
@@ -252,7 +286,7 @@ func TestDictionaryEncoder_LargeDictionary(t *testing.T) {
 		t.Errorf("Expected indexSize 4 for large dictionary, got %d", indexSize)
 	}
 
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32())
+	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32(), nil, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
@@ -280,7 +314,7 @@ func TestDictionaryDecoder_TruncatedData(t *testing.T) {
 
 	// Data too short for header
 	shortData := []byte{4, 0, 0} // Only 3 bytes, need at least 10
-	_, err := decoder.Decode(shortData, arrow.PrimInt32())
+	_, err := decoder.Decode(shortData, arrow.PrimInt32(), nil, 0)
 	if err == nil {
 		t.Error("Expected error for truncated header")
 	}
@@ -296,7 +330,7 @@ func TestDictionaryDecoder_InvalidValueSize(t *testing.T) {
 	binary.LittleEndian.PutUint32(data[5:9], 1)
 	data[9] = 2
 
-	_, err := decoder.Decode(data, arrow.PrimInt32())
+	_, err := decoder.Decode(data, arrow.PrimInt32(), nil, 0)
 	if err == nil {
 		t.Error("Expected error for invalid valueSize")
 	}
@@ -312,7 +346,7 @@ func TestDictionaryDecoder_InvalidIndexSize(t *testing.T) {
 	binary.LittleEndian.PutUint32(data[1:5], 1) // numEntries = 1
 	binary.LittleEndian.PutUint32(data[5:9], 1) // numValues = 1
 
-	_, err := decoder.Decode(data, arrow.PrimInt32())
+	_, err := decoder.Decode(data, arrow.PrimInt32(), nil, 0)
 	if err == nil {
 		t.Error("Expected error for invalid indexSize")
 	}
@@ -336,7 +370,7 @@ func TestDictionaryDecoder_InvalidIndex(t *testing.T) {
 		binary.LittleEndian.PutUint16(encoded.Data[20:22], 5) // Invalid index
 	}
 
-	_, err := decoder.Decode(encoded.Data, arrow.PrimInt32())
+	_, err := decoder.Decode(encoded.Data, arrow.PrimInt32(), nil, encoded.NumValues)
 	if err == nil {
 		t.Error("Expected error for invalid index")
 	}
@@ -352,7 +386,7 @@ func TestDictionaryDecoder_WrongType(t *testing.T) {
 	encoded, _ := encoder.Encode(array)
 
 	// Try to decode Int32 data as Int64
-	_, err := decoder.Decode(encoded.Data, arrow.PrimInt64())
+	_, err := decoder.Decode(encoded.Data, arrow.PrimInt64(), nil, encoded.NumValues)
 	if err == nil {
 		t.Error("Expected error for wrong type")
 	}
@@ -462,7 +496,7 @@ func TestDictionaryEncoder_RoundTrip_VariousPatterns(t *testing.T) {
 				t.Fatalf("Encode failed: %v", err)
 			}
 
-			decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32())
+			decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32(), nil, encoded.NumValues)
 			if err != nil {
 				t.Fatalf("Decode failed: %v", err)
 			}
@@ -504,7 +538,7 @@ func TestDictionaryEncoder_RoundTrip_FloatPatterns(t *testing.T) {
 				t.Fatalf("Encode failed: %v", err)
 			}
 
-			decoded, err := decoder.Decode(encoded.Data, arrow.PrimFloat64())
+			decoded, err := decoder.Decode(encoded.Data, arrow.PrimFloat64(), nil, encoded.NumValues)
 			if err != nil {
 				t.Fatalf("Decode failed: %v", err)
 			}
@@ -554,7 +588,7 @@ func BenchmarkDictionaryDecoder_Decode(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		decoder.Decode(encoded.Data, arrow.PrimInt32())
+		decoder.Decode(encoded.Data, arrow.PrimInt32(), nil, encoded.NumValues)
 	}
 }
 

@@ -184,7 +184,8 @@ func (f *EncoderFactory) GetCompressionLevel() int {
 // Combined Encoder
 // ====================
 
-// CombinedEncoder chains multiple encoders (e.g., BSS + Zstd)
+// CombinedEncoder chains multiple encoders (e.g., BSS + Zstd) with null preservation.
+// Null bitmap is preserved through the encoding chain and stored only for non-Zstd final encoders.
 type CombinedEncoder struct {
 	encoders []Encoder
 }
@@ -225,7 +226,8 @@ func (e *CombinedEncoder) Encode(array arrow.Array) (*EncodedData, error) {
 				return nil, decErr
 			}
 			if decoder != nil {
-				current, err = decoder.Decode(result.Data, current.DataType())
+				// Pass null bitmap and numValues for proper null handling
+				current, err = decoder.Decode(result.Data, current.DataType(), result.NullBitmap, result.NumValues)
 				if err != nil {
 					return nil, err
 				}
@@ -233,16 +235,25 @@ func (e *CombinedEncoder) Encode(array arrow.Array) (*EncodedData, error) {
 		}
 	}
 
+	// 对于非 Zstd 的最终编码，需要单独存储 null bitmap
+	// 如果最终是 Zstd，null 信息已经嵌入在压缩流中，不需要重复存储
+	if result != nil && result.Type != format.EncodingZstd && array.NullN() > 0 {
+		result.NumValues = array.Len()
+		result.NullCount = array.NullN()
+		result.NullBitmap = ExtractNullBitmap(array) // 使用复制版本，避免引用外部内存
+	}
+
 	return result, nil
 }
 
-// EstimateSize estimates the size after all encodings
+// EstimateSize estimates the size after all encodings.
+// Returns the estimate from the last encoder in the chain (typically the actual output size).
 func (e *CombinedEncoder) EstimateSize(array arrow.Array) int {
-	estimated := array.Len() * GetValueSize(array.DataType().ID())
-	for _, encoder := range e.encoders {
-		estimated = encoder.EstimateSize(array)
+	if len(e.encoders) == 0 {
+		return array.Len() * GetValueSize(array.DataType().ID())
 	}
-	return estimated
+	// The final encoder determines the output size
+	return e.encoders[len(e.encoders)-1].EstimateSize(array)
 }
 
 // SupportsType checks if all encoders in the chain support the given type
