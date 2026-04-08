@@ -246,13 +246,14 @@ func (e *CombinedEncoder) Encode(array arrow.Array) (*EncodedData, error) {
 	return result, nil
 }
 
-// EstimateSize estimates the size after all encodings
+// EstimateSize estimates the size after all encodings.
+// Returns the estimate from the last encoder in the chain (typically the actual output size).
 func (e *CombinedEncoder) EstimateSize(array arrow.Array) int {
-	estimated := array.Len() * GetValueSize(array.DataType().ID())
-	for _, encoder := range e.encoders {
-		estimated = encoder.EstimateSize(array)
+	if len(e.encoders) == 0 {
+		return array.Len() * GetValueSize(array.DataType().ID())
 	}
-	return estimated
+	// The final encoder determines the output size
+	return e.encoders[len(e.encoders)-1].EstimateSize(array)
 }
 
 // SupportsType checks if all encoders in the chain support the given type

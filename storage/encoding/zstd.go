@@ -92,7 +92,7 @@ func (e *ZstdEncoder) SupportsType(dtype arrow.DataType) bool {
 }
 
 // arrayToBytesWithNull 将 Array 转换为字节（包含 values 和 null bitmap）
-// 格式: [numValues:4][values...][bitmapLen:2][bitmap...]
+// 格式: [numValues:4][values...][bitmapLen:4][bitmap...]
 // 对于 FixedSizeListArray，bitmap 是 list-level 的
 func arrayToBytesWithNull(array arrow.Array) ([]byte, error) {
 	numValues := array.Len()
@@ -117,8 +117,10 @@ func arrayToBytesWithNull(array arrow.Array) ([]byte, error) {
 		}
 	}
 
-	// 构建输出: [numValues:4][values...][bitmapLen:2][bitmap...]
-	totalSize := 4 + len(valuesBytes) + 2 + len(bitmapBytes)
+	// 构建输出: [numValues:4][values...][bitmapLen:4][bitmap...]
+	// 注意: bitmapLen 使用 uint32 (4字节) 而非 uint16，避免大数据量时溢出
+	// 最大支持 bitmap 大小: 4GB，对应约 340 亿行数据
+	totalSize := 4 + len(valuesBytes) + 4 + len(bitmapBytes)
 	buf := make([]byte, 0, totalSize)
 
 	// Write numValues (4 bytes)
@@ -129,9 +131,9 @@ func arrayToBytesWithNull(array arrow.Array) ([]byte, error) {
 	// Write values
 	buf = append(buf, valuesBytes...)
 
-	// Write bitmapLen (2 bytes) and bitmap
-	bitmapLenBuf := make([]byte, 2)
-	binary.LittleEndian.PutUint16(bitmapLenBuf, uint16(len(bitmapBytes)))
+	// Write bitmapLen (4 bytes) and bitmap
+	bitmapLenBuf := make([]byte, 4)
+	binary.LittleEndian.PutUint32(bitmapLenBuf, uint32(len(bitmapBytes)))
 	buf = append(buf, bitmapLenBuf...)
 	buf = append(buf, bitmapBytes...)
 

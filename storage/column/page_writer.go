@@ -164,10 +164,8 @@ func (w *PageWriter) EstimatePageSize(array arrow.Array) (int, error) {
 }
 
 // encoderSupportsNulls checks if an encoder can handle null values.
-// Currently only Zstd supports null values. All specialized encoders
-// (RLE, BitPacking, BSS, Dictionary) reject arrays with nulls.
+// All built-in encoders (Zstd, RLE, BitPacking, BSS, Dictionary) now support null values.
 func (w *PageWriter) encoderSupportsNulls(encoder encoding.Encoder) bool {
-	// 所有编码器都已实现完整的 null 支持
 	switch encoder.Type() {
 	case format.EncodingZstd, format.EncodingRLE, format.EncodingBitPacked,
 		format.EncodingBSSEncoding, format.EncodingDictionary:

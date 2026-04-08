@@ -31,15 +31,15 @@ func NewZstdDecoder() (*ZstdDecoder, error) {
 
 // Decode decompresses zstd data and reconstructs the Arrow array.
 // Note: Zstd encoding embeds null information within the compressed data itself
-// (format: [numValues:4][values...][bitmapLen:2][bitmap...]), so the nullBitmap
+// (format: [numValues:4][values...][bitmapLen:4][bitmap...]), so the nullBitmap
 // and numValues parameters are ignored. This is different from other encoders
 // (RLE/BitPacking/BSS/Dictionary) which store null bitmap separately.
 func (d *ZstdDecoder) Decode(data []byte, dtype arrow.DataType, nullBitmap []byte, numValues int) (arrow.Array, error) {
-	if len(data) < 6 {
+	if len(data) < 8 {
 		return nil, lerrors.New(lerrors.ErrCorruptedFile).
 			Op("zstd_decode").
 			Context("reason", "data too short").
-			Context("min_required", 6).
+			Context("min_required", 8).
 			Context("actual", len(data)).
 			Build()
 	}
@@ -71,13 +71,14 @@ func (d *ZstdDecoder) Decode(data []byte, dtype arrow.DataType, nullBitmap []byt
 }
 
 // bytesToArray converts bytes back to Arrow array
-// Format: [numValues:4][values...][bitmapLen:2][bitmap...]
+// Format: [numValues:4][values...][bitmapLen:4][bitmap...]
+// Note: bitmapLen uses uint32 (4 bytes) to support large datasets (>520k rows)
 func bytesToArray(data []byte, dtype arrow.DataType) (arrow.Array, error) {
-	if len(data) < 6 {
+	if len(data) < 8 {
 		return nil, lerrors.New(lerrors.ErrCorruptedFile).
 			Op("zstd_bytes_to_array").
 			Context("reason", "data too short for header").
-			Context("min_required", 6).
+			Context("min_required", 8).
 			Context("actual", len(data)).
 			Build()
 	}
@@ -105,11 +106,11 @@ func bytesToArray(data []byte, dtype arrow.DataType) (arrow.Array, error) {
 
 func bytesToInt32Array(data []byte, numValues int) (arrow.Array, error) {
 	valueSize := 4 * numValues
-	if len(data) < 4+valueSize+2 {
+	if len(data) < 4+valueSize+4 {
 		return nil, lerrors.New(lerrors.ErrCorruptedFile).
 			Op("zstd_bytes_to_int32").
 			Context("reason", "insufficient data").
-			Context("expected", 4+valueSize+2).
+			Context("expected", 4+valueSize+4).
 			Context("actual", len(data)).
 			Build()
 	}
@@ -121,11 +122,11 @@ func bytesToInt32Array(data []byte, numValues int) (arrow.Array, error) {
 		values[i] = int32(binary.LittleEndian.Uint32(valuesBuf[i*4:]))
 	}
 
-	// Extract bitmap
-	bitmapLen := int(binary.LittleEndian.Uint16(data[4+valueSize:]))
+	// Extract bitmap (bitmapLen is uint32 = 4 bytes)
+	bitmapLen := int(binary.LittleEndian.Uint32(data[4+valueSize:]))
 	var nullBitmap *arrow.Bitmap
 	if bitmapLen > 0 {
-		bitmapStart := 4 + valueSize + 2
+		bitmapStart := 4 + valueSize + 4
 		if len(data) < bitmapStart+bitmapLen {
 			return nil, lerrors.New(lerrors.ErrCorruptedFile).
 				Op("zstd_bytes_to_int32").
@@ -143,11 +144,11 @@ func bytesToInt32Array(data []byte, numValues int) (arrow.Array, error) {
 
 func bytesToInt64Array(data []byte, numValues int) (arrow.Array, error) {
 	valueSize := 8 * numValues
-	if len(data) < 4+valueSize+2 {
+	if len(data) < 4+valueSize+4 {
 		return nil, lerrors.New(lerrors.ErrCorruptedFile).
 			Op("zstd_bytes_to_int64").
 			Context("reason", "insufficient data").
-			Context("expected", 4+valueSize+2).
+			Context("expected", 4+valueSize+4).
 			Context("actual", len(data)).
 			Build()
 	}
@@ -158,10 +159,10 @@ func bytesToInt64Array(data []byte, numValues int) (arrow.Array, error) {
 		values[i] = int64(binary.LittleEndian.Uint64(valuesBuf[i*8:]))
 	}
 
-	bitmapLen := int(binary.LittleEndian.Uint16(data[4+valueSize:]))
+	bitmapLen := int(binary.LittleEndian.Uint32(data[4+valueSize:]))
 	var nullBitmap *arrow.Bitmap
 	if bitmapLen > 0 {
-		bitmapStart := 4 + valueSize + 2
+		bitmapStart := 4 + valueSize + 4
 		if len(data) < bitmapStart+bitmapLen {
 			return nil, lerrors.New(lerrors.ErrCorruptedFile).
 				Op("zstd_bytes_to_int64").
@@ -223,7 +224,7 @@ func bytesToFloat64Array(data []byte, numValues int) (arrow.Array, error) {
 }
 
 // bytesToFixedSizeListArray 解码 FixedSizeListArray
-// 格式: [numLists:4][childValues...][bitmapLen:2][listNullBitmap...]
+// 格式: [numLists:4][childValues...][bitmapLen:4][listNullBitmap...]
 func bytesToFixedSizeListArray(data []byte, listType *arrow.FixedSizeListType, numLists int) (arrow.Array, error) {
 	elemType := listType.Elem()
 	listSize := listType.Size()
@@ -236,7 +237,7 @@ func bytesToFixedSizeListArray(data []byte, listType *arrow.FixedSizeListType, n
 	childDataStart := 4
 
 	// 为 child array 构造一个模拟的数据包
-	// 格式: [numChildValues:4][childValues...][bitmapLen:2][bitmap...]
+	// 格式: [numChildValues:4][childValues...][bitmapLen:4][bitmap...]
 	// 注意：对于 FixedSizeListArray，我们不存储 child-level 的 bitmap，只存储 list-level 的
 	// 所以 child 的 bitmapLen 是 0
 
@@ -259,7 +260,7 @@ func bytesToFixedSizeListArray(data []byte, listType *arrow.FixedSizeListType, n
 	}
 
 	// 检查数据是否足够
-	minSize := 4 + childValueSize + 2
+	minSize := 4 + childValueSize + 4
 	if len(data) < minSize {
 		return nil, lerrors.New(lerrors.ErrCorruptedFile).
 			Op("zstd_bytes_to_fsl").
@@ -274,10 +275,10 @@ func bytesToFixedSizeListArray(data []byte, listType *arrow.FixedSizeListType, n
 	childValuesData := data[childDataStart:childValuesEnd]
 
 	// 创建 child array 的数据包（不包含 bitmap）
-	childPacket := make([]byte, 4+childValueSize+2)
+	childPacket := make([]byte, 4+childValueSize+4)
 	binary.LittleEndian.PutUint32(childPacket[0:4], uint32(totalChildValues))
 	copy(childPacket[4:4+childValueSize], childValuesData)
-	binary.LittleEndian.PutUint16(childPacket[4+childValueSize:4+childValueSize+2], 0) // no child bitmap
+	binary.LittleEndian.PutUint32(childPacket[4+childValueSize:4+childValueSize+4], 0) // no child bitmap
 
 	// 解码 child array
 	var childArray arrow.Array
@@ -304,11 +305,11 @@ func bytesToFixedSizeListArray(data []byte, listType *arrow.FixedSizeListType, n
 
 	// 提取 list-level null bitmap
 	bitmapLenOffset := childValuesEnd
-	bitmapLen := int(binary.LittleEndian.Uint16(data[bitmapLenOffset : bitmapLenOffset+2]))
+	bitmapLen := int(binary.LittleEndian.Uint32(data[bitmapLenOffset : bitmapLenOffset+4]))
 
 	var listNullBitmap *arrow.Bitmap
 	if bitmapLen > 0 {
-		bitmapStart := bitmapLenOffset + 2
+		bitmapStart := bitmapLenOffset + 4
 		if len(data) < bitmapStart+bitmapLen {
 			return nil, lerrors.New(lerrors.ErrCorruptedFile).
 				Op("zstd_bytes_to_fsl").
