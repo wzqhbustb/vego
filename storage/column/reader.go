@@ -25,6 +25,7 @@ type Reader struct {
 	pageReader *PageReader
 	closed     bool
 	mu         sync.Mutex
+	stats      *format.StatisticsList // Column statistics for Zone Map optimization
 
 	// Phase 2: 异步 I/O 支持（可选）
 	asyncIO      *lanceio.AsyncIO
@@ -211,6 +212,17 @@ func (r *Reader) readFooter() error {
 	r.footer = &format.Footer{}
 	if _, err := r.footer.ReadFrom(r.file); err != nil {
 		return err
+	}
+
+	// Read column statistics if available
+	if r.footer.StatsOffset > 0 && r.footer.StatsCount > 0 {
+		if _, err := r.file.Seek(r.footer.StatsOffset, io.SeekStart); err != nil {
+			return lerrors.IO("seek_stats", "", err)
+		}
+		r.stats = &format.StatisticsList{}
+		if _, err := r.stats.ReadFrom(r.file); err != nil {
+			return lerrors.IO("read_stats", "", err)
+		}
 	}
 
 	return nil
@@ -994,4 +1006,78 @@ func (r *Reader) Close() error {
 		return r.file.Close()
 	}
 	return nil
+}
+
+// GetColumnStats returns the column statistics for a specific column.
+// Returns nil if no statistics are available for the column.
+func (r *Reader) GetColumnStats(columnIndex int32) *format.ColumnStatistics {
+	if r.stats == nil {
+		return nil
+	}
+	return r.stats.GetColumnStats(columnIndex)
+}
+
+// GetAllStats returns the complete statistics list for all columns.
+// Returns nil if no statistics are available.
+func (r *Reader) GetAllStats() *format.StatisticsList {
+	return r.stats
+}
+
+// HasStatistics returns true if the file contains column statistics.
+func (r *Reader) HasStatistics() bool {
+	return r.stats != nil && r.stats.NumColumns > 0
+}
+
+// ZoneMapEvaluator returns a ZoneMapEvaluator for this reader's statistics.
+// This can be used for predicate pushdown optimization.
+func (r *Reader) ZoneMapEvaluator() *ZoneMapEvaluator {
+	return NewZoneMapEvaluator(r.stats)
+}
+
+// EvaluateZoneMapInt32 checks if a column's min/max range overlaps with a predicate value.
+// Deprecated: Use r.ZoneMapEvaluator().EvaluateZoneMapInt32() instead.
+func (r *Reader) EvaluateZoneMapInt32(columnIndex int32, value int32) ZoneMapFilterResult {
+	return r.ZoneMapEvaluator().EvaluateZoneMapInt32(columnIndex, value)
+}
+
+// EvaluateZoneMapInt64 checks if a column's min/max range overlaps with a predicate value.
+// Deprecated: Use r.ZoneMapEvaluator().EvaluateZoneMapInt64() instead.
+func (r *Reader) EvaluateZoneMapInt64(columnIndex int32, value int64) ZoneMapFilterResult {
+	return r.ZoneMapEvaluator().EvaluateZoneMapInt64(columnIndex, value)
+}
+
+// EvaluateZoneMapFloat32 checks if a column's min/max range overlaps with a predicate value.
+// Deprecated: Use r.ZoneMapEvaluator().EvaluateZoneMapFloat32() instead.
+func (r *Reader) EvaluateZoneMapFloat32(columnIndex int32, value float32) ZoneMapFilterResult {
+	return r.ZoneMapEvaluator().EvaluateZoneMapFloat32(columnIndex, value)
+}
+
+// EvaluateZoneMapFloat64 checks if a column's min/max range overlaps with a predicate value.
+// Deprecated: Use r.ZoneMapEvaluator().EvaluateZoneMapFloat64() instead.
+func (r *Reader) EvaluateZoneMapFloat64(columnIndex int32, value float64) ZoneMapFilterResult {
+	return r.ZoneMapEvaluator().EvaluateZoneMapFloat64(columnIndex, value)
+}
+
+// EvaluateZoneMapRangeInt32 checks if a column's range overlaps with a query range [low, high].
+// Deprecated: Use r.ZoneMapEvaluator().EvaluateZoneMapRangeInt32() instead.
+func (r *Reader) EvaluateZoneMapRangeInt32(columnIndex int32, low, high int32) ZoneMapFilterResult {
+	return r.ZoneMapEvaluator().EvaluateZoneMapRangeInt32(columnIndex, low, high)
+}
+
+// EvaluateZoneMapRangeInt64 checks if a column's range overlaps with a query range.
+// Deprecated: Use r.ZoneMapEvaluator().EvaluateZoneMapRangeInt64() instead.
+func (r *Reader) EvaluateZoneMapRangeInt64(columnIndex int32, low, high int64) ZoneMapFilterResult {
+	return r.ZoneMapEvaluator().EvaluateZoneMapRangeInt64(columnIndex, low, high)
+}
+
+// EvaluateZoneMapRangeFloat32 checks if a column's range overlaps with a query range.
+// Deprecated: Use r.ZoneMapEvaluator().EvaluateZoneMapRangeFloat32() instead.
+func (r *Reader) EvaluateZoneMapRangeFloat32(columnIndex int32, low, high float32) ZoneMapFilterResult {
+	return r.ZoneMapEvaluator().EvaluateZoneMapRangeFloat32(columnIndex, low, high)
+}
+
+// EvaluateZoneMapRangeFloat64 checks if a column's range overlaps with a query range.
+// Deprecated: Use r.ZoneMapEvaluator().EvaluateZoneMapRangeFloat64() instead.
+func (r *Reader) EvaluateZoneMapRangeFloat64(columnIndex int32, low, high float64) ZoneMapFilterResult {
+	return r.ZoneMapEvaluator().EvaluateZoneMapRangeFloat64(columnIndex, low, high)
 }
