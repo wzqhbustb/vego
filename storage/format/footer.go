@@ -21,6 +21,12 @@ type Footer struct {
 	ModifiedAt    int64             // Unix timestamp
 	Metadata      map[string]string // Additional metadata
 	Checksum      uint32            // Footer checksum
+	
+	// Column statistics (for Zone Map and query optimization)
+	// StatsOffset points to the position of StatisticsList in the file
+	// StatsCount is the number of column statistics (0 if not present)
+	StatsOffset int64 // Offset to StatisticsList (0 if not present)
+	StatsCount  int32 // Number of column statistics
 }
 
 // NewFooter creates a new footer
@@ -80,6 +86,9 @@ func (f *Footer) EncodedSize() int {
 		// key_len(4) + key + value_len(4) + value
 		baseSize += 4 + len(k) + 4 + len(v)
 	}
+	
+	// Add statistics info: StatsOffset(8) + StatsCount(4)
+	baseSize += 8 + 4
 
 	return baseSize
 }
@@ -115,6 +124,10 @@ func (f *Footer) WriteTo(w io.Writer) (int64, error) {
 		binary.Write(buf, ByteOrder, valueLen)
 		buf.WriteString(v)
 	}
+
+	// Write statistics info (new in version 1.1+)
+	binary.Write(buf, ByteOrder, f.StatsOffset)
+	binary.Write(buf, ByteOrder, f.StatsCount)
 
 	// Calculate checksum (excluding the checksum field itself)
 	data := buf.Bytes()
@@ -172,23 +185,84 @@ func (f *Footer) ReadFrom(r io.Reader) (int64, error) {
 	var metaCount int32
 	binary.Read(reader, ByteOrder, &metaCount)
 
+	// Security limits for metadata to prevent OOM from malicious files
+	const (
+		MaxMetadataKeySize   = 1024     // 1KB for key
+		MaxMetadataValueSize = 64 * 1024 // 64KB for value
+		MaxMetadataCount     = 1000      // Max 1000 metadata entries
+	)
+	
+	if metaCount < 0 || metaCount > MaxMetadataCount {
+		return int64(n), lerrors.New(lerrors.ErrCorruptedFile).
+			Op("read_footer").
+			Context("field", "metadata_count").
+			Context("value", metaCount).
+			Context("max_allowed", MaxMetadataCount).
+			Context("message", "invalid metadata count").
+			Build()
+	}
+	
 	f.Metadata = make(map[string]string)
 	for i := int32(0); i < metaCount; i++ {
 		// Read key
 		var keyLen int32
 		binary.Read(reader, ByteOrder, &keyLen)
+		
+		// Validate key length
+		if keyLen < 0 || keyLen > MaxMetadataKeySize {
+			return int64(n), lerrors.New(lerrors.ErrCorruptedFile).
+				Op("read_footer").
+				Context("field", "metadata_key_len").
+				Context("index", i).
+				Context("value", keyLen).
+				Context("max_allowed", MaxMetadataKeySize).
+				Context("message", "invalid metadata key length").
+				Build()
+		}
+		
 		keyBytes := make([]byte, keyLen)
-		reader.Read(keyBytes)
+		if _, err := reader.Read(keyBytes); err != nil {
+			return int64(n), NewFileError("read footer metadata key", err)
+		}
 		key := string(keyBytes)
 
 		// Read value
 		var valueLen int32
 		binary.Read(reader, ByteOrder, &valueLen)
+		
+		// Validate value length
+		if valueLen < 0 || valueLen > MaxMetadataValueSize {
+			return int64(n), lerrors.New(lerrors.ErrCorruptedFile).
+				Op("read_footer").
+				Context("field", "metadata_value_len").
+				Context("key", key).
+				Context("value", valueLen).
+				Context("max_allowed", MaxMetadataValueSize).
+				Context("message", "invalid metadata value length").
+				Build()
+		}
+		
 		valueBytes := make([]byte, valueLen)
-		reader.Read(valueBytes)
+		if _, err := reader.Read(valueBytes); err != nil {
+			return int64(n), NewFileError("read footer metadata value", err)
+		}
 		value := string(valueBytes)
 
 		f.Metadata[key] = value
+	}
+
+	// Read statistics info (backward compatibility check)
+	// Calculate if there's space for StatsOffset(8) + StatsCount(4) before checksum
+	// reader.Len() returns remaining bytes including checksum(4) + any stats fields + padding
+	remaining := reader.Len()
+	if remaining >= 16 { // At least 12 bytes for stats + 4 bytes checksum
+		// New format with statistics fields
+		binary.Read(reader, ByteOrder, &f.StatsOffset)
+		binary.Read(reader, ByteOrder, &f.StatsCount)
+	} else {
+		// Old format without statistics fields
+		f.StatsOffset = 0
+		f.StatsCount = 0
 	}
 
 	// Read checksum

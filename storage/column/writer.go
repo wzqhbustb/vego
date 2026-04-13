@@ -16,7 +16,11 @@ const (
 	HeaderReservedSize = 8192 // 8KB should be enough for any reasonable schema
 )
 
-// Writer writes RecordBatch data to a Lance file
+// Writer writes RecordBatch data to a Lance file.
+// 
+// Thread Safety: Writer is NOT safe for concurrent use. WriteRecordBatch and Close
+// must be called from a single goroutine. If you need concurrent writes, external
+// synchronization is required.
 type Writer struct {
 	file       *os.File
 	header     *format.Header
@@ -26,6 +30,7 @@ type Writer struct {
 	currentPos int64 // Current write position
 	factory    *encoding.EncoderFactory
 	closed     bool
+	columnStats *format.StatisticsList // Accumulated column statistics across all batches
 }
 
 // NewWriter creates a new column writer
@@ -40,13 +45,14 @@ func NewWriter(filename string, schema *arrow.Schema, factory *encoding.EncoderF
 	}
 
 	writer := &Writer{
-		file:       file,
-		header:     format.NewHeader(schema, 0),
-		footer:     format.NewFooter(),
-		pageWriter: NewPageWriter(factory), // 传递 factory
-		factory:    factory,
-		closed:     false,
-		headerSize: HeaderReservedSize,
+		file:        file,
+		header:      format.NewHeader(schema, 0),
+		footer:      format.NewFooter(),
+		pageWriter:  NewPageWriter(factory), // 传递 factory
+		factory:     factory,
+		closed:      false,
+		headerSize:  HeaderReservedSize,
+		columnStats: format.NewStatisticsList(schema.NumFields()),
 	}
 
 	if err := writer.writeHeaderWithPadding(); err != nil {
@@ -131,7 +137,7 @@ func (w *Writer) WriteRecordBatch(batch *arrow.RecordBatch) error {
 	// Update header row count
 	w.header.NumRows += int64(batch.NumRows())
 
-	// Write each column
+	// Write each column and accumulate statistics
 	for colIdx := 0; colIdx < batch.NumCols(); colIdx++ {
 		column := batch.Column(colIdx)
 		field := batch.Schema().Field(colIdx)
@@ -144,6 +150,21 @@ func (w *Writer) WriteRecordBatch(batch *arrow.RecordBatch) error {
 				Context("message", "column validation failed").
 				Wrap(err).
 				Build()
+		}
+
+		// Accumulate column statistics for this batch
+		if w.columnStats != nil {
+			batchStats := format.ComputeColumnStatistics(column, int32(colIdx))
+			if existingStats := w.columnStats.GetColumnStats(int32(colIdx)); existingStats != nil {
+				if err := existingStats.Merge(batchStats); err != nil {
+					return lerrors.New(lerrors.ErrInvalidArgument).
+						Op("accumulate_stats").
+						Context("column_index", colIdx).
+						Context("column_name", field.Name).
+						Wrap(err).
+						Build()
+				}
+			}
 		}
 
 		if err := w.writeColumn(int32(colIdx), column); err != nil {
@@ -215,7 +236,25 @@ func (w *Writer) Close() error {
 	// Update footer
 	w.footer.NumPages = int32(len(w.footer.PageIndexList.Indices))
 
-	// Write footer at current position (after all pages)
+	// Write column statistics (before footer)
+	if w.columnStats != nil && w.columnStats.NumColumns > 0 {
+		// Set the current position as stats offset
+		w.footer.StatsOffset = w.currentPos
+		w.footer.StatsCount = int32(w.columnStats.NumColumns)
+		
+		// Seek to stats position and write
+		if _, err := w.file.Seek(w.currentPos, io.SeekStart); err != nil {
+			return lerrors.IO("seek_stats", "", err)
+		}
+		
+		n, err := w.columnStats.WriteTo(w.file)
+		if err != nil {
+			return lerrors.IO("write_stats", "", err)
+		}
+		w.currentPos += n
+	}
+
+	// Write footer at current position (after stats)
 	if _, err := w.file.Seek(w.currentPos, io.SeekStart); err != nil {
 		return lerrors.IO("seek_footer", "", err)
 	}
