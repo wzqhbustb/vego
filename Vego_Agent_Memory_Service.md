@@ -8,6 +8,18 @@
 - **模块路径**：新代码放在 `/Users/wangyang/vego/memory/` 包下，与现有 `vego/`、`index/`、`storage/` 平行
 - **单包扁平结构**：所有代码统一在 `package memory` 下，避免子包嵌套导致的循环依赖和 import 路径冲突
 
+## Vego 底层能力约束（实现前必读）
+
+以下是经过代码审查确认的 Vego 实际能力，设计中所有方案必须在这些约束内工作：
+
+| 能力 | 实际情况 | 设计影响 |
+|------|---------|---------|
+| **Metadata 类型** | `map[string]interface{}`，经 JSON 持久化往返后 `int→float64`、`[]string→[]interface{}` | `docToMemory` 必须处理类型退化；或改用单 JSON 字段序列化 |
+| **Delete 语义** | DeletionVector 软删除：搜索自动过滤，但 **`Get` 也会失败**（docToNode 映射被移除） | 不能用 `DeleteContext` 做 mem9 式软删除（state=deleted 但仍可按 ID 查）；必须用 `UpdateContext` 改 state 字段 |
+| **搜索过滤** | `SearchWithFilter(query, k, filter)` 支持 metadata 条件过滤（post-search 自动扩批重试，最大 k×20） | 向量搜索应使用 `SearchWithFilter` + `MetadataFilter{Key:"_state", Op:"eq", Value:"active"}` 替代手动过滤 |
+| **文档遍历** | **无公共 API**。内部 `GetAllValidDocuments()` 不可外部调用 | 需要为 Vego 新增 `ForEach(fn)` 公共方法，或通过 `docToNode` 遍历 ID + 逐条 `Get` |
+| **Update 语义** | `UpdateContext` = MarkDeleted(旧) + Put(新) + 新 HNSW node，**同 ID 替换** | Archive-and-Create 不能使用 `UpdateContext`（它会覆盖同 ID），必须使用 Insert 新 ID + Update 旧 ID 改 state |
+
 ## 新增目录结构
 
 ```
@@ -24,7 +36,7 @@ vego/
 │   ├── llm_client.go    # OpenAI 兼容 LLM 客户端（同包，无子包）
 │   ├── embedder.go      # OpenAI 兼容 Embedding 客户端（同包，无子包）
 │   └── memory_test.go   # 测试
-├── vego/                # 现有：Collection API（不修改）
+├── vego/                # 现有：Collection API（需新增 ForEach 公共方法）
 ├── index/               # 现有：HNSW 索引（不修改）
 └── storage/             # 现有：列式存储（不修改）
 ```
@@ -68,6 +80,9 @@ type Memory struct {
     Metadata     map[string]interface{} // 含 temporal 子字段
     Source       string                 // 创建者 Agent ID
     AgentID      string
+    SessionID    string                 // 关联会话 ID（ModeRaw 时标识来源会话）
+    Seq          int                    // 消息序号（ModeRaw 时会话内排序）
+    ContentHash  string                 // SHA256(content)，ModeRaw 去重用
     Version      int
     SupersededBy string                 // 历史链
     Score        float64                // 搜索得分（查询时填充，0-1，越高越相关）
@@ -82,6 +97,7 @@ type MemoryFilter struct {
     State      string
     MemoryType string
     AgentID    string
+    SessionID  string  // 按会话 ID 过滤
     Limit      int
     Offset     int
     MinScore   float64
@@ -91,91 +107,66 @@ type MemoryFilter struct {
 ### Memory ↔ Vego Document 双向转换
 
 Vego 的 `Document` 只有 `ID`、`Vector`、`Metadata`、`Timestamp` 四个字段，没有 `Content` 字段。
-因此 Memory 的所有业务字段必须编码到 `Document.Metadata` 中，并定义明确的 key 约定：
+因此 Memory 的所有业务字段必须编码到 `Document.Metadata` 中。
+
+**序列化策略：单 JSON 字段 + 少量索引字段**
+
+Vego 的 Metadata 是 `map[string]interface{}`，经 JSON 持久化往返后类型会退化
+（`int→float64`、`[]string→[]interface{}`）。逐字段存储 + 逐字段类型断言随字段增多极易出错。
+
+采用**双层结构**：将完整 Memory 序列化为单个 JSON 字符串存入 `_data`，
+仅将搜索过滤需要的字段（`_state`、`_type`）作为独立 key 存储，供 `SearchWithFilter` 使用：
 
 ```go
-// Metadata key 约定（以下划线开头避免与用户自定义 metadata 冲突）
 const (
-    metaKeyContent      = "_content"
-    metaKeyState        = "_state"
-    metaKeyType         = "_type"
-    metaKeyTags         = "_tags"
-    metaKeyVersion      = "_version"
-    metaKeySupersededBy = "_superseded_by"
-    metaKeyAgentID      = "_agent_id"
-    metaKeySource       = "_source"
-    metaKeyCreatedAt    = "_created_at"
-    metaKeyUpdatedAt    = "_updated_at"
-    metaKeyUserMeta     = "_user_meta"   // 用户自定义 metadata（含 temporal）
+    metaKeyData  = "_data"  // 完整 Memory JSON 字符串
+    metaKeyState = "_state" // 冗余索引字段，供 SearchWithFilter 过滤
+    metaKeyType  = "_type"  // 冗余索引字段，供 SearchWithFilter 过滤
 )
 
 // memoryToDoc 将 Memory 转为 Vego Document 用于存储。
 // vec 是 Embedding 向量，由调用方负责生成。
-func memoryToDoc(m *Memory, vec []float32) *vego.Document {
+func memoryToDoc(m *Memory, vec []float32) (*vego.Document, error) {
+    data, err := json.Marshal(m)
+    if err != nil {
+        return nil, fmt.Errorf("marshal memory: %w", err)
+    }
     meta := map[string]interface{}{
-        metaKeyContent:      m.Content,
-        metaKeyState:        string(m.State),
-        metaKeyType:         string(m.MemoryType),
-        metaKeyTags:         m.Tags,
-        metaKeyVersion:      m.Version,
-        metaKeySuperseededBy: m.SupersededBy,
-        metaKeyAgentID:      m.AgentID,
-        metaKeySource:       m.Source,
-        metaKeyCreatedAt:    m.CreatedAt.Format(time.RFC3339),
-        metaKeyUpdatedAt:    m.UpdatedAt.Format(time.RFC3339),
-        metaKeyUserMeta:     m.Metadata,
+        metaKeyData:  string(data),          // 完整 Memory JSON
+        metaKeyState: string(m.State),       // 冗余：供 SearchWithFilter 过滤
+        metaKeyType:  string(m.MemoryType),  // 冗余：供 SearchWithFilter 过滤
     }
     return &vego.Document{
         ID:        m.ID,
         Vector:    vec,
         Metadata:  meta,
         Timestamp: m.UpdatedAt,
-    }
+    }, nil
 }
 
 // docToMemory 从 Vego Document 反序列化为 Memory。
-func docToMemory(doc *vego.Document) *Memory {
-    m := &Memory{ID: doc.ID}
-    if v, ok := doc.Metadata[metaKeyContent].(string); ok {
-        m.Content = v
+// 使用 json.Unmarshal 一次性还原，避免逐字段类型断言的脆弱性。
+func docToMemory(doc *vego.Document) (*Memory, error) {
+    dataStr, ok := doc.Metadata[metaKeyData].(string)
+    if !ok {
+        return nil, fmt.Errorf("document %s: missing _data field", doc.ID)
     }
-    if v, ok := doc.Metadata[metaKeyState].(string); ok {
-        m.State = MemoryState(v)
+    var m Memory
+    if err := json.Unmarshal([]byte(dataStr), &m); err != nil {
+        return nil, fmt.Errorf("unmarshal memory %s: %w", doc.ID, err)
     }
-    if v, ok := doc.Metadata[metaKeyType].(string); ok {
-        m.MemoryType = MemoryType(v)
-    }
-    if v, ok := doc.Metadata[metaKeyTags].([]interface{}); ok {
-        for _, t := range v {
-            if s, ok := t.(string); ok {
-                m.Tags = append(m.Tags, s)
-            }
-        }
-    }
-    if v, ok := doc.Metadata[metaKeyVersion].(float64); ok {
-        m.Version = int(v)
-    }
-    if v, ok := doc.Metadata[metaKeySupersededBy].(string); ok {
-        m.SupersededBy = v
-    }
-    if v, ok := doc.Metadata[metaKeyAgentID].(string); ok {
-        m.AgentID = v
-    }
-    if v, ok := doc.Metadata[metaKeySource].(string); ok {
-        m.Source = v
-    }
-    if v, ok := doc.Metadata[metaKeyCreatedAt].(string); ok {
-        m.CreatedAt, _ = time.Parse(time.RFC3339, v)
-    }
-    if v, ok := doc.Metadata[metaKeyUpdatedAt].(string); ok {
-        m.UpdatedAt, _ = time.Parse(time.RFC3339, v)
-    }
-    if v, ok := doc.Metadata[metaKeyUserMeta].(map[string]interface{}); ok {
-        m.Metadata = v
-    }
-    return m
+    m.ID = doc.ID // 以 Document.ID 为准
+    return &m, nil
 }
 ```
+
+**优势**：
+- Memory 结构体增删字段时，只需修改结构体定义，转换函数无需变更
+- `json.Unmarshal` 自动处理类型映射，不受 Vego Metadata 的 JSON 往返类型退化影响
+- `_state` 和 `_type` 冗余存储仅 2 个字符串字段，开销极小，但支持 `SearchWithFilter` 在索引层过滤
+
+**数据一致性**：`_state`/`_type` 与 `_data` 中的对应字段必须同步更新。
+由于所有写入都经过 `memoryToDoc`，一致性由代码路径保证。
 
 ---
 
@@ -268,16 +259,34 @@ func (idx *InvertedIndex) Search(query string, limit int) []ScoredID  // BM25 �
   其中 `k1 = 1.2`，`b = 0.75`，`avgdl = totalTerms / docCount`，`dl = docLen[id]`
 - **不做持久化**：Open() 时从 Vego Collection 遍历所有 active Document 重建索引。
   对 <100K 条记忆，重建耗时 <1s，简化实现且保证与 Vego 存储一致性
+- **前置依赖**：Vego Collection 当前**无公共遍历 API**（内部 `GetAllValidDocuments()` 不可外部调用）。
+  需要先为 Vego 新增 `ForEach(fn func(*Document) bool) error` 公共方法，
+  封装内部的 `storage.GetAllValidDocuments()` 并跳过 DeletionVector 标记的文档
 - 增量维护：Store/Update/Delete 时同步更新倒排索引
 - 规模：内存中维护，适用于嵌入式场景（<100K 条记忆）
+- **重建 benchmark 要求**：Task 10 中必须包含 100K 条记忆（平均 500 字符）的重建耗时 benchmark，
+  验证 <1s 假设。中文 bigram 分词产生 ~2x token 量，需纳入测试
 
 ```go
 // Open() 中的索引重建流程
 func (s *MemoryStore) rebuildInvertedIndex() error {
-    // 遍历 Vego Collection 中所有文档
-    // 仅对 state == "active" 的文档建索引
-    // 从 Metadata["_content"] 提取文本内容
-    // 调用 s.inverted.Add(id, content)
+    // 前置：使用新增的 coll.ForEach() 遍历所有未删除文档
+    return s.coll.ForEach(func(doc *vego.Document) bool {
+        m, err := docToMemory(doc)
+        if err != nil {
+            slog.Warn("skip corrupt document during rebuild", "id", doc.ID, "err", err)
+            return true // continue
+        }
+        if m.State != StateActive {
+            return true // 仅对 active 文档建索引
+        }
+        s.inverted.Add(m.ID, m.Content)
+        // 若为 TypeSession 且有 ContentHash，同步重建去重索引
+        if m.MemoryType == TypeSession && m.ContentHash != "" {
+            s.contentHashIndex.Add(m.SessionID, m.ContentHash, m.ID)
+        }
+        return true // continue
+    })
 }
 ```
 
@@ -306,12 +315,15 @@ type Config struct {
     EmbedDims    int     // 默认 1536
 
     // 搜索
-    RRF_K             float64 // 默认 60.0
+    RRFK              float64 // 默认 60.0
     MinScore          float64 // 默认 0.3（基于相似度，0-1 范围）
     SecondHopGate     float64 // 默认 0.5
     SecondHopWeight   float64 // 默认 0.3
     SecondHopTopN     int     // 默认 3
     PinnedBoost       float64 // 默认 1.5
+    RecencyBoostWeek  float64 // 默认 1.05（<=7 天记忆的分数乘数）
+    RecencyBoostMonth float64 // 默认 1.02（<=30 天记忆的分数乘数）
+    GapStopRatio      float64 // 默认 0.5（相邻结果分数下降超过此比例时截断，0=禁用）
 
     // 摄取
     MaxFacts          int     // 默认 50
@@ -324,6 +336,8 @@ type Config struct {
 func WithLLM(apiKey, baseURL, model string) Option
 func WithEmbedding(apiKey, baseURL, model string, dims int) Option
 func WithDistanceFunc(name string) Option
+func WithRecencyBoost(weekMultiplier, monthMultiplier float64) Option
+func WithGapStop(ratio float64) Option  // 0 禁用
 // ... 更多 Option
 ```
 
@@ -335,13 +349,14 @@ func WithDistanceFunc(name string) Option
 
 ```go
 type MemoryStore struct {
-    db       *vego.DB
-    coll     *vego.Collection
-    llm      *LLMClient       // 同包类型，无需 import 子包
-    embedder *Embedder         // 同包类型，无需 import 子包
-    inverted *InvertedIndex
-    config   *Config
-    mu       sync.Mutex        // 保护 Archive-and-Create 原子性
+    db               *vego.DB
+    coll             *vego.Collection
+    llm              *LLMClient           // 同包类型，无需 import 子包
+    embedder         *Embedder            // 同包类型，无需 import 子包
+    inverted         *InvertedIndex
+    contentHashIndex *ContentHashIndex    // Session 消息 ContentHash 去重索引
+    config           *Config
+    mu               sync.Mutex           // 保护 Archive-and-Create 原子性
 }
 
 func Open(path string, opts ...Option) (*MemoryStore, error)
@@ -365,12 +380,18 @@ func (s *MemoryStore) Bootstrap(ctx context.Context, limit int) ([]Memory, error
 ```
 
 **Vego 集成方式**：
-- `Open()` 内部调用 `vego.Open(path)` 创建 DB，获取 `"memories"` Collection，然后**遍历所有 active 文档重建倒排索引**
+- `Open()` 内部调用 `vego.Open(path)` 创建 DB，获取 `"memories"` Collection，然后调用 `coll.ForEach()` **遍历所有 active 文档重建倒排索引**，同时扫描 `TypeSession` 文档重建 **ContentHash 去重索引**，并执行 **崩溃恢复扫描**（检测 superseded_by 非空但仍为 active 的记忆）
 - `Store()` 使用 `memoryToDoc()` 转换，`Embedder.Embed()` 生成向量，`coll.InsertContext()` 存入 Vego
 - `Get()` 使用 `coll.GetContext()` 获取 Document，再用 `docToMemory()` 反序列化
-- `Search()` 先走 HNSW 向量搜索（返回 `[]SearchResult`），通过 `distanceToSimilarity()` 转换为相似度，再走倒排索引关键词搜索，最后 RRF 融合
-- `Delete()` 调用 Vego 的 `coll.DeleteContext()` 逻辑删除（DeletionVector）。同时更新倒排索引 `inverted.Remove(id)`
+- `Search()` 使用 **`coll.SearchWithFilter()`**（而非 `SearchContext`），配合 `MetadataFilter{Key:"_state", Op:"eq", Value:"active"}` 在搜索层过滤非 active 记忆，通过 `distanceToSimilarity()` 转换为相似度，再走倒排索引关键词搜索，最后 RRF 融合
+- `Delete()` **不使用 `coll.DeleteContext()`**（因为它会移除 docToNode 映射，导致 `Get` 也失败，不符合 mem9 的软删除语义）。而是通过 **`coll.UpdateContext()`** 将 `_state` 改为 `"deleted"`、同步更新 `_data` 中的 State 字段。同时更新倒排索引 `inverted.Remove(id)`
 - `Update()` 使用 Archive-and-Create 模式（见 Task 7 原子性设计）
+
+**Delete 语义说明**：
+mem9 的所有删除都是软删除——记录保留在数据库中，仅将 state 改为 `deleted`，仍可按 ID 查询。
+Vego 的 `DeleteContext` 是 DeletionVector 软删除，但删除后 `Get` 也会失败。
+因此本设计中 `Delete` 使用 `UpdateContext` 修改 state 字段来模拟 mem9 的软删除行为。
+`SearchWithFilter` 会自动排除 `_state != "active"` 的文档。
 
 ---
 
@@ -390,45 +411,150 @@ func (s *MemoryStore) ExtractFacts(ctx context.Context, messages []Message) ([]E
 - 事实上限 50 条
 - **ModeRaw 支持**：当 mode 为 raw 时，直接将消息存为 `TypeSession` 类型记忆，跳过 LLM 处理
 
+### ModeRaw 消息去重（ContentHash）
+
+编程 Agent（Claude Code、Copilot 等）常采用**累积式发送**：每次调用发送完整对话历史。
+例如第 3 轮对话包含第 1、2、3 轮全部消息。不去重会导致存储膨胀、搜索污染、BM25 IDF 失真。
+
+```go
+import "crypto/sha256"
+
+// computeContentHash 计算消息内容的去重指纹
+func computeContentHash(content string) string {
+    h := sha256.Sum256([]byte(content))
+    return hex.EncodeToString(h[:])
+}
+
+// storeRawMessages 存储原始对话消息，自动跳过已存在的重复内容
+func (s *MemoryStore) storeRawMessages(ctx context.Context, sessionID string, messages []Message) (int, error) {
+    stored := 0
+    // 获取该会话当前最大 Seq，确保跨调用单调递增
+    nextSeq := s.contentHashIndex.MaxSeq(sessionID) + 1
+    for _, msg := range messages {
+        hash := computeContentHash(msg.Content)
+
+        // 去重检查：同 sessionID + contentHash → 跳过
+        if s.hasContentHash(sessionID, hash) {
+            continue
+        }
+
+        mem := &Memory{
+            ID:          uuid.New().String(),
+            Content:     msg.Content,
+            MemoryType:  TypeSession,
+            State:       StateActive,
+            Tags:        msg.Tags,
+            AgentID:     msg.AgentID,
+            SessionID:   sessionID,
+            Seq:         nextSeq, // 会话内全局递增，而非 batch index
+            ContentHash: hash,
+            Version:     1,
+            CreatedAt:   time.Now(),
+            UpdatedAt:   time.Now(),
+        }
+
+        vec, _ := s.embedIfAvailable(ctx, msg.Content)
+        doc, err := memoryToDoc(mem, vec)
+        if err != nil {
+            return stored, fmt.Errorf("marshal session message: %w", err)
+        }
+        if err := s.coll.InsertContext(ctx, doc); err != nil {
+            return stored, fmt.Errorf("insert session message: %w", err)
+        }
+        s.inverted.Add(mem.ID, mem.Content)
+        s.contentHashIndex.Add(sessionID, hash, mem.ID, nextSeq)
+        nextSeq++
+        stored++
+    }
+    return stored, nil
+}
+
+// hasContentHash 检查同一会话中是否已存在相同内容
+// 使用内存索引 map[sessionID+hash]memoryID 做 O(1) 查找
+func (s *MemoryStore) hasContentHash(sessionID, hash string) bool {
+    return s.contentHashIndex.Has(sessionID, hash)
+}
+```
+
+**ContentHash 索引**：
+
+```go
+// ContentHashIndex 用于 ModeRaw 的消息去重和 Seq 追踪
+type ContentHashIndex struct {
+    mu     sync.RWMutex
+    index  map[string]string // key="sessionID:hash" → value=memoryID
+    maxSeq map[string]int    // key=sessionID → value=该会话当前最大 Seq
+}
+
+func (idx *ContentHashIndex) Has(sessionID, hash string) bool
+func (idx *ContentHashIndex) Add(sessionID, hash, memoryID string, seq int)
+func (idx *ContentHashIndex) MaxSeq(sessionID string) int  // 不存在返回 -1
+```
+
+与倒排索引一样，不持久化，`Open()` 时从 Vego Collection 中扫描 `TypeSession` 类型文档重建。
+
 ### Phase 2: 调和 (`reconcile.go`)
 
 ```go
 func (s *MemoryStore) Reconcile(ctx context.Context, agentID string, facts []ExtractedFact) (*IngestResult, error)
 ```
 
-- 对每条事实并发搜索已有记忆（向量搜索 + 关键词搜索，4 worker）
+- 对每条事实并发搜索已有记忆（向量搜索 + 关键词搜索，4 worker，使用 `semaphore` 控制并发上限）
 - 整数 ID 映射防止 LLM 幻觉
 - 复用 mem9 的 ADD/UPDATE/DELETE/NOOP Prompt
-- DELETE 执行软删除：`coll.DeleteContext()` + 倒排索引 `Remove()`
+- DELETE 执行软删除：通过 `coll.UpdateContext()` 修改 `_state` 为 `"deleted"` + 同步更新 `_data` + 倒排索引 `Remove()`。
+  **不使用 `coll.DeleteContext()`**，原因见 Task 6 的 Delete 语义说明
 - Pinned 记忆保护：不可自动删除，UPDATE 降级为 ADD
+- **并发控制**：Reconcile 阶段的并发搜索和 LLM 调用使用 `golang.org/x/sync/semaphore` 限制并发数（默认 4），
+  防止嵌入式场景下 goroutine 爆炸。LLM 调用使用独立的 semaphore（默认 1）串行执行
 
 ### Archive-and-Create 原子性设计
 
-Vego Collection 没有事务机制。为保证 UPDATE 操作（旧记忆归档 + 新记忆创建）的一致性，
-采用 **Insert-First + Mutex** 策略：
+Vego Collection 没有事务机制。且 `UpdateContext` 是同 ID 替换（MarkDeleted + Put），
+不适合 Archive-and-Create 的"新旧两条记忆共存"语义。
+
+采用 **Insert-First + Mutex** 策略，使用两次独立操作：
+- `InsertContext(newDoc)` 创建新记忆（新 ID）
+- `UpdateContext(oldDoc)` 修改旧记忆的 `_state` 和 `_data`（同 ID 原地更新 metadata）
 
 ```go
 func (s *MemoryStore) archiveAndCreate(ctx context.Context, oldID string, newMem *Memory, newVec []float32) error {
     s.mu.Lock()
     defer s.mu.Unlock()
 
-    // 步骤 1：先插入新记忆（此时旧记忆仍为 active，不影响搜索正确性）
-    newDoc := memoryToDoc(newMem, newVec)
+    // 步骤 1：先插入新记忆（新 ID，此时旧记忆仍为 active，不影响搜索正确性）
+    newDoc, err := memoryToDoc(newMem, newVec)
+    if err != nil {
+        return fmt.Errorf("marshal new memory: %w", err)
+    }
     if err := s.coll.InsertContext(ctx, newDoc); err != nil {
         return fmt.Errorf("insert new memory: %w", err)
     }
     s.inverted.Add(newMem.ID, newMem.Content)
 
-    // 步骤 2：更新旧记忆状态为 archived + 设置 superseded_by
+    // 步骤 2：通过 UpdateContext 将旧记忆标记为 archived
+    // UpdateContext 会 MarkDeleted(旧版本) + Put(新版本)，同 ID 替换 metadata
     oldDoc, err := s.coll.GetContext(ctx, oldID)
     if err != nil {
         // 新记忆已插入但旧记忆更新失败 → 启动时恢复扫描会清理
         slog.Warn("archive old memory failed, orphan created", "old_id", oldID, "new_id", newMem.ID, "err", err)
         return nil // 不回滚，容忍短暂不一致
     }
-    oldDoc.Metadata[metaKeyState] = string(StateArchived)
-    oldDoc.Metadata[metaKeySupersededBy] = newMem.ID
-    if err := s.coll.UpdateContext(ctx, oldDoc); err != nil {
+    // 从 _data 反序列化旧 Memory，修改 state 和 superseded_by，再序列化回去
+    oldMem, err := docToMemory(oldDoc)
+    if err != nil {
+        slog.Warn("corrupt old memory during archive", "old_id", oldID, "err", err)
+        return nil
+    }
+    oldMem.State = StateArchived
+    oldMem.SupersededBy = newMem.ID
+    oldMem.UpdatedAt = time.Now()
+    archivedDoc, err := memoryToDoc(oldMem, oldDoc.Vector) // 保留原向量
+    if err != nil {
+        slog.Warn("marshal archived memory failed", "old_id", oldID, "err", err)
+        return nil
+    }
+    if err := s.coll.UpdateContext(ctx, archivedDoc); err != nil {
         slog.Warn("archive old memory state update failed", "old_id", oldID, "err", err)
     }
     s.inverted.Remove(oldID)
@@ -437,7 +563,7 @@ func (s *MemoryStore) archiveAndCreate(ctx context.Context, oldID string, newMem
 }
 ```
 
-**崩溃恢复**：`Open()` 启动时扫描所有 active 文档，检测是否存在 superseded_by 非空但仍为 active 的记忆，自动修复为 archived。
+**崩溃恢复**：`Open()` 启动时通过 `ForEach` 扫描所有文档，检测是否存在 superseded_by 非空但仍为 active 的记忆，自动修复为 archived。
 
 ---
 
@@ -474,33 +600,117 @@ func distanceToSimilarity(distance float32, distFunc string) float64 {
     }
 }
 
-// toScoredMemories 将 Vego SearchResult 转为带相似度分数的 Memory 列表。
-// 同时过滤掉非 active 状态的记忆。
-func (s *MemoryStore) toScoredMemories(results []vego.SearchResult) []Memory {
+// activeStateFilter 构建用于 SearchWithFilter 的 state=active 过滤器
+func activeStateFilter() vego.Filter {
+    return &vego.MetadataFilter{
+        Key:   metaKeyState,
+        Op:    "eq",
+        Value: string(StateActive),
+    }
+}
+
+// toScoredMemories 将 SearchWithFilter 返回的结果转为带相似度分数的 Memory 列表。
+// SearchWithFilter 已经过滤了 DeletionVector 标记的文档和非 active 状态的文档，
+// 此处无需再做 state 检查。
+func (s *MemoryStore) toScoredMemories(results []vego.SearchResult) ([]Memory, error) {
     out := make([]Memory, 0, len(results))
     for _, r := range results {
-        m := docToMemory(r.Document)
-        if m.State != StateActive {
-            continue // 过滤已删除/已归档记忆
+        m, err := docToMemory(r.Document)
+        if err != nil {
+            slog.Warn("skip corrupt document in search results", "id", r.Document.ID, "err", err)
+            continue
         }
         m.Score = distanceToSimilarity(r.Distance, s.config.DistanceFunc)
         out = append(out, *m)
     }
-    return out
+    return out, nil
 }
 ```
 
-### 八阶段流程
+### 搜索过滤策略
+
+Vego 的 `SearchWithFilter` 在 HNSW 搜索后应用 metadata filter，自动扩大批次重试
+（初始 k×2，每次翻倍，最大 k×20，最多 5 次）。这意味着：
+
+- **正常情况**（archived/deleted 记忆占比 <50%）：首次 k×2 即可获得足够 active 结果
+- **高归档率场景**（>80% 记忆已归档）：自动扩批到 k×20，仍可能不足
+- **兜底策略**：如果 `SearchWithFilter` 返回结果少于 `limit`，不做额外补偿。
+  这对嵌入式场景可接受——如果 95% 的记忆都已归档，说明需要 `Compact` 清理
+
+使用 `SearchWithFilter` 替代手动 post-search 过滤的优势：
+1. Vego 内部自动处理扩批逻辑，memory 层无需实现
+2. DeletionVector 过滤在 HNSW 层完成，不浪费 metadata 过滤次数
+3. 代码更简洁，无需手动管理 over-fetch ratio
+
+### 搜索流水线（十阶段）
 
 1. **时间归一化**：`NormalizeTemporalRecallQuery(query, now)`
-2. **向量搜索**：调用 `s.coll.SearchContext(ctx, queryVec, limit*3)` 走 Vego HNSW
-3. **距离转换**：`toScoredMemories()` 将 distance 转为 similarity，同时过滤非 active 记忆
+2. **向量搜索**：调用 `s.coll.SearchWithFilter(queryVec, limit*3, activeStateFilter())` 走 Vego HNSW + metadata 过滤
+3. **距离转换**：`toScoredMemories()` 将 distance 转为 similarity（`SearchWithFilter` 已过滤非 active，此处无需重复检查）
 4. **相似度过滤**：丢弃 similarity < MinScore (0.3) 的结果
 5. **关键词搜索**：调用 `s.inverted.Search(query, limit*3)` 走倒排索引
 6. **RRF 融合**：`score[id] += 1/(K + rank+1)`，K=60
 7. **二跳扩展**：Top-3 结果作为种子再搜，权重 0.3。使用已缓存的 embedding 向量直接做二跳搜索，避免重复调用 Embedding API
 8. **类型加权**：pinned x 1.5
-9. **排序 + 分页 + 年龄标注**
+9. **时效加权（Recency Boost）**：近期记忆分数提升（见下文）
+10. **排序 + Gap Stop 截断 + 分页 + 年龄标注**
+
+### 时效加权（Recency Boost）
+
+编程 Agent 的记忆具有明显的时效性：当前项目的架构决策、最近的技术选型比几个月前的更相关。
+从 mem9 的 Confidence Scoring 中提取 recency 组件，作为 RRF 后的轻量乘数：
+
+```go
+// applyRecencyBoost 对近期记忆施加分数加成。
+// 在类型加权之后、排序之前执行。
+func (s *MemoryStore) applyRecencyBoost(scores map[string]float64, mems map[string]Memory, now time.Time) {
+    weekBoost := s.config.RecencyBoostWeek   // 默认 1.05
+    monthBoost := s.config.RecencyBoostMonth // 默认 1.02
+
+    for id, m := range mems {
+        age := now.Sub(m.UpdatedAt)
+        switch {
+        case age <= 7*24*time.Hour:
+            scores[id] *= weekBoost   // <=7 天：+5%
+        case age <= 30*24*time.Hour:
+            scores[id] *= monthBoost  // <=30 天：+2%
+        }
+        // >30 天：不加成
+    }
+}
+```
+
+**设计说明**：
+- 乘数而非加数，确保与 RRF 分数量级一致
+- 默认 5%/2% 的力度足以在同等语义相关度下让近期记忆胜出，但不会让低相关的新记忆压过高相关的旧记忆
+- 可通过 `WithRecencyBoost(1.0, 1.0)` 完全禁用
+
+### Gap Stop 截断
+
+避免返回"长尾噪声"——前几条高度相关，后面的勉强过了 MinScore 但实际无关。
+从 mem9 的 Confidence Gap Stop 简化而来，不依赖完整的置信度评分：
+
+```go
+// applyGapStop 当相邻结果分数骤降时截断后续结果。
+// ratio=0 表示禁用。默认 ratio=0.5（分数下降超过 50% 时截断）。
+func applyGapStop(sorted []Memory, ratio float64) []Memory {
+    if ratio <= 0 || len(sorted) <= 1 {
+        return sorted
+    }
+    for i := 1; i < len(sorted); i++ {
+        if sorted[i].Score < sorted[i-1].Score*(1-ratio) {
+            return sorted[:i]
+        }
+    }
+    return sorted
+}
+```
+
+**设计说明**：
+- 默认 `GapStopRatio=0.5`，即前一条分数 0.8 时，下一条低于 0.4 即截断
+- 比 mem9 的绝对阈值 18（依赖 0-100 置信度）更通用，适配 RRF 的相对分数
+- 在排序之后、分页之前执行
+- 可通过 `WithGapStop(0)` 完全禁用
 
 ---
 
@@ -546,22 +756,36 @@ type TemporalMetadata struct {
 
 - LLM 客户端：Mock HTTP 测试 CompleteJSON
 - Embedding 客户端：Mock HTTP 测试 Embed
-- **Memory ↔ Document 转换**：memoryToDoc / docToMemory 双向序列化正确性
+- **Memory ↔ Document 转换**：memoryToDoc / docToMemory 双向序列化正确性（通过 JSON 往返验证类型稳定性）
 - **距离→相似度转换**：Cosine/L2/IP 三种距离函数的转换精度验证
 - 倒排索引：分词、BM25 评分（含文档长度归一化）、增删改查
 - RRF 融合：已知排名输入验证输出
 - 时间感知：中英文相对时间解析、绝对日期检测、查询归一化
 - **Archive-and-Create**：验证 insert-first 策略在正常和模拟崩溃场景下的正确性
+- **Recency Boost**：验证 <=7 天 / <=30 天 / >30 天三个区间的分数乘数正确性；验证 `WithRecencyBoost(1.0, 1.0)` 可完全禁用
+- **Gap Stop**：验证分数骤降时截断行为；验证 ratio=0 禁用；验证单条结果和全部同分的边界情况
+- **ContentHash 去重**：验证同 sessionID + 相同内容只存一次；不同 sessionID 相同内容各存一次
+- **Seq 单调递增**：验证跨多次 storeRawMessages 调用后 Seq 全局递增，无间断无重复
+- **Delete 语义**：验证 Delete 后 `Get` 仍可返回记忆（state=deleted），`Search` 不返回
 
 ### 集成测试
 
 - 完整 Ingest 流程：消息输入 → 事实提取 → 调和 → 记忆存储
 - **ModeRaw 流程**：消息直接存为 TypeSession 类型记忆，无 LLM 调用
+- **ModeRaw 累积式去重**：模拟 Agent 3 轮累积发送（第 1 轮 3 条、第 2 轮 5 条、第 3 轮 8 条），验证最终只存 8 条而非 16 条
 - 混合搜索：向量 + 关键词 + RRF 融合验证 recall
-- 生命周期：Create → Update(Archive-and-Create) → Delete → Search 不可见
+- **SearchWithFilter 集成**：验证 archived/deleted 记忆不出现在搜索结果中
+- **Recency Boost 集成**：新旧记忆语义相同时，验证近期记忆排名更靠前
+- **Gap Stop 集成**：构造高相关 + 低相关混合结果集，验证长尾被截断
+- 生命周期：Create → Update(Archive-and-Create) → Delete → Search 不可见 → Get 可见(state=deleted)
 - Pinned 保护：Pinned 记忆不可被 LLM 自动删除/覆盖
-- **倒排索引重建**：Close → Open 后索引一致性验证
+- **倒排索引 + ContentHash 索引重建**：Close → Open 后两个内存索引一致性验证
 - **崩溃恢复**：模拟 archiveAndCreate 中途失败后 Open() 的自动修复
+
+### Benchmark
+
+- **倒排索引重建**：100K 条记忆（平均 500 字符，中英文混合）的 `rebuildInvertedIndex()` 耗时，验证 <1s 目标
+- **SearchWithFilter 高归档率**：在 80% 记忆已归档的场景下，验证搜索结果完整性和延迟
 
 ### Makefile 添加
 
@@ -577,20 +801,21 @@ test-memory-integration:
 
 ## 实现顺序（建议）
 
-| 顺序 | Task | 依赖 | 预估工作量 |
-|------|------|------|-----------|
-| 1 | Task 1: 领域类型 + Document 转换 | 无 | 中 |
+| 顺序 | Task | 依赖 | 说明 |
+|------|------|------|------|
+| 0 | **前置：Vego 新增 ForEach API** | 无 | 为 `vego/collection.go` 新增 `ForEach(fn func(*Document) bool) error`，封装内部 `GetAllValidDocuments()` |
+| 1 | Task 1: 领域类型 + Document 转换 | 无 | 含单 JSON 字段序列化方案 |
 | 2 | Task 5: 配置系统 | Task 1 | 小 |
 | 3 | Task 2: LLM 客户端 | 无 | 中（移植） |
 | 4 | Task 3: Embedding 客户端 | 无 | 小（移植） |
-| 5 | Task 4: 倒排索引（标准 BM25） | 无 | 中 |
-| 6 | Task 6: MemoryStore 主 API | Task 1-5 | 中 |
-| 7 | Task 8: 混合搜索 + 距离转换 | Task 4, 6 | 中 |
+| 5 | Task 4: 倒排索引（标准 BM25） | Task 0 | 中，依赖 ForEach |
+| 6 | Task 6: MemoryStore 主 API | Task 0-5 | 中，含 Delete 软删除语义 |
+| 7 | Task 8: 混合搜索 + 距离转换 | Task 4, 6 | 中，含 SearchWithFilter + Recency Boost + Gap Stop |
 | 8 | Task 9: 时间感知 | 无 | 大（移植） |
-| 9 | Task 7: 智能摄取 + Archive-and-Create | Task 2, 3, 6, 8, 9 | 大（移植） |
-| 10 | Task 10: 测试 | 全部 | 中 |
+| 9 | Task 7: 智能摄取 + Archive-and-Create | Task 2, 3, 6, 8, 9 | 大（移植），含并发控制 |
+| 10 | Task 10: 测试 + Benchmark | 全部 | 中，含 100K 重建 benchmark |
 
-Task 2/3/4 可以并行实现；Task 8/9 可以并行实现。
+Task 0 必须最先完成。Task 2/3/4 可以并行实现；Task 8/9 可以并行实现。
 
 ---
 
@@ -599,10 +824,22 @@ Task 2/3/4 可以并行实现；Task 8/9 可以并行实现。
 | # | 问题 | 修复方案 |
 |---|------|---------|
 | 1 | Vego 返回 Distance（越小越好），设计假设 Score（越大越好） | 新增 `distanceToSimilarity()` 转换层，支持 Cosine/L2/IP 三种距离函数 |
-| 2 | Vego Document 无 Content 字段，映射关系不明确 | 定义 `metaKey*` 常量约定 + `memoryToDoc()`/`docToMemory()` 双向转换函数 |
+| 2 | Vego Document 无 Content 字段，映射关系不明确 | **单 JSON 字段方案**：完整 Memory 序列化为 `_data` 字符串，`_state`/`_type` 冗余存储供 SearchWithFilter 过滤 |
 | 3 | Archive-and-Create 无事务保证，崩溃可能丢数据 | Insert-First + `sync.Mutex` 策略 + Open() 启动时崩溃恢复扫描 |
 | 4 | 倒排索引序列化到 JSON 脆弱且冗余 | 不做持久化，Open() 时从 Vego 遍历 active 文档重建（<1s for <100K） |
 | 5 | 缺少 `TypeSession` 记忆类型，ModeRaw 无法工作 | 新增 `TypeSession = "session"` |
 | 6 | LLM 客户端依赖 Prometheus metrics，不适合嵌入式库 | 替换为 `slog` 结构化日志 |
 | 7 | `memory/llm/` 和 `memory/embed/` 子包导致 import 路径膨胀和潜在冲突 | 扁平化为同包文件 `llm_client.go` 和 `embedder.go`，类型重命名为 `LLMClient` 和 `Embedder` |
 | 8 | BM25 缺少文档长度归一化（b, avgdl），长文档总是得高分 | 使用标准 BM25 公式，新增 `docLen` 和 `totalTerms` 字段 |
+| 9 | ModeRaw 无 ContentHash 去重，累积式发送导致存储膨胀和搜索污染 | Memory 新增 SessionID/Seq/ContentHash 字段 + ContentHashIndex 内存索引 + storeRawMessages 去重写入 |
+| 10 | 搜索结果缺少时效敏感性，旧记忆与新记忆同等对待 | 从 mem9 Confidence Scoring 提取 Recency Boost：<=7 天 ×1.05，<=30 天 ×1.02，可配置/禁用 |
+| 11 | 搜索返回长尾噪声，低相关结果充斥末尾 | 从 mem9 Gap Stop 简化为相对比例截断：相邻分数下降 >50% 时截断，可配置/禁用 |
+| 12 | Vego Metadata `map[string]interface{}` 经 JSON 往返后 `int→float64`，逐字段断言脆弱 | 改用单 JSON 字段 `_data` 存储完整 Memory，`json.Unmarshal` 一次性还原，消除类型退化风险 |
+| 13 | Vego `DeleteContext` 会移除 docToNode 映射导致 `Get` 失败，不符合 mem9 软删除语义 | Delete 改用 `UpdateContext` 修改 `_state` 为 `"deleted"`，保留 `Get` 可访问性 |
+| 14 | Vego `SearchContext` 无 metadata 过滤，archived/deleted 记忆污染搜索结果 | 改用 `SearchWithFilter` + `activeStateFilter()`，Vego 内部自动扩批重试 |
+| 15 | Vego Collection 无公共遍历 API，无法重建倒排索引 | 需为 Vego 新增 `ForEach(fn func(*Document) bool) error` 公共方法 |
+| 16 | `RRF_K` 命名不符合 Go 风格 | 改为 `RRFK` |
+| 17 | `storeRawMessages` 用 batch index `i` 作为 Seq，跨调用不连续 | 改用 `ContentHashIndex.MaxSeq(sessionID) + 1` 确保全局递增 |
+| 18 | Archive-and-Create 直接操作 `doc.Metadata[metaKeyState]`，与单 JSON 字段方案不一致 | 改为反序列化旧 Memory → 修改 State/SupersededBy → 重新 `memoryToDoc` 序列化 → `UpdateContext` |
+| 19 | Reconcile 阶段并发搜索和 LLM 调用无并发控制 | 使用 `semaphore` 限制搜索并发（默认 4）和 LLM 调用并发（默认 1） |
+| 20 | 倒排索引重建 <1s 的假设未经验证 | Task 10 新增 100K 条记忆的重建 benchmark |
