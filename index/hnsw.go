@@ -134,6 +134,10 @@ func (h *HNSWIndex) Search(query []float32, k int, ef int) ([]SearchResult, erro
 		ef = max(200, k*2)
 	}
 
+	// Take a single snapshot of nodes, entryPoint, and maxLevel under one RLock.
+	// This eliminates all per-iteration locking in the search path.
+	// Safety: node.vector is immutable; node.connections use node-level locks;
+	// snapshot slice remains valid even if h.nodes is reallocated by concurrent Add.
 	h.globalLock.RLock()
 	if h.entryPoint == -1 {
 		h.globalLock.RUnlock()
@@ -141,9 +145,10 @@ func (h *HNSWIndex) Search(query []float32, k int, ef int) ([]SearchResult, erro
 	}
 	ep := h.entryPoint
 	maxLvl := h.maxLevel
+	nodes := h.nodes // snapshot slice header
 	h.globalLock.RUnlock()
 
-	return h.search(query, k, ef, int(ep), int(maxLvl))
+	return h.search(query, k, ef, int(ep), int(maxLvl), nodes)
 }
 
 // SearchWithDV searches for k nearest neighbors with deletion vector filtering.
@@ -163,6 +168,7 @@ func (h *HNSWIndex) SearchWithDV(query []float32, k int, ef int, isDeleted func(
 		ef = max(200, k*2)
 	}
 
+	// Take a single snapshot under one RLock (same pattern as Search).
 	h.globalLock.RLock()
 	if h.entryPoint == -1 {
 		h.globalLock.RUnlock()
@@ -170,10 +176,11 @@ func (h *HNSWIndex) SearchWithDV(query []float32, k int, ef int, isDeleted func(
 	}
 	ep := h.entryPoint
 	maxLvl := h.maxLevel
+	nodes := h.nodes // snapshot slice header
 	h.globalLock.RUnlock()
 
 	// Search for more candidates to compensate for deletions
-	candidates, err := h.search(query, k*2, ef, int(ep), int(maxLvl))
+	candidates, err := h.search(query, k*2, ef, int(ep), int(maxLvl), nodes)
 	if err != nil {
 		return nil, err
 	}

@@ -29,3 +29,6 @@ bench_results/
 
 # Conversation logs
 conversation-*.txt
+
+# Kimi exports
+kimi-export-*.md

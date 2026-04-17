@@ -43,6 +43,118 @@ vego/
 
 ---
 
+## Task 0: ForEach 公共方法 — `vego/collection.go`
+
+Vego 内部有 `storage.GetAllValidDocuments()`，但它是内部 API，不对 `memory` 包暴露。Task 0 为 `vego.Collection` 新增公共遍历方法。
+
+### 背景与问题
+
+| 现状 | 问题 |
+|------|------|
+| `storage.GetAllValidDocuments()` 存在 | 位于 `storage` 包，是内部实现 |
+| `collection.go` 无遍历 API | `memory` 包无法遍历 Collection 中的文档 |
+| DeletionVector 标记删除 | 遍历时需跳过已删除文档 |
+
+**阻塞关系**：Task 0 是 Task 4/6/7 的前置依赖。
+
+### 设计方案
+
+```go
+// vego/collection.go
+
+// ForEach 遍历集合中所有未删除的文档
+// fn: 回调函数，返回 true 继续遍历，false 停止
+// 返回: 遍历过程中的错误（如果 fn 返回 false 则不返回错误）
+func (c *Collection) ForEach(fn func(*Document) bool) error {
+    // 1. 获取 Collection 的 storage
+    // 2. 调用 storage.GetAllValidDocuments() 获取所有文档
+    // 3. 对每个文档检查 DeletionVector，未删除的调用 fn
+    // 4. 如果 fn 返回 false，停止遍历（不是错误）
+    // 5. 返回遍历错误（如果有）
+}
+```
+
+### 实现要点
+
+1. **获取 storage reader**：通过 `c.storage` 访问底层存储
+2. **调用 `GetAllValidDocuments()`**：获取所有有效文档（内部已过滤 DeletionVector）
+3. **类型转换**：将 storage 层的文档格式转换为 `vego.Document`
+4. **回调调用**：对每个文档调用 `fn`，根据返回值决定是否继续
+5. **错误处理**：IO 错误应立即终止遍历并返回
+
+```go
+func (c *Collection) ForEach(fn func(*Document) bool) error {
+    c.mu.RLock()
+    defer c.mu.RUnlock()
+
+    // 获取 storage reader
+    reader, err := c.storage.GetReader()
+    if err != nil {
+        return fmt.Errorf("get storage reader: %w", err)
+    }
+    defer reader.Close()
+
+    // 遍历所有有效文档
+    return reader.GetAllValidDocuments(func(doc *storage.Document) error {
+        // 检查 DeletionVector
+        if c.deletionVector != nil && c.deletionVector.IsDeleted(doc.RowID) {
+            return nil // 跳过已删除文档
+        }
+
+        // 转换为 vego.Document
+        vegoDoc := &Document{
+            ID:       doc.ID,
+            Vector:   doc.Vector,
+            Metadata: doc.Metadata,
+        }
+
+        // 调用回调
+        if !fn(vegoDoc) {
+            return ErrStopIteration
+        }
+        return nil
+    })
+}
+```
+
+### 变体方案（可选）
+
+如果需要更灵活的遍历能力，可以同时提供：
+
+```go
+// 带过滤条件的遍历
+func (c *Collection) ForEachFiltered(fn func(*Document) bool, filter func(*Document) bool) error
+
+// 只遍历指定状态的文档（active/paused/archived）
+func (c *Collection) ForEachByState(state MemoryState, fn func(*Document) bool) error
+```
+
+但对于 memory 服务的初始需求，简单的 `ForEach` 足够了。
+
+### 错误处理
+
+| 场景 | 行为 |
+|------|------|
+| fn 返回 false | 正常停止，不返回错误 |
+| IO 错误 | 立即终止，返回错误 |
+| 回调返回错误 | 立即终止，返回错误 |
+
+### 性能考量
+
+- 遍历是**只读操作**，不需要写锁（使用 RLock）
+- 对于 <100K 文档的全量遍历，耗时 <1s
+- memory 包在 `Open()` 时调用，用于重建倒排索引和 ContentHashIndex
+
+### 验收标准
+
+- [ ] `ForEach` 方法存在于 `vego.Collection`
+- [ ] 遍历返回所有未删除文档
+- [ ] DeletionVector 标记的文档被正确跳过
+- [ ] `memory` 包可以调用 `ForEach` 重建索引
+- [ ] 已有测试覆盖（如果 Collection 有测试文件）
+
+---
+
 ## Task 1: 领域类型定义 — `memory/types.go`
 
 定义记忆的核心数据模型，对标 mem9 的 `domain/types.go`。
