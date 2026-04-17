@@ -2,9 +2,14 @@
 
 > Platform: Apple M3 Max, darwin/arm64, Go 1.24.13
 > Date: 2026-04-17
-> Source: `bench_results/baseline.txt`
+> Source: `baseline.txt`
 
-文件包含两次 `make bench-all` 执行。第一次 Vego/Storage 路径错误只跑了 Index，第二次三个模块均执行但 Vego 部分因超时被 SIGQUIT 中断。以下以第二次完整数据为主。
+文件包含两次 `make bench-all` 执行和一次独立 Vego Insert/Search 执行：
+- **Run 1**：Vego/Storage 路径错误，只跑了 Index
+- **Run 2**：三个模块均执行，但 Vego 部分因 D1024 搜索超时被 SIGQUIT 中断（11m 超限）
+- **Run 3**（独立）：仅 Vego Insert/Search，无前序 GC 压力干扰
+
+以下以 Run 2 完整数据为主，Run 3 作为独立基线对照。
 
 ---
 
@@ -47,6 +52,15 @@
 | InsertBatch/50 | 57,406,548 | 21.3 | 56,018 | 871 doc/s |
 | InsertBatch/100 | 131,676,343 | 44.0 | 117,452 | 760 doc/s |
 | InsertBatch/500 | 540,874,722 | 217.7 | 554,882 | 924 doc/s |
+
+**独立运行对照（Run 3，无前序 GC 压力）**：
+
+| Benchmark | ns/op (Run 2) | ns/op (Run 3) | 差异 | allocs/op |
+|-----------|--------------|--------------|------|-----------|
+| Insert (单条) | 1,171,440 | **849,398** | **-28%** | 1,002 |
+| Search (K=10) | 9,208,524 | 9,414,903 | +2% | 46,214 |
+
+Insert 在独立运行中快 28%（854→1177 doc/s），说明主运行中 Index benchmark（3.6GB 累计分配）导致的堆碎片化和 GC 背压显著影响了后续 Insert 表现。**建议以独立运行数据作为 Insert 的真实基线（~1177 doc/s）。** Search 差异仅 2%，表明搜索路径受 GC 历史影响较小。
 
 - **批量插入无加速效应** -- Batch 500 的单文档吞吐（924 doc/s）与单条插入（854 doc/s）几乎持平，说明瓶颈在 HNSW 图构建（每条必须走 searchLayer + 连接剪枝），Storage 层 I/O 不是瓶颈。
 - **每条插入 ~1100 allocs** -- 大量小对象分配，主要来自 HNSW searchLayer 中的 PriorityQueue/MaxHeap Item 分配和 map 初始化。
@@ -112,15 +126,17 @@ D1024 搜索超时崩溃，说明高维搜索的 HNSW 遍历 + Storage 读取组
 
 ### 3.1 编码性能对比
 
-| 编码器 | Encode (ns/op) | Decode (ns/op) | B/op (Encode) |
-|--------|----------------|----------------|---------------|
-| RLE | 7,020 | 13,126 | 4,976 |
-| Zstd | 9,181 | 21,775 | 130,946 |
-| BSS (Float32) | 16,327 | 19,849 | 112,853 |
-| Dictionary | 56,925 | 17,851 | 64,848 |
-| BitPacking | 35,813 | 38,747 | 32,864 |
+| 编码器 | Encode (ns/op) | Decode (ns/op) | B/op (Encode) | allocs/op (Encode) |
+|--------|----------------|----------------|---------------|-------------------|
+| RLE | 7,020 | 13,126 | 4,976 | **216** |
+| Zstd | 9,181 | 21,775 | 130,946 | 4 |
+| BSS (Float32) | 16,327 | 19,849 | 112,853 | 11 |
+| Dictionary | 56,925 | 17,851 | 64,848 | 19 |
+| BitPacking | 35,813 | 38,747 | 32,864 | 3 |
 
-RLE 编码最快（7us），BitPacking 解码最慢（38.7us）。
+- RLE 编码最快（7µs），BitPacking 解码最慢（38.7µs）。
+- **RLE allocs 异常**：216 次分配远超其他编码器（BSS 11、Zstd 4、BitPacking 3）。虽然 RLE encode 时间最短，但高 allocs 暗示每个 run 都在做独立堆分配。在高 run count 数据上会放大 GC 压力，且随数据规模增长分配次数线性增加。**优化方向**：预分配 runs slice 或使用 `sync.Pool` 回收 run 对象。
+- **EncoderFactory.SelectEncoder** 仅 8.2 ns/op、零分配，编码器选择热路径设计良好。
 
 ### 3.2 E2E 编码轮回
 
@@ -150,7 +166,7 @@ RLE 在有规律数据上表现最优，Random 数据退化到 50us。
 | 8 | 22,558,967 | 8.7x |
 | 16 | 45,310,463 | 17.5x |
 
-并发度翻倍，耗时翻倍 -- 完全无并行收益，疑似共享锁或顺序 I/O 瓶颈。验证了 phase1_extra.md 中 "Writer 异步优化未完成" 的判断。
+并发度翻倍，耗时超线性增长 -- 完全无并行收益，并发 16 时退化到 17.5x（而非理想的 1x 或至少 16x 持平）。超出线性部分（如并发 8 时 8.7x > 8x、并发 16 时 17.5x > 16x）说明除串行化外还存在额外的**锁争用或 cache line bouncing** 开销。验证了 phase1_extra.md 中 "Writer 异步优化未完成" 的判断。
 
 ### 3.4 列数扩展 (Async IO)
 
@@ -162,7 +178,7 @@ RLE 在有规律数据上表现最优，Random 数据退化到 50us。
 | 20 | 674,207 | 6.0x |
 | 50 | 1,437,153 | 12.8x |
 
-列数扩展接近线性，略有超线性增长（50 列时 12.8x 而非 50x），说明每列的固定开销（header 解析、内存分配）占比较大。
+列数扩展呈**亚线性**增长（50 列时 12.8x 而非 50x），说明每列的固定开销（header 解析、内存分配）占比较小，列间有部分开销可摊薄（如文件句柄复用、缓冲区共享）。
 
 ### 3.5 其他 Storage 基准
 
@@ -176,7 +192,19 @@ RLE 在有规律数据上表现最优，Random 数据退化到 50us。
 | Float64 Reader | 4,830,751 | 16,001,218 |
 | Dict High Cardinality | 333,512 | 552,162 |
 
-WriteVectorArray 的 15MB/op 分配量显著偏高，可能是向量数据的多次拷贝所致。
+- **WriteVectorArray 15MB/op** 分配量显著偏高，可能是向量数据的多次拷贝（Arrow 构建 + 编码 + Page 缓冲）所致。
+- **ReadInt32Array 的 B/op（8KB）是 WriteInt32Array（3.5KB）的 2.4 倍**，读取路径的反序列化分配较重。
+
+### 3.6 Statistics 计算性能
+
+| 规模 | ns/op | 相对 Small |
+|------|-------|----------|
+| Int32 Small (~1K) | 1,578 | 1.0x |
+| Int32 Medium (~10K) | 16,280 | 10.3x |
+| Int32 Large (~100K) | 138,938 | 88.0x |
+| Float32 (~1K) | 7,224 | -- |
+
+Statistics 计算近似线性扩展，100K 元素约 139µs，不会成为写入瓶颈。Float32 比同规模 Int32 慢约 4.6x，主要因为浮点比较（含 NaN 检查）开销更高。
 
 ---
 
@@ -193,11 +221,12 @@ WriteVectorArray 的 15MB/op 分配量显著偏高，可能是向量数据的多
 
 ## 五、核心瓶颈总结
 
-| # | 瓶颈 | 影响 | 根因 | 优化方向 |
-|---|------|------|------|----------|
-| 1 | 搜索热路径分配风暴 | Search K=10 单次 46K allocs / 36MB | Storage 层逐文档 Get() 反序列化 | 延迟加载；Search 只返回 ID+Distance，按需读文档 |
-| 2 | Recall 偏低 (82.5%) | 搜索质量不达标 | searchLayer 浮点容差过宽 / selectNeighborsHeuristic 剪枝过激进 | 去掉 relativeTolerance 或降低阈值 |
-| 3 | 100K 搜索远超目标 | 573ms vs 目标 100ms | Storage 层读取候选文档开销随数据集线性增长 | 减少 Search 结果的文档加载量 |
-| 4 | Async IO 完全无效 | 并发列读取退化为串行 | Writer 异步优化未实现 | 多列并行编码 + 顺序写入 |
-| 5 | GC 压力致尾延迟不稳 | P99/P50 从 1.27x 到 1.67x | 10K 插入产生 3.6GB / 21M allocs | 对象池化 PriorityQueue Items，预分配 visited map |
-| 6 | 批量插入无加速 | Batch 500 与单条吞吐持平 | HNSW 图构建为串行瓶颈 | 批量预构建 + 延迟连接 |
+| # | 瓶颈 | 影响 | 根因 | 优化方向 | 优先级 |
+|---|------|------|------|----------|--------|
+| 1 | 搜索热路径分配风暴 | Search K=10 单次 46K allocs / 36MB | Storage 层逐文档 Get() 反序列化 | 延迟加载；Search 只返回 ID+Distance，按需读文档 | **P0** |
+| 2 | Recall 偏低 (82.5%) | 搜索质量不达标（目标 95%+） | searchLayer 浮点容差过宽 / selectNeighborsHeuristic 剪枝过激进 | 去掉 relativeTolerance 或降低阈值 | **P0** |
+| 3 | 100K 搜索远超目标 | 573ms vs 目标 100ms (5.7x) | Storage 层读取候选文档开销随数据集线性增长 | 减少 Search 结果的文档加载量（与 #1 同源） | **P0** |
+| 4 | GC 压力致尾延迟不稳 | P99/P50 从 1.27x 到 1.67x；Insert 受前序 GC 影响波动 28% | 10K 插入产生 3.6GB / 21M allocs | 对象池化 PriorityQueue Items，预分配 visited map | **P1** |
+| 5 | RLE 编码器 allocs 异常 | 216 allocs/op，远超其他编码器（BSS 11、Zstd 4、BitPacking 3） | 每个 run 独立堆分配 | 预分配 runs slice 或 sync.Pool 回收 | **P1** |
+| 6 | Async IO 完全无效 | 并发列读取退化为超线性串行（并发 16 时 17.5x） | Writer 异步优化未实现 + 锁争用 | 多列并行编码 + 顺序写入 | **P2** |
+| 7 | 批量插入无加速 | Batch 500 与单条吞吐持平 | HNSW 图构建为串行瓶颈 | 批量预构建 + 延迟连接 | **P2** |
