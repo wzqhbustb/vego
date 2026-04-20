@@ -1,6 +1,7 @@
 package vego
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -250,6 +251,15 @@ func (s *DocumentStorage) PutBatch(docs []*Document) error {
 			}
 		}
 
+		// Remove from buffer if present (for updates)
+		for i, bufDoc := range s.writeBuffer {
+			if bufDoc.ID == doc.ID {
+				s.writeBuffer = append(s.writeBuffer[:i], s.writeBuffer[i+1:]...)
+				s.bufferSize--
+				break
+			}
+		}
+
 		s.writeBuffer = append(s.writeBuffer, doc.Clone())
 		s.bufferSize++
 	}
@@ -412,6 +422,12 @@ func (s *DocumentStorage) IsDeleted(id string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	return s.isDeletedLocked(id)
+}
+
+// isDeletedLocked checks if a document is deleted without acquiring s.mu.
+// The caller must hold s.mu.RLock or s.mu.Lock.
+func (s *DocumentStorage) isDeletedLocked(id string) bool {
 	if s.closed {
 		return false
 	}
@@ -529,12 +545,77 @@ func (s *DocumentStorage) GetAllValidDocuments() ([]*Document, error) {
 	// Filter out deleted documents
 	validDocs := make([]*Document, 0, len(docs))
 	for _, doc := range docs {
-		if !s.IsDeleted(doc.ID) {
+		if !s.isDeletedLocked(doc.ID) {
 			validDocs = append(validDocs, doc)
 		}
 	}
 
 	return validDocs, nil
+}
+
+// ForEach iterates over all valid (non-deleted) documents, including both
+// buffered (not yet flushed) and persisted documents. The callback receives
+// each document; returning false stops iteration early.
+//
+// Documents passed to the callback are cloned before delivery, but Metadata
+// values are shallow-copied (slices, maps, and pointers inside Metadata are
+// shared with the original). Do not mutate nested Metadata values.
+//
+// WARNING: The callback executes while storage's read lock is held.
+// Long-running callbacks will block all writes to the storage.
+func (s *DocumentStorage) ForEach(ctx context.Context, fn func(*Document) bool) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return fmt.Errorf("storage is closed")
+	}
+
+	// Step 1: Iterate buffered documents first (most recent)
+	bufferedIDs := make(map[string]struct{}, len(s.writeBuffer))
+	for _, doc := range s.writeBuffer {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		if s.isDeletedLocked(doc.ID) {
+			continue
+		}
+		bufferedIDs[doc.ID] = struct{}{}
+		if !fn(doc.Clone()) {
+			return nil
+		}
+	}
+
+	// Step 2: Iterate persisted documents, skipping those already seen in buffer
+	dataFile := filepath.Join(s.path, dataFileName)
+	if _, err := os.Stat(dataFile); os.IsNotExist(err) {
+		return nil
+	}
+
+	docs, err := s.readAllDocuments()
+	if err != nil {
+		return err
+	}
+
+	for _, doc := range docs {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		if s.isDeletedLocked(doc.ID) {
+			continue
+		}
+		if _, inBuffer := bufferedIDs[doc.ID]; inBuffer {
+			continue
+		}
+		if !fn(doc.Clone()) {
+			break
+		}
+	}
+	return nil
 }
 
 // Flush writes all buffered documents to storage.

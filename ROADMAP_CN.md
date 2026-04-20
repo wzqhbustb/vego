@@ -301,6 +301,11 @@ results, _ := coll.Search(queryVector, 10,
 - **全面监控**：Prometheus 指标导出
 - **配置系统**：可调缓存大小、压缩级别
 - **流式读取**：大文件无需完全加载到内存
+- **ForEach 流式遍历支持**：解决 `ForEach`/`GetAllValidDocuments` 全量加载内存瓶颈
+  - 多 batch 文件格式 + `ReadNextBatch` API（替代单 batch 全量加载）
+  - page 级缓存（缓存解码后的 page，替代磁盘块级 BlockCache）
+  - 列裁剪读取（仅加载 metadata 列，跳过 Vector 列）
+  - 前置：Phase 2 列裁剪（基础）
 - **并行列读取**：多列并行加载（3-4x 性能提升）
 
 #### 向量索引：IVF-PQ（新增 - 关键）

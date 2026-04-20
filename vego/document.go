@@ -34,7 +34,9 @@ func (d *Document) Validate(dimension int) error {
 	return nil
 }
 
-// Clone creates a deep copy of the document
+// Clone creates a copy of the document. Vector is deep-copied.
+// Metadata is shallow-copied at the map level: the map itself is duplicated,
+// but values inside it (slices, maps, pointers) are shared with the original.
 func (d *Document) Clone() *Document {
 	clone := &Document{
 		ID:        d.ID,

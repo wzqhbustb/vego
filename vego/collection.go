@@ -348,6 +348,42 @@ func (c *Collection) GetContext(ctx context.Context, id string) (*Document, erro
 	return c.storage.Get(id)
 }
 
+// ForEach iterates over all valid (non-deleted) documents in the collection.
+// The callback receives each document; returning false stops iteration early.
+// Documents are provided in an unspecified order.
+//
+// This includes both buffered (not yet flushed) and persisted documents,
+// consistent with Get/GetContext behavior.
+//
+// Documents passed to the callback are cloned before delivery, but Metadata
+// values are shallow-copied (slices, maps, and pointers inside Metadata are
+// shared with the original). Do not mutate nested Metadata values.
+//
+// WARNING: The callback executes while Collection's read lock is held.
+// Do NOT call Insert/Delete/Update/Compact or any other modifying method
+// inside the callback, or it will deadlock.
+//
+// WARNING: Long-running callbacks will block all writes to the collection.
+// Keep callback execution short; copy data out if post-processing is needed.
+func (c *Collection) ForEach(fn func(*Document) bool) error {
+	return c.ForEachContext(context.Background(), fn)
+}
+
+// ForEachContext is the context-aware version of ForEach.
+// It checks context cancellation before acquiring the read lock.
+func (c *Collection) ForEachContext(ctx context.Context, fn func(*Document) bool) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	return c.storage.ForEach(ctx, fn)
+}
+
 // Delete removes a document from the collection
 // Deprecated: Use DeleteContext instead
 func (c *Collection) Delete(id string) error {
