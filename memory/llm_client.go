@@ -46,16 +46,11 @@ func NewLLMClient(cfg LLMConfig) *LLMClient {
 	if model == "" {
 		model = "gpt-4o-mini"
 	}
-	temperature := cfg.Temperature
-	if temperature == 0 {
-		temperature = 0.1
-	}
-
 	return &LLMClient{
 		apiKey:      cfg.APIKey,
 		baseURL:     strings.TrimSuffix(baseURL, "/"),
 		model:       model,
-		temperature: temperature,
+		temperature: cfg.Temperature,
 		http: &http.Client{
 			Timeout: 120 * time.Second,
 		},

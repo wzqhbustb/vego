@@ -27,8 +27,9 @@ func TestNewLLMClientDefaults(t *testing.T) {
 	if c.model != "gpt-4o-mini" {
 		t.Errorf("Model default: want %s, got %s", "gpt-4o-mini", c.model)
 	}
-	if c.temperature != 0.1 {
-		t.Errorf("Temperature default: want %f, got %f", 0.1, c.temperature)
+	if c.temperature != 0.0 {
+		// temperature 零值不再被覆盖；默认值由 Config 层保证
+		t.Errorf("Temperature default: want 0.0 (zero-value), got %f", c.temperature)
 	}
 }
 
