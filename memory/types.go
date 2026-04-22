@@ -51,10 +51,14 @@ type Memory struct {
 	ContentHash  string                 `json:"content_hash"` // SHA256(content), for ModeRaw deduplication
 	Version      int                    `json:"version"`
 	SupersededBy string                 `json:"superseded_by"` // ID of the memory that supersedes this one
+	PreviousID   string                 `json:"previous_id"`   // ID of the memory this one replaces (Update)
 	Score        float64                `json:"score"`       // Search score (0-1, populated at query time)
 	RelativeAge  string                 `json:"relative_age"` // Human-readable age (populated at query time)
 	CreatedAt    time.Time              `json:"created_at"`
 	UpdatedAt    time.Time              `json:"updated_at"`
+	// Vector is a transient field for Bootstrap/Import only.
+	// It is NOT persisted in JSON (json:"-") to avoid duplicating the binary vector.
+	Vector []float32 `json:"-"`
 }
 
 // MemoryFilter provides filtering criteria for memory search queries.
@@ -85,6 +89,9 @@ func memoryToDoc(m *Memory, vec []float32) (*vego.Document, error) {
 	toStore := *m
 	toStore.Score = 0
 	toStore.RelativeAge = ""
+	if toStore.UpdatedAt.IsZero() {
+		toStore.UpdatedAt = time.Now()
+	}
 
 	data, err := json.Marshal(&toStore)
 	if err != nil {
@@ -99,11 +106,15 @@ func memoryToDoc(m *Memory, vec []float32) (*vego.Document, error) {
 	vecCopy := make([]float32, len(vec))
 	copy(vecCopy, vec)
 
+	ts := m.UpdatedAt
+	if ts.IsZero() {
+		ts = time.Now()
+	}
 	return &vego.Document{
 		ID:        m.ID,
 		Vector:    vecCopy,
 		Metadata:  meta,
-		Timestamp: m.UpdatedAt,
+		Timestamp: ts,
 	}, nil
 }
 

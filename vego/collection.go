@@ -580,6 +580,12 @@ func (c *Collection) SearchContext(ctx context.Context, query []float32, k int, 
 // SearchWithFilter performs vector search with metadata filter
 // Dynamically expands search scope until enough filtered results are found
 func (c *Collection) SearchWithFilter(query []float32, k int, filter Filter) ([]SearchResult, error) {
+	return c.SearchWithFilterContext(context.Background(), query, k, filter)
+}
+
+// SearchWithFilterContext is the context-aware version of SearchWithFilter.
+// It propagates cancellation to the underlying HNSW search.
+func (c *Collection) SearchWithFilterContext(ctx context.Context, query []float32, k int, filter Filter) ([]SearchResult, error) {
 	batchSize := k * 2
 	maxBatchSize := k * 20
 	maxAttempts := 5
@@ -587,8 +593,14 @@ func (c *Collection) SearchWithFilter(query []float32, k int, filter Filter) ([]
 	var allFiltered []SearchResult
 
 	for attempt := 0; attempt < maxAttempts && batchSize <= maxBatchSize; attempt++ {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
 		// Search with current batch size
-		results, err := c.Search(query, batchSize)
+		results, err := c.SearchContext(ctx, query, batchSize)
 		if err != nil {
 			return nil, err
 		}

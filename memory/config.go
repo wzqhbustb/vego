@@ -27,6 +27,7 @@ type Config struct {
 	EmbedDims    int // 默认 1536
 
 	// Search
+	SearchLimit       int     // 默认 10
 	RRFK              float64 // 默认 60.0
 	MinScore          float64 // 默认 0.3（相似度 0-1）
 	SecondHopGate     float64 // 默认 0.5
@@ -59,6 +60,7 @@ func DefaultConfig() *Config {
 		EmbedBaseURL:         "https://api.openai.com/v1",
 		EmbedModel:           "text-embedding-3-small",
 		EmbedDims:            1536,
+		SearchLimit:          10,
 		RRFK:                 60.0,
 		MinScore:             0.3,
 		SecondHopGate:        0.5,
@@ -115,6 +117,9 @@ func (c *Config) validate() error {
 	}
 	if c.GapStopRatio < 0 || c.GapStopRatio > 1 {
 		return fmt.Errorf("gap stop ratio must be in [0,1], got %f", c.GapStopRatio)
+	}
+	if c.SearchLimit <= 0 {
+		return fmt.Errorf("search limit must be > 0, got %d", c.SearchLimit)
 	}
 	if c.RRFK <= 0 {
 		return fmt.Errorf("rrf k must be > 0, got %f", c.RRFK)
@@ -254,7 +259,11 @@ func WithDistanceFunc(name string) Option {
 	return func(c *Config) { c.DistanceFunc = name }
 }
 
-// WithSearchParams sets search scoring thresholds.
+// WithSearchLimit sets the default maximum number of search results.
+func WithSearchLimit(limit int) Option {
+	return func(c *Config) { c.SearchLimit = limit }
+}
+
 func WithSearchParams(minScore float64) Option {
 	return func(c *Config) { c.MinScore = minScore }
 }
