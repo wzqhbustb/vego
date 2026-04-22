@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -24,11 +25,12 @@ type LLMConfig struct {
 
 // LLMClient is an OpenAI-compatible HTTP client for LLM completions.
 type LLMClient struct {
-	apiKey      string
-	baseURL     string
-	model       string
-	temperature float64
-	http        *http.Client
+	apiKey             string
+	baseURL            string
+	model              string
+	temperature        float64
+	http               *http.Client
+	formatNotSupported atomic.Bool // caches 400 response_format failure
 }
 
 // NewLLMClient creates a new LLM client from the given configuration.
@@ -83,12 +85,20 @@ func (c *LLMClient) CompleteJSON(ctx context.Context, system, user string) (stri
 // complete performs the actual HTTP request. withFormat controls whether
 // response_format: json_object is included.
 func (c *LLMClient) complete(ctx context.Context, system, user string, withFormat bool) (string, int, int, error) {
+	// If we already know the server doesn't support response_format, skip it.
+	if withFormat && c.formatNotSupported.Load() {
+		return c.complete(ctx, system, user, false)
+	}
+
+	var messages []chatMessage
+	if system != "" {
+		messages = append(messages, chatMessage{Role: "system", Content: system})
+	}
+	messages = append(messages, chatMessage{Role: "user", Content: user})
+
 	reqBody := chatCompletionRequest{
-		Model: c.model,
-		Messages: []chatMessage{
-			{Role: "system", Content: system},
-			{Role: "user", Content: user},
-		},
+		Model:       c.model,
+		Messages:    messages,
 		Temperature: c.temperature,
 	}
 	if withFormat {
@@ -117,6 +127,7 @@ func (c *LLMClient) complete(ctx context.Context, system, user string, withForma
 	// HTTP 400 fallback: Ollama/vLLM may not support response_format
 	if resp.StatusCode == http.StatusBadRequest && withFormat {
 		io.Copy(io.Discard, resp.Body) // drain for connection reuse
+		c.formatNotSupported.Store(true)
 		slog.Warn("llm request returned 400 with response_format, retrying without",
 			"model", c.model,
 		)

@@ -1,8 +1,6 @@
 module github.com/wzqhbustb/vego
 
-go 1.23
-
-toolchain go1.24.13
+go 1.25.0
 
 require github.com/klauspost/compress v1.18.3
 
@@ -14,4 +12,5 @@ require (
 require (
 	github.com/bits-and-blooms/bitset v1.12.0 // indirect
 	github.com/mschoch/smat v0.2.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
 )

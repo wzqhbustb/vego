@@ -157,13 +157,14 @@ func (s *MemoryStore) Store(ctx context.Context, content string, tags []string) 
 	}
 
 	mem := &Memory{
-		ID:        vego.DocumentID(),
-		Content:   content,
-		State:     StateActive,
-		Tags:      append([]string(nil), tags...),
-		Version:   1,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		ID:         vego.DocumentID(),
+		Content:    content,
+		MemoryType: TypeInsight,
+		State:      StateActive,
+		Tags:       append([]string(nil), tags...),
+		Version:    1,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
 	}
 
 	doc, err := memoryToDoc(mem, vec)
@@ -451,12 +452,14 @@ func (s *MemoryStore) rebuildIndexes() error {
 			previousIDSet[m.PreviousID] = struct{}{}
 		}
 
-		// Index active memories only.
+		// Index active memories for inverted search.
+		// Index ALL TypeSession memories for ContentHash deduplication,
+		// regardless of state, to prevent re-storing archived/deleted messages.
 		if m.State == StateActive {
 			s.inverted.Add(m.ID, m.Content)
-			if m.MemoryType == TypeSession && m.ContentHash != "" {
-				s.contentHashIndex.Add(m.SessionID, m.ContentHash, m.ID, m.Seq)
-			}
+		}
+		if m.MemoryType == TypeSession && m.ContentHash != "" {
+			s.contentHashIndex.Add(m.SessionID, m.ContentHash, m.ID, m.Seq)
 		}
 		return true
 	})

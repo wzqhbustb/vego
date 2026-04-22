@@ -29,7 +29,7 @@ func (m *mockEmbedServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func newTestStore(t *testing.T, opts ...Option) *MemoryStore {
+func newTestStore(t testing.TB, opts ...Option) *MemoryStore {
 	t.Helper()
 	dir := t.TempDir()
 
@@ -51,7 +51,7 @@ func newTestStore(t *testing.T, opts ...Option) *MemoryStore {
 	return s
 }
 
-func setupMockEmbedder(t *testing.T, s *MemoryStore, dims int) {
+func setupMockEmbedder(t testing.TB, s *MemoryStore, dims int) {
 	t.Helper()
 	srv := httptest.NewServer(&mockEmbedServer{dims: dims})
 	t.Cleanup(srv.Close)
