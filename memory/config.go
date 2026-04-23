@@ -63,7 +63,7 @@ func DefaultConfig() *Config {
 		SearchLimit:          10,
 		RRFK:                 60.0,
 		MinScore:             0.3,
-		SecondHopGate:        0.5,
+		SecondHopGate:        0.02,
 		SecondHopWeight:      0.3,
 		SecondHopTopN:        3,
 		PinnedBoost:          1.5,

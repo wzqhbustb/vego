@@ -49,8 +49,8 @@ func TestDefaultConfig(t *testing.T) {
 	if c.PinnedBoost != 1.5 {
 		t.Errorf("PinnedBoost: want 1.5, got %f", c.PinnedBoost)
 	}
-	if c.SecondHopGate != 0.5 {
-		t.Errorf("SecondHopGate: want 0.5, got %f", c.SecondHopGate)
+	if c.SecondHopGate != 0.02 {
+		t.Errorf("SecondHopGate: want 0.02, got %f", c.SecondHopGate)
 	}
 	if c.SecondHopWeight != 0.3 {
 		t.Errorf("SecondHopWeight: want 0.3, got %f", c.SecondHopWeight)

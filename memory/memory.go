@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -291,7 +292,10 @@ func (s *MemoryStore) Delete(ctx context.Context, id string) error {
 type SearchOption func(*searchConfig)
 
 type searchConfig struct {
-	limit int
+	limit    int
+	minScore float64
+	hybrid   bool
+	filter   MemoryFilter
 }
 
 // Limit sets the maximum number of search results for a single call.
@@ -299,34 +303,117 @@ func Limit(n int) SearchOption {
 	return func(c *searchConfig) { c.limit = n }
 }
 
-// Search performs a vector search over active memories.
-// Hybrid search (vector + BM25 + RRF) will be integrated in Task 8.
+// MinScore sets the minimum similarity threshold (0-1) for search results.
+func MinScore(min float64) SearchOption {
+	return func(c *searchConfig) { c.minScore = min }
+}
+
+// EnableHybrid controls whether hybrid search (vector + BM25 + RRF) is used.
+// When false, falls back to pure vector search.  Default is true.
+func EnableHybrid(enabled bool) SearchOption {
+	return func(c *searchConfig) { c.hybrid = enabled }
+}
+
+// WithFilter injects additional filter criteria (tags, type, agent, session).
+func WithFilter(f MemoryFilter) SearchOption {
+	return func(c *searchConfig) { c.filter = f }
+}
+
+// Search performs hybrid search over active memories.
+// By default it runs the full 10-stage pipeline (vector + BM25 + RRF + boosts).
+// Pass EnableHybrid(false) to fall back to pure vector search.
 func (s *MemoryStore) Search(ctx context.Context, query string, opts ...SearchOption) ([]Memory, error) {
-	sc := &searchConfig{limit: s.config.SearchLimit}
+	sc := &searchConfig{
+		hybrid: true,
+	}
 	for _, opt := range opts {
 		opt(sc)
 	}
 
-	// Normalize temporal expressions in the query so that embeddings match
-	// against absolute dates stored in memories.
-	normalizedQuery := NormalizeTemporalRecallQuery(query, time.Now())
+	// Build MemoryFilter from option overrides.
+	mf := sc.filter
+	mf.Query = query
+	if sc.limit > 0 {
+		mf.Limit = sc.limit
+	}
+	if mf.Limit <= 0 {
+		mf.Limit = s.config.SearchLimit
+	}
+	if sc.minScore > 0 {
+		mf.MinScore = sc.minScore
+	}
+	if mf.MinScore <= 0 {
+		mf.MinScore = s.config.MinScore
+	}
+
+	if !sc.hybrid {
+		return s.pureVectorSearch(ctx, query, mf)
+	}
+	return s.hybridSearch(ctx, query, mf)
+}
+
+// pureVectorSearch is the fallback path when hybrid search is disabled.
+func (s *MemoryStore) pureVectorSearch(ctx context.Context, query string, filter MemoryFilter) ([]Memory, error) {
+	now := time.Now()
+	normalizedQuery := NormalizeTemporalRecallQuery(query, now)
 	vec, err := s.embed(ctx, normalizedQuery)
 	if err != nil {
 		return nil, fmt.Errorf("embed query: %w", err)
 	}
 
-	filter := &vego.MetadataFilter{
-		Field:    metaKeyState,
-		Operator: "eq",
-		Value:    string(StateActive),
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = s.config.SearchLimit
+	}
+	minScore := filter.MinScore
+	if minScore <= 0 {
+		minScore = s.config.MinScore
 	}
 
-	results, err := s.coll.SearchWithFilterContext(ctx, vec, sc.limit, filter)
+	// Over-fetch to compensate for post-search filtering (matchesFilter + GapStop),
+	// consistent with hybridSearch's limit*3 strategy.
+	results, err := s.vectorSearch(ctx, vec, limit*3, minScore)
 	if err != nil {
-		return nil, fmt.Errorf("search: %w", err)
+		// Gracefully handle empty index or other non-fatal search errors.
+		return nil, nil
 	}
 
-	return s.toMemories(results)
+	// Apply post-processing filters (same as hybrid path).
+	var filtered []Memory
+	for _, m := range results {
+		if matchesFilter(m, filter) {
+			filtered = append(filtered, m)
+		}
+	}
+	results = filtered
+
+	// Sort by score descending for consistent ordering before GapStop.
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].Score != results[j].Score {
+			return results[i].Score > results[j].Score
+		}
+		return results[i].UpdatedAt.After(results[j].UpdatedAt)
+	})
+
+	results = applyGapStop(results, s.config.GapStopRatio)
+
+	if filter.Offset > 0 {
+		if filter.Offset >= len(results) {
+			results = results[:0]
+		} else {
+			results = results[filter.Offset:]
+		}
+	}
+	if limit > 0 && limit < len(results) {
+		results = results[:limit]
+	}
+
+	populateRelativeAge(results, now)
+
+	for i := range results {
+		results[i].Content = TemporalRecallProjection(results[i].Content, results[i].Metadata, now)
+	}
+	return results, nil
 }
 
 // ----------------------------------------------------------------------

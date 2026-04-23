@@ -684,7 +684,7 @@ func (s *MemoryStore) archiveAndCreate(ctx context.Context, oldID string, newMem
 移植 mem9 的混合搜索流水线。
 
 ```go
-func (s *MemoryStore) hybridSearch(ctx context.Context, filter MemoryFilter) ([]Memory, error)
+func (s *MemoryStore) hybridSearch(ctx context.Context, query string, filter MemoryFilter) ([]Memory, error)
 ```
 
 ### 距离→相似度转换层
@@ -775,10 +775,7 @@ Vego 的 `SearchWithFilter` 在 HNSW 搜索后应用 metadata filter，自动扩
 ```go
 // applyRecencyBoost 对近期记忆施加分数加成。
 // 在类型加权之后、排序之前执行。
-func (s *MemoryStore) applyRecencyBoost(scores map[string]float64, mems map[string]Memory, now time.Time) {
-    weekBoost := s.config.RecencyBoostWeek   // 默认 1.05
-    monthBoost := s.config.RecencyBoostMonth // 默认 1.02
-
+func applyRecencyBoost(scores map[string]float64, mems map[string]Memory, now time.Time, weekBoost, monthBoost float64) {
     for id, m := range mems {
         age := now.Sub(m.UpdatedAt)
         switch {
@@ -839,7 +836,7 @@ func NormalizeTemporalFacts(facts []ExtractedFact, messages []Message, now time.
 func NormalizeTemporalRecallQuery(query string, now time.Time) string
 
 // 结果展示时的时间投影
-func TemporalRecallProjection(content string, metadata map[string]interface{}) string
+func TemporalRecallProjection(content string, metadata map[string]interface{}, now time.Time) string
 ```
 
 支持的时间表达：
