@@ -18,19 +18,29 @@ import (
 
 // ExtractFacts converts raw messages into structured facts.
 // ModeRaw bypasses LLM and returns each message as a fact directly.
+// After extraction, relative temporal expressions are normalized to absolute dates.
 func (s *MemoryStore) ExtractFacts(ctx context.Context, messages []Message, mode IngestMode) ([]ExtractedFact, error) {
 	if len(messages) == 0 {
 		return nil, nil
 	}
 
+	var facts []ExtractedFact
+	var err error
 	switch mode {
 	case ModeRaw:
-		return extractFactsRaw(messages), nil
+		facts = extractFactsRaw(messages)
 	case ModeNormal:
-		return s.extractFactsLLM(ctx, messages)
+		facts, err = s.extractFactsLLM(ctx, messages)
 	default:
 		return nil, fmt.Errorf("unknown ingest mode: %d", mode)
 	}
+	if err != nil {
+		return nil, err
+	}
+
+	// Normalize relative temporal expressions to absolute dates.
+	facts = NormalizeTemporalFacts(facts, messages, time.Now())
+	return facts, nil
 }
 
 // extractFactsRaw converts messages to facts without LLM processing.
@@ -143,7 +153,17 @@ func (s *MemoryStore) StoreRawMessages(ctx context.Context, sessionID string, me
 	}
 	preparedList := make([]prepared, 0, len(facts))
 	for i := range facts {
-		hash := computeContentHash(facts[i].Content)
+		// Use the *original* message content for dedup hash, not the
+		// temporal-normalized fact content.  This prevents cross-day
+		// dedup failure (e.g. "昨天发布" normalized to different dates).
+		srcIdx := facts[i].SourceMsg
+		var hashSrc string
+		if srcIdx >= 0 && srcIdx < len(messages) {
+			hashSrc = messages[srcIdx].Content
+		} else {
+			hashSrc = facts[i].Content
+		}
+		hash := computeContentHash(hashSrc)
 		if s.contentHashIndex.Has(sessionID, hash) {
 			continue
 		}
@@ -180,6 +200,7 @@ func (s *MemoryStore) StoreRawMessages(ctx context.Context, sessionID string, me
 			Seq:         nextSeq,
 			ContentHash: p.hash,
 			Version:     1,
+			Metadata:    shallowCopyMap(p.fact.Metadata),
 			CreatedAt:   time.Now(),
 			UpdatedAt:   time.Now(),
 		}

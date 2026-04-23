@@ -196,6 +196,14 @@ func (s *MemoryStore) Get(ctx context.Context, id string) (*Memory, error) {
 // The old memory is archived (state=archived, superseded_by=newID)
 // and a new memory with a fresh ID is created.
 func (s *MemoryStore) Update(ctx context.Context, id, content string, tags []string) (*Memory, error) {
+	return s.update(ctx, id, content, tags, nil)
+}
+
+// update is the internal implementation of Update.  If overlay is non-nil,
+// its key-value pairs are merged into newMem.Metadata before the atomic
+// archive-and-create, ensuring the merge happens under s.mu and eliminating
+// the race window between Insert and the metadata patch.
+func (s *MemoryStore) update(ctx context.Context, id, content string, tags []string, overlay map[string]interface{}) (*Memory, error) {
 	// Fetch old memory.
 	oldDoc, err := s.coll.GetContext(ctx, id)
 	if err != nil {
@@ -222,8 +230,19 @@ func (s *MemoryStore) Update(ctx context.Context, id, content string, tags []str
 		State:     StateActive,
 		Tags:      append([]string(nil), tags...),
 		Version:   oldMem.Version + 1,
+		Metadata:  shallowCopyMap(oldMem.Metadata),
 		CreatedAt: oldMem.CreatedAt,
 		UpdatedAt: time.Now(),
+	}
+
+	// Merge overlay metadata under the same lock as archiveAndCreate.
+	if overlay != nil {
+		if newMem.Metadata == nil {
+			newMem.Metadata = make(map[string]interface{}, len(overlay))
+		}
+		for k, v := range overlay {
+			newMem.Metadata[k] = v
+		}
 	}
 
 	if err := s.archiveAndCreate(ctx, id, newMem, vec); err != nil {
@@ -288,7 +307,10 @@ func (s *MemoryStore) Search(ctx context.Context, query string, opts ...SearchOp
 		opt(sc)
 	}
 
-	vec, err := s.embed(ctx, query)
+	// Normalize temporal expressions in the query so that embeddings match
+	// against absolute dates stored in memories.
+	normalizedQuery := NormalizeTemporalRecallQuery(query, time.Now())
+	vec, err := s.embed(ctx, normalizedQuery)
 	if err != nil {
 		return nil, fmt.Errorf("embed query: %w", err)
 	}
@@ -415,6 +437,7 @@ func (s *MemoryStore) embed(ctx context.Context, text string) ([]float32, error)
 }
 
 func (s *MemoryStore) toMemories(results []vego.SearchResult) ([]Memory, error) {
+	now := time.Now()
 	out := make([]Memory, 0, len(results))
 	for _, r := range results {
 		m, err := docToMemory(r.Document)
@@ -422,6 +445,10 @@ func (s *MemoryStore) toMemories(results []vego.SearchResult) ([]Memory, error) 
 			slog.Warn("skip corrupt document in search results", "id", r.Document.ID, "err", err)
 			continue
 		}
+		// Projection mutates Content for display purposes (ISO dates → human-relative).
+		// This is an intentional design choice: Search returns presentation-ready
+		// memories while Get returns the raw canonical form.
+		m.Content = TemporalRecallProjection(m.Content, m.Metadata, now)
 		out = append(out, *m)
 	}
 	return out, nil

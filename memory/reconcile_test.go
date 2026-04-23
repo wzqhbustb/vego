@@ -530,3 +530,73 @@ func TestReconcileLLMInvalidTargetID(t *testing.T) {
 		t.Errorf("expected 1 added (fallback), got %+v", result)
 	}
 }
+
+// ----------------------------------------------------------------------
+// Metadata overlay (regression test for nil map panic)
+// ----------------------------------------------------------------------
+
+// TestReconcileUpdateNilMetadataOverlay verifies that UPDATE works when the
+// old memory has nil Metadata and the incoming fact carries metadata (e.g.
+// temporal).  This path previously panicked because shallowCopyMap(nil)
+// returns nil, and the overlay loop tried to write into a nil map.
+func TestReconcileUpdateNilMetadataOverlay(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	defer s.Close()
+	s.llm = nil // force heuristic path
+
+	ctx := context.Background()
+
+	// Store a memory without Metadata (Store does not set Metadata).
+	mem, err := s.Store(ctx, "exact match", nil)
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	if mem.Metadata != nil {
+		t.Fatalf("precondition failed: old memory should have nil Metadata")
+	}
+
+	// Reconcile an identical fact with metadata overlay.
+	facts := []ExtractedFact{
+		{
+			Content: "exact match",
+			Metadata: map[string]interface{}{
+				"temporal": &TemporalMetadata{
+					ResolvedStart: "2026-04-20",
+					Display:       "昨天",
+				},
+			},
+		},
+	}
+	result, err := s.Reconcile(ctx, "agent-1", facts)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if result.Updated != 1 {
+		t.Errorf("expected 1 updated, got %+v", result)
+	}
+
+	// Verify the new memory has the overlay metadata.
+	old, err := s.Get(ctx, mem.ID)
+	if err != nil {
+		t.Fatalf("get old: %v", err)
+	}
+	if old.State != StateArchived {
+		t.Errorf("old state = %s, want archived", old.State)
+	}
+
+	results, err := s.Search(ctx, "exact match")
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected new memory with updated content")
+	}
+	newMem := results[0]
+	if newMem.Metadata == nil {
+		t.Fatal("expected new memory to have metadata")
+	}
+	if _, ok := newMem.Metadata["temporal"]; !ok {
+		t.Errorf("expected temporal metadata in new memory, got %v", newMem.Metadata)
+	}
+}

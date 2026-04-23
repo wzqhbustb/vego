@@ -98,10 +98,11 @@ type Message struct {
 
 // ExtractedFact is a structured fact extracted from messages.
 type ExtractedFact struct {
-	Content     string   `json:"content"`
-	Tags        []string `json:"tags"`
-	QueryIntent bool     `json:"query_intent"` // true means search intent, should be dropped
-	SourceMsg   int      `json:"source_msg"`   // index of source message in the input slice
+	Content     string                 `json:"content"`
+	Tags        []string               `json:"tags"`
+	QueryIntent bool                   `json:"query_intent"` // true means search intent, should be dropped
+	SourceMsg   int                    `json:"source_msg"`   // index of source message in the input slice
+	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // IngestResult summarizes the outcome of a Reconcile operation.
@@ -172,4 +173,16 @@ func docToMemory(doc *vego.Document) (*Memory, error) {
 	}
 	m.ID = doc.ID // Document ID is the source of truth
 	return &m, nil
+}
+
+// shallowCopyMap returns a shallow copy of a map, or nil if src is nil.
+func shallowCopyMap(src map[string]interface{}) map[string]interface{} {
+	if src == nil {
+		return nil
+	}
+	out := make(map[string]interface{}, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
 }

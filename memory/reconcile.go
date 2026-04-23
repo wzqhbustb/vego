@@ -278,6 +278,7 @@ func (s *MemoryStore) executeAction(ctx context.Context, agentID string, fact *E
 			Tags:       append([]string(nil), fact.Tags...),
 			AgentID:    agentID,
 			Version:    1,
+			Metadata:   shallowCopyMap(fact.Metadata),
 			CreatedAt:  time.Now(),
 			UpdatedAt:  time.Now(),
 		}
@@ -316,7 +317,8 @@ func (s *MemoryStore) executeAction(ctx context.Context, agentID string, fact *E
 			// Target was archived/deleted by a concurrent reconcile; downgrade to ADD.
 			return s.executeAction(ctx, agentID, fact, "ADD", "", result)
 		}
-		if _, err := s.Update(ctx, targetID, fact.Content, fact.Tags); err != nil {
+		_, err = s.update(ctx, targetID, fact.Content, fact.Tags, fact.Metadata)
+		if err != nil {
 			return fmt.Errorf("update: %w", err)
 		}
 		result.Updated++
