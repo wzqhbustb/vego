@@ -523,24 +523,6 @@ func (s *MemoryStore) embed(ctx context.Context, text string) ([]float32, error)
 	return s.embedder.Embed(ctx, text)
 }
 
-func (s *MemoryStore) toMemories(results []vego.SearchResult) ([]Memory, error) {
-	now := time.Now()
-	out := make([]Memory, 0, len(results))
-	for _, r := range results {
-		m, err := docToMemory(r.Document)
-		if err != nil {
-			slog.Warn("skip corrupt document in search results", "id", r.Document.ID, "err", err)
-			continue
-		}
-		// Projection mutates Content for display purposes (ISO dates → human-relative).
-		// This is an intentional design choice: Search returns presentation-ready
-		// memories while Get returns the raw canonical form.
-		m.Content = TemporalRecallProjection(m.Content, m.Metadata, now)
-		out = append(out, *m)
-	}
-	return out, nil
-}
-
 // rebuildIndexes rebuilds the inverted index and ContentHashIndex from
 // persisted documents. It also runs crash recovery.
 func (s *MemoryStore) rebuildIndexes() error {

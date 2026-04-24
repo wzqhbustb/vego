@@ -4,8 +4,6 @@ import (
 	"context"
 	"testing"
 	"time"
-
-	vego "github.com/wzqhbustb/vego/vego"
 )
 
 // fixedAnchor is a deterministic anchor for tests.
@@ -519,11 +517,9 @@ func TestHumanRelative_MonthsYears(t *testing.T) {
 }
 
 // P0-2: TemporalRecallProjection applied in toMemories.
-func TestToMemories_TemporalProjection(t *testing.T) {
-	s := newTestStore(t)
-	setupMockEmbedder(t, s, 128)
-	defer s.Close()
-
+// TestTemporalRecallProjectionRoundTrip verifies projection through the
+// memoryToDoc → docToMemory round-trip (the path production Search uses).
+func TestTemporalRecallProjectionRoundTrip(t *testing.T) {
 	mem := &Memory{
 		ID:      "test-proj-id",
 		Content: "在 2026-04-20 遇到 bug",
@@ -544,16 +540,15 @@ func TestToMemories_TemporalProjection(t *testing.T) {
 		t.Fatalf("memoryToDoc: %v", err)
 	}
 
-	results := []vego.SearchResult{{Document: doc}}
-	out, err := s.toMemories(results)
+	m, err := docToMemory(doc)
 	if err != nil {
-		t.Fatalf("toMemories: %v", err)
+		t.Fatalf("docToMemory: %v", err)
 	}
-	if len(out) != 1 {
-		t.Fatalf("want 1 result, got %d", len(out))
-	}
-	if out[0].Content != "在 昨天 遇到 bug" {
-		t.Errorf("projection: want %q, got %q", "在 昨天 遇到 bug", out[0].Content)
+
+	now := time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC)
+	got := TemporalRecallProjection(m.Content, m.Metadata, now)
+	if got != "在 昨天 遇到 bug" {
+		t.Errorf("projection: want %q, got %q", "在 昨天 遇到 bug", got)
 	}
 }
 

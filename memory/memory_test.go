@@ -770,3 +770,150 @@ func TestMemoryStoreCloseTwice(t *testing.T) {
 		t.Fatalf("second Close: %v", err)
 	}
 }
+
+// TestSeqMonotonic verifies that StoreRawMessages assigns monotonically
+// increasing Seq values across multiple calls.
+func TestSeqMonotonic(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	defer s.Close()
+
+	ctx := context.Background()
+	sessionID := "sess-seq"
+
+	// First batch: 3 messages.
+	batch1 := []Message{
+		{Role: "user", Content: "msg 1", SessionID: sessionID},
+		{Role: "user", Content: "msg 2", SessionID: sessionID},
+		{Role: "user", Content: "msg 3", SessionID: sessionID},
+	}
+	stored1, err := s.StoreRawMessages(ctx, sessionID, batch1)
+	if err != nil {
+		t.Fatalf("StoreRawMessages batch1: %v", err)
+	}
+	if stored1 != 3 {
+		t.Errorf("batch1: want 3 stored, got %d", stored1)
+	}
+
+	// Second batch: 2 new messages.
+	batch2 := []Message{
+		{Role: "user", Content: "msg 4", SessionID: sessionID},
+		{Role: "user", Content: "msg 5", SessionID: sessionID},
+	}
+	stored2, err := s.StoreRawMessages(ctx, sessionID, batch2)
+	if err != nil {
+		t.Fatalf("StoreRawMessages batch2: %v", err)
+	}
+	if stored2 != 2 {
+		t.Errorf("batch2: want 2 stored, got %d", stored2)
+	}
+
+	// Third batch: all duplicates → 0 stored.
+	batch3 := []Message{
+		{Role: "user", Content: "msg 1", SessionID: sessionID},
+	}
+	stored3, err := s.StoreRawMessages(ctx, sessionID, batch3)
+	if err != nil {
+		t.Fatalf("StoreRawMessages batch3: %v", err)
+	}
+	if stored3 != 0 {
+		t.Errorf("batch3: want 0 stored (dedup), got %d", stored3)
+	}
+
+	// Verify all stored memories have Seq 1..5, no gaps, no duplicates.
+	var seqs []int
+	err = s.coll.ForEach(func(doc *vego.Document) bool {
+		m, err := docToMemory(doc)
+		if err != nil {
+			return true
+		}
+		if m.SessionID == sessionID {
+			seqs = append(seqs, m.Seq)
+		}
+		return true
+	})
+	if err != nil {
+		t.Fatalf("ForEach: %v", err)
+	}
+
+	if len(seqs) != 5 {
+		t.Fatalf("want 5 seqs, got %d", len(seqs))
+	}
+	seen := make(map[int]bool)
+	for _, seq := range seqs {
+		if seq < 1 || seq > 5 {
+			t.Errorf("seq out of range [1,5]: %d", seq)
+		}
+		if seen[seq] {
+			t.Errorf("duplicate seq: %d", seq)
+		}
+		seen[seq] = true
+	}
+}
+
+// TestDeleteSemanticsSearchInvisible verifies that after Delete, the memory
+// is still retrievable by Get but invisible to both hybrid and pure vector Search.
+func TestDeleteSemanticsSearchInvisible(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	defer s.Close()
+
+	ctx := context.Background()
+	mem, err := s.Store(ctx, "searchable content", nil)
+	if err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+
+	// Pre-delete: both hybrid and pure vector search should find it.
+	results, err := s.Search(ctx, "searchable")
+	if err != nil {
+		t.Fatalf("pre-delete hybrid search: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("pre-delete: hybrid search should find the memory")
+	}
+
+	resultsPure, err := s.Search(ctx, "searchable", EnableHybrid(false))
+	if err != nil {
+		t.Fatalf("pre-delete pure search: %v", err)
+	}
+	if len(resultsPure) == 0 {
+		t.Fatal("pre-delete: pure vector search should find the memory")
+	}
+
+	// Delete.
+	if err := s.Delete(ctx, mem.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	// Get should still work (soft delete).
+	got, err := s.Get(ctx, mem.ID)
+	if err != nil {
+		t.Fatalf("Get after delete: %v", err)
+	}
+	if got.State != StateDeleted {
+		t.Errorf("state: want deleted, got %s", got.State)
+	}
+
+	// Hybrid search should NOT find it.
+	resultsAfter, err := s.Search(ctx, "searchable")
+	if err != nil {
+		t.Fatalf("post-delete hybrid search: %v", err)
+	}
+	for _, m := range resultsAfter {
+		if m.ID == mem.ID {
+			t.Error("post-delete: hybrid search should not find deleted memory")
+		}
+	}
+
+	// Pure vector search should NOT find it.
+	resultsPureAfter, err := s.Search(ctx, "searchable", EnableHybrid(false))
+	if err != nil {
+		t.Fatalf("post-delete pure search: %v", err)
+	}
+	for _, m := range resultsPureAfter {
+		if m.ID == mem.ID {
+			t.Error("post-delete: pure vector search should not find deleted memory")
+		}
+	}
+}
