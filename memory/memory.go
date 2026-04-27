@@ -2,8 +2,10 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"sort"
 	"sync"
 	"time"
@@ -63,6 +65,37 @@ func (idx *ContentHashIndex) Clear() {
 	defer idx.mu.Unlock()
 	idx.index = make(map[string]string)
 	idx.maxSeq = make(map[string]int)
+}
+
+// RebuildBatch inserts multiple entries in a single locked operation.
+type HashIndexEntry struct {
+	SessionID string
+	Hash      string
+	MemoryID  string
+	Seq       int
+}
+
+func (idx *ContentHashIndex) RebuildBatch(entries []HashIndexEntry) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	if len(idx.index) != 0 {
+		panic("RebuildBatch called on non-empty index: caller must Clear() first")
+	}
+	if len(entries) == 0 {
+		return
+	}
+
+	// Pre-size maps to avoid repeated rehashing during bulk insert.
+	idx.index = make(map[string]string, len(entries))
+	idx.maxSeq = make(map[string]int, len(entries)/10+1)
+
+	for _, e := range entries {
+		idx.index[e.SessionID+":"+e.Hash] = e.MemoryID
+		if e.Seq > idx.maxSeq[e.SessionID] {
+			idx.maxSeq[e.SessionID] = e.Seq
+		}
+	}
 }
 
 // ----------------------------------------------------------------------
@@ -374,8 +407,10 @@ func (s *MemoryStore) pureVectorSearch(ctx context.Context, query string, filter
 	// consistent with hybridSearch's limit*3 strategy.
 	results, err := s.vectorSearch(ctx, vec, limit*3, minScore)
 	if err != nil {
-		// Gracefully handle empty index or other non-fatal search errors.
-		return nil, nil
+		if errors.Is(err, hnsw.ErrEmptyIndex) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("vector search: %w", err)
 	}
 
 	// Apply post-processing filters (same as hybrid path).
@@ -526,44 +561,129 @@ func (s *MemoryStore) embed(ctx context.Context, text string) ([]float32, error)
 // rebuildIndexes rebuilds the inverted index and ContentHashIndex from
 // persisted documents. It also runs crash recovery.
 func (s *MemoryStore) rebuildIndexes() error {
-	var orphans []*vego.Document
-	previousIDSet := make(map[string]struct{}) // deduplicated IDs referenced by PreviousID
-
+	// Phase 1: Collect all document pointers (fast pointer copies under RLock).
+	var docs []*vego.Document
 	err := s.coll.ForEach(func(doc *vego.Document) bool {
-		m, err := docToMemory(doc)
-		if err != nil {
-			slog.Warn("skip corrupt document during rebuild", "id", doc.ID, "err", err)
-			return true
-		}
-
-		// Collect orphaned active memories for later fix-up.
-		// We must NOT call UpdateContext inside ForEach because ForEach
-		// holds the collection RLock and UpdateContext needs Lock,
-		// causing a deadlock.
-		if m.State == StateActive && m.SupersededBy != "" {
-			orphans = append(orphans, doc)
-			return true
-		}
-		if m.State == StateActive && m.PreviousID != "" {
-			previousIDSet[m.PreviousID] = struct{}{}
-		}
-
-		// Index active memories for inverted search.
-		// Index ALL TypeSession memories for ContentHash deduplication,
-		// regardless of state, to prevent re-storing archived/deleted messages.
-		if m.State == StateActive {
-			s.inverted.Add(m.ID, m.Content)
-		}
-		if m.MemoryType == TypeSession && m.ContentHash != "" {
-			s.contentHashIndex.Add(m.SessionID, m.ContentHash, m.ID, m.Seq)
-		}
+		docs = append(docs, doc)
 		return true
 	})
 	if err != nil {
 		return err
 	}
 
-	// Fix orphans outside of ForEach to avoid RLock -> Lock deadlock.
+	// Phase 2: Parallel decode + tokenize.
+	type processed struct {
+		doc           *vego.Document
+		memory        *Memory
+		terms         []string
+		isOrphan      bool
+		hasPreviousID bool
+	}
+
+	numWorkers := runtime.GOMAXPROCS(0)
+	if numWorkers > 8 {
+		numWorkers = 8
+	}
+
+	docCh := make(chan *vego.Document, numWorkers*4)
+	resultCh := make(chan processed, numWorkers*4)
+	var wg sync.WaitGroup
+
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for doc := range docCh {
+				func() {
+					// Prevent a panic in docToMemory/tokenize from hanging the pipeline.
+					defer func() {
+						if r := recover(); r != nil {
+							slog.Error("worker panic during rebuild", "id", doc.ID, "recover", r)
+						}
+					}()
+					m, err := docToMemory(doc)
+					if err != nil {
+						slog.Warn("skip corrupt document during rebuild", "id", doc.ID, "err", err)
+						return
+					}
+					var terms []string
+					if m.State == StateActive {
+						terms = tokenize(m.Content)
+					}
+					resultCh <- processed{
+						doc:           doc,
+						memory:        m,
+						terms:         terms,
+						isOrphan:      m.State == StateActive && m.SupersededBy != "",
+						hasPreviousID: m.State == StateActive && m.PreviousID != "",
+					}
+				}()
+			}
+		}()
+	}
+
+	go func() {
+		for _, doc := range docs {
+			docCh <- doc
+		}
+		close(docCh)
+	}()
+
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
+
+	// Phase 3: Serial batch insert + orphan collection.
+	var orphans []*vego.Document
+	previousIDSet := make(map[string]struct{})
+	// Pre-allocate to avoid repeated slice growth during append.
+	invertedEntries := make([]RebuildEntry, 0, len(docs))
+	hashEntries := make([]HashIndexEntry, 0, len(docs)/10)
+
+	for p := range resultCh {
+		m := p.memory
+		if p.isOrphan {
+			orphans = append(orphans, p.doc)
+			// Orphan will be archived in Phase 4, but its ContentHash must still
+			// be indexed to prevent duplicate storage of the same session message
+			// before the next Open() rebuild.
+			if m.MemoryType == TypeSession && m.ContentHash != "" {
+				hashEntries = append(hashEntries, HashIndexEntry{
+					SessionID: m.SessionID,
+					Hash:      m.ContentHash,
+					MemoryID:  m.ID,
+					Seq:       m.Seq,
+				})
+			}
+			continue
+		}
+		if p.hasPreviousID {
+			previousIDSet[m.PreviousID] = struct{}{}
+		}
+		if m.State == StateActive {
+			invertedEntries = append(invertedEntries, RebuildEntry{ID: m.ID, Terms: p.terms})
+		}
+		// Index ALL TypeSession memories for ContentHash deduplication,
+		// regardless of state, to prevent re-storing archived/deleted messages.
+		if m.MemoryType == TypeSession && m.ContentHash != "" {
+			hashEntries = append(hashEntries, HashIndexEntry{
+				SessionID: m.SessionID,
+				Hash:      m.ContentHash,
+				MemoryID:  m.ID,
+				Seq:       m.Seq,
+			})
+		}
+	}
+
+	// Release cloned document references so GC can reclaim ~50 MB of Vector
+	// data before Phase 4/5 crash recovery (which does not need them).
+	docs = nil
+
+	s.inverted.RebuildBatch(invertedEntries)
+	s.contentHashIndex.RebuildBatch(hashEntries)
+
+	// Phase 4: Fix orphans outside of ForEach to avoid RLock -> Lock deadlock.
 	for _, doc := range orphans {
 		m, _ := docToMemory(doc)
 		slog.Info("crash recovery: archiving orphaned memory", "id", doc.ID)
@@ -581,13 +701,12 @@ func (s *MemoryStore) rebuildIndexes() error {
 		}
 	}
 
-	// Phase 2: archive any active memory whose ID is referenced as PreviousID
-	// by another active memory. This catches the case where Step 1 (Insert new)
-	// succeeded but Step 2 (archive old) failed before old.SupersededBy was set.
+	// Phase 5: archive any active memory whose ID is referenced as PreviousID
+	// by another active memory.
 	for oldID := range previousIDSet {
 		oldDoc, err := s.coll.GetContext(context.Background(), oldID)
 		if err != nil {
-			continue // old may have been deleted or not exist
+			continue
 		}
 		oldMem, err := docToMemory(oldDoc)
 		if err != nil {
@@ -595,7 +714,7 @@ func (s *MemoryStore) rebuildIndexes() error {
 			continue
 		}
 		if oldMem.State != StateActive {
-			continue // already archived or deleted
+			continue
 		}
 		slog.Info("crash recovery: archiving old memory referenced by PreviousID", "id", oldID)
 		oldMem.State = StateArchived

@@ -28,9 +28,10 @@ type Config struct {
 
 	// Search
 	SearchLimit       int     // 默认 10
+	SearchOverFetch   int     // 默认 5，控制 SearchWithFilterContext 的过取倍数
 	RRFK              float64 // 默认 60.0
 	MinScore          float64 // 默认 0.3（相似度 0-1）
-	SecondHopGate     float64 // 默认 0.5
+	SecondHopGate     float64 // 默认 0.02
 	SecondHopWeight   float64 // 默认 0.3
 	SecondHopTopN     int     // 默认 3
 	PinnedBoost       float64 // 默认 1.5
@@ -61,6 +62,7 @@ func DefaultConfig() *Config {
 		EmbedModel:           "text-embedding-3-small",
 		EmbedDims:            1536,
 		SearchLimit:          10,
+		SearchOverFetch:      5,
 		RRFK:                 60.0,
 		MinScore:             0.3,
 		SecondHopGate:        0.02,
@@ -120,6 +122,9 @@ func (c *Config) validate() error {
 	}
 	if c.SearchLimit <= 0 {
 		return fmt.Errorf("search limit must be > 0, got %d", c.SearchLimit)
+	}
+	if c.SearchOverFetch < 1 || c.SearchOverFetch > 20 {
+		return fmt.Errorf("search over-fetch must be in [1,20], got %d", c.SearchOverFetch)
 	}
 	if c.RRFK <= 0 {
 		return fmt.Errorf("rrf k must be > 0, got %f", c.RRFK)
@@ -262,6 +267,13 @@ func WithDistanceFunc(name string) Option {
 // WithSearchLimit sets the default maximum number of search results.
 func WithSearchLimit(limit int) Option {
 	return func(c *Config) { c.SearchLimit = limit }
+}
+
+// WithSearchOverFetch sets the over-fetch multiplier for
+// SearchWithFilterContext. Higher values reduce repeated HNSW searches
+// under high archive rates, at the cost of a larger single search.
+func WithSearchOverFetch(overFetch int) Option {
+	return func(c *Config) { c.SearchOverFetch = overFetch }
 }
 
 func WithSearchParams(minScore float64) Option {

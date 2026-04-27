@@ -531,8 +531,10 @@ func (c *Collection) SearchContext(ctx context.Context, query []float32, k int, 
 	default:
 	}
 
-	// Use SearchWithDV to search with deletion filtering
-	// This searches k*2 candidates to compensate for deleted documents
+	// Use SearchWithDV to search with deletion filtering.
+	// SearchWithDV searches exactly k candidates and post-filters; pass k*2
+	// here to compensate for a moderate deletion rate (same behavior as before
+	// the internal k*2 was moved to the caller).
 	isDeleted := func(nodeID int) bool {
 		docID, exists := c.nodeToDoc[nodeID]
 		if !exists {
@@ -541,14 +543,19 @@ func (c *Collection) SearchContext(ctx context.Context, query []float32, k int, 
 		return c.storage.IsDeleted(docID)
 	}
 
-	hnswResults, err := c.index.SearchWithDV(query, k, options.EF, isDeleted)
+	hnswResults, err := c.index.SearchWithDV(query, k*2, options.EF, isDeleted)
 	if err != nil {
 		return nil, wrapError("SearchContext", c.name, "", err)
 	}
 
-	// Map to documents
-	results := make([]SearchResult, 0, len(hnswResults))
+	// Map to documents. The k*2 multiplier above causes SearchWithDV to
+	// return up to k*2 filtered candidates; we only want the top k here.
+	results := make([]SearchResult, 0, min(k, len(hnswResults)))
 	for _, hr := range hnswResults {
+		if len(results) >= k {
+			break
+		}
+
 		// Check context cancellation periodically
 		select {
 		case <-ctx.Done():
@@ -577,56 +584,122 @@ func (c *Collection) SearchContext(ctx context.Context, query []float32, k int, 
 	return results, nil
 }
 
-// SearchWithFilter performs vector search with metadata filter
-// Dynamically expands search scope until enough filtered results are found
-func (c *Collection) SearchWithFilter(query []float32, k int, filter Filter) ([]SearchResult, error) {
-	return c.SearchWithFilterContext(context.Background(), query, k, filter)
+// SearchWithFilter performs vector search with metadata filter.
+// It performs a single large HNSW search with metadata pre-filtering
+// to avoid the repeated search penalty of the old expansion-loop design.
+func (c *Collection) SearchWithFilter(query []float32, k int, filter Filter, opts ...SearchOption) ([]SearchResult, error) {
+	return c.SearchWithFilterContext(context.Background(), query, k, filter, opts...)
 }
 
 // SearchWithFilterContext is the context-aware version of SearchWithFilter.
-// It propagates cancellation to the underlying HNSW search.
-func (c *Collection) SearchWithFilterContext(ctx context.Context, query []float32, k int, filter Filter) ([]SearchResult, error) {
-	batchSize := k * 2
-	maxBatchSize := k * 20
-	maxAttempts := 5
+// Instead of the old expansion loop (multiple HNSW searches), it performs
+// a single large HNSW search with an isExcluded callback that filters out
+// both physically-deleted and metadata-mismatch documents in memory.
+//
+// The over-fetch multiplier (default 10) controls how many extra candidates
+// HNSW searches for before filtering. Higher values handle higher archive
+// rates without falling back to a second search.
+func (c *Collection) SearchWithFilterContext(ctx context.Context, query []float32, k int, filter Filter, opts ...SearchOption) ([]SearchResult, error) {
+	if len(query) != c.dimension {
+		return nil, wrapError("SearchWithFilterContext", c.name, "", ErrDimensionMismatch)
+	}
 
-	var allFiltered []SearchResult
+	options := &SearchOptions{
+		EF:        0, // Use default (handled by SearchWithDV)
+		OverFetch: 10,
+	}
+	for _, opt := range opts {
+		opt(options)
+	}
+	if options.OverFetch < 1 {
+		options.OverFetch = 1
+	}
+	if options.OverFetch > 20 {
+		options.OverFetch = 20
+	}
 
-	for attempt := 0; attempt < maxAttempts && batchSize <= maxBatchSize; attempt++ {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	// Check context cancellation
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	// Combine deletion-vector filtering and metadata filtering into a
+	// single isExcluded callback. This eliminates the old expansion loop
+	// by letting HNSW search once and filter in-memory.
+	isExcluded := func(nodeID int) bool {
+		docID, exists := c.nodeToDoc[nodeID]
+		if !exists {
+			return true
+		}
+		metadata, ok := c.storage.CheckVisibility(docID)
+		if !ok {
+			return true
+		}
+		if filter != nil {
+			doc := &Document{ID: docID, Metadata: metadata}
+			if !filter.Match(doc) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Attempt 1: single large search with over-fetch.
+	hnswResults, err := c.index.SearchWithDV(query, k*options.OverFetch, options.EF, isExcluded)
+	if err != nil {
+		return nil, wrapError("SearchWithFilterContext", c.name, "", err)
+	}
+
+	// Minimal fallback: if the first attempt didn't yield enough results
+	// and we haven't hit the max over-fetch, try once more at max budget.
+	// Skip fallback when the total dataset is smaller than k (no point
+	// searching harder) or the context has been cancelled.
+	if len(hnswResults) < k && options.OverFetch < 20 && c.index.Len() > k*options.OverFetch {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		hnswResults, err = c.index.SearchWithDV(query, k*20, options.EF, isExcluded)
+		if err != nil {
+			return nil, wrapError("SearchWithFilterContext", c.name, "", err)
+		}
+	}
+
+	// Map to full documents. We only need k results, so stop early
+	// once we have enough — a single storage.Get call costs ~4ms, and
+	// the HNSW over-fetch produces up to k*overFetch candidates (typically
+	// 30-90 more than k). Stopping early saves 60+ wasted I/O calls.
+	results := make([]SearchResult, 0, min(k, len(hnswResults)))
+	for _, hr := range hnswResults {
+		if len(results) >= k {
+			break
+		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		default:
 		}
 
-		// Search with current batch size
-		results, err := c.SearchContext(ctx, query, batchSize)
+		docID, exists := c.nodeToDoc[hr.ID]
+		if !exists {
+			continue
+		}
+		doc, err := c.storage.Get(docID)
 		if err != nil {
-			return nil, err
+			continue
 		}
-
-		// Apply filter
-		allFiltered = allFiltered[:0] // Reset
-		for _, r := range results {
-			if r.Document != nil && filter.Match(r.Document) {
-				allFiltered = append(allFiltered, r)
-				if len(allFiltered) >= k {
-					return allFiltered[:k], nil
-				}
-			}
-		}
-
-		// If we got all available results and found some matches, return them
-		if len(results) < batchSize {
-			// We got all available results
-			return allFiltered, nil
-		}
-
-		// Otherwise expand search
-		batchSize *= 2
+		results = append(results, SearchResult{
+			Document: doc,
+			Distance: hr.Distance,
+		})
 	}
-
-	return allFiltered, nil
+	return results, nil
 }
 
 // SearchBatch performs multiple vector searches in parallel

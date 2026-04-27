@@ -512,3 +512,83 @@ func init() {
 		contents[i] = "common word " + string(rune('a'+i%26))
 	}
 }
+
+// ----------------------------------------------------------------------
+// RebuildBatch
+// ----------------------------------------------------------------------
+
+func TestInvertedIndexRebuildBatch(t *testing.T) {
+	idx := NewInvertedIndex()
+
+	entries := []RebuildEntry{
+		{ID: "doc1", Terms: []string{"hello", "world"}},
+		{ID: "doc2", Terms: []string{"hello", "golang"}},
+		{ID: "doc3", Terms: []string{"world"}},
+	}
+
+	idx.RebuildBatch(entries)
+
+	if idx.Len() != 3 {
+		t.Errorf("Len: want 3, got %d", idx.Len())
+	}
+
+	results := idx.Search("hello", 10)
+	if len(results) != 2 {
+		t.Fatalf("Search hello: want 2 results, got %d", len(results))
+	}
+	if results[0].ID != "doc1" && results[0].ID != "doc2" {
+		t.Errorf("unexpected top result: %s", results[0].ID)
+	}
+
+	// Verify BM25 scoring order: doc2 has fewer terms → higher avgdl weight
+	results = idx.Search("world", 10)
+	if len(results) != 2 {
+		t.Fatalf("Search world: want 2 results, got %d", len(results))
+	}
+}
+
+func TestInvertedIndexRebuildBatchEmpty(t *testing.T) {
+	idx := NewInvertedIndex()
+	idx.RebuildBatch(nil)
+	if idx.Len() != 0 {
+		t.Errorf("nil entries: want 0, got %d", idx.Len())
+	}
+	idx.RebuildBatch([]RebuildEntry{})
+	if idx.Len() != 0 {
+		t.Errorf("empty entries: want 0, got %d", idx.Len())
+	}
+}
+
+func TestInvertedIndexRebuildBatchSkipEmpty(t *testing.T) {
+	idx := NewInvertedIndex()
+
+	entries := []RebuildEntry{
+		{ID: "", Terms: []string{"hello"}},        // empty ID → skip
+		{ID: "doc2", Terms: nil},                   // nil terms → skip
+		{ID: "doc3", Terms: []string{}},            // empty terms → skip
+		{ID: "doc4", Terms: []string{"valid"}},     // valid
+	}
+
+	idx.RebuildBatch(entries)
+	if idx.Len() != 1 {
+		t.Errorf("want 1 valid doc, got %d", idx.Len())
+	}
+
+	results := idx.Search("valid", 10)
+	if len(results) != 1 || results[0].ID != "doc4" {
+		t.Errorf("unexpected result: %+v", results)
+	}
+}
+
+func TestInvertedIndexRebuildBatchPanicsOnNonEmpty(t *testing.T) {
+	idx := NewInvertedIndex()
+	idx.Add("doc1", "hello")
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic on non-empty index")
+		}
+	}()
+
+	idx.RebuildBatch([]RebuildEntry{{ID: "doc2", Terms: []string{"world"}}})
+}

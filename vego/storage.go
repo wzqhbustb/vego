@@ -61,6 +61,7 @@ type DocumentStorage struct {
 
 	// Write buffering
 	writeBuffer []*Document
+	bufferIndex map[string]int // id -> index in writeBuffer for O(1) lookup
 	bufferSize  int
 	maxBuffer   int
 
@@ -75,6 +76,16 @@ type DocumentStorage struct {
 
 	// Format version for column storage (V1_0, V1_1, V1_2)
 	version format.VersionPolicy
+
+	// Cached parsed RowIndex for O(1) ID→row lookup without per-call
+	// LoadRowIndex overhead. The BlockCache already caches the raw page,
+	// but each new RowIndexReader still parses the 200KB binary page.
+	// By caching the parsed *format.RowIndex, subsequent Get calls skip
+	// the LoadRowIndex cost entirely (1-2ms savings per call). Invalidated
+	// on flush/rewrite/close.
+	cachedRowIndex *format.RowIndex
+	rowIdxMu       sync.Mutex
+	rowIdxTried    bool // true once ensureRowIndex has been attempted
 
 	// State tracking
 	dirty  bool
@@ -135,6 +146,7 @@ func NewDocumentStorage(path string, dimension int, cache ...*format.BlockCache)
 		factory:        encoding.NewEncoderFactory(3),
 		metaStore:      metaStore,
 		deletionVector: hnsw.NewDeletionVector(),
+		bufferIndex:    make(map[string]int),
 		maxBuffer:      maxBufferSize,
 		version:        format.V1_2, // Default to V1.2 for RowIndex + BlockCache support
 	}
@@ -204,17 +216,18 @@ func (s *DocumentStorage) Put(doc *Document) error {
 	}
 
 	// Remove from buffer if present (for updates)
-	for i, bufDoc := range s.writeBuffer {
-		if bufDoc.ID == doc.ID {
-			// Remove from buffer by replacing with last element and truncating
-			s.writeBuffer = append(s.writeBuffer[:i], s.writeBuffer[i+1:]...)
-			s.bufferSize--
-			break
+	if idx, exists := s.bufferIndex[doc.ID]; exists {
+		s.writeBuffer = append(s.writeBuffer[:idx], s.writeBuffer[idx+1:]...)
+		s.bufferSize--
+		delete(s.bufferIndex, doc.ID)
+		for i := idx; i < len(s.writeBuffer); i++ {
+			s.bufferIndex[s.writeBuffer[i].ID] = i
 		}
 	}
 
 	// Add to buffer
 	s.writeBuffer = append(s.writeBuffer, doc.Clone())
+	s.bufferIndex[doc.ID] = len(s.writeBuffer) - 1
 	s.bufferSize++
 	s.dirty = true
 
@@ -252,15 +265,18 @@ func (s *DocumentStorage) PutBatch(docs []*Document) error {
 		}
 
 		// Remove from buffer if present (for updates)
-		for i, bufDoc := range s.writeBuffer {
-			if bufDoc.ID == doc.ID {
-				s.writeBuffer = append(s.writeBuffer[:i], s.writeBuffer[i+1:]...)
-				s.bufferSize--
-				break
+		if idx, exists := s.bufferIndex[doc.ID]; exists {
+			s.writeBuffer = append(s.writeBuffer[:idx], s.writeBuffer[idx+1:]...)
+			s.bufferSize--
+			delete(s.bufferIndex, doc.ID)
+			// Rebuild indices for elements shifted left.
+			for i := idx; i < len(s.writeBuffer); i++ {
+				s.bufferIndex[s.writeBuffer[i].ID] = i
 			}
 		}
 
 		s.writeBuffer = append(s.writeBuffer, doc.Clone())
+		s.bufferIndex[doc.ID] = len(s.writeBuffer) - 1
 		s.bufferSize++
 	}
 
@@ -285,10 +301,8 @@ func (s *DocumentStorage) Get(id string) (*Document, error) {
 	}
 
 	// Check buffer first (most recent data)
-	for _, doc := range s.writeBuffer {
-		if doc.ID == id {
-			return doc.Clone(), nil
-		}
+	if idx, exists := s.bufferIndex[id]; exists {
+		return s.writeBuffer[idx].Clone(), nil
 	}
 
 	// Try RowIndex optimized path (V1.1+)
@@ -330,6 +344,90 @@ func (s *DocumentStorage) Get(id string) (*Document, error) {
 	}, nil
 }
 
+// GetMetadataOnly returns the metadata map for the given document ID
+// without reading the vector from column storage. It checks the write
+// buffer first, then falls back to the in-memory metadata store.
+//
+// This is an O(1) pure-memory operation, suitable for high-frequency
+// filter checks during HNSW search. The returned map is an internal
+// reference; callers must not modify it.
+//
+// INVARIANT: Metadata maps in writeBuffer and metaStore are never
+// modified in-place. Updates create new maps (e.g. shallowCopyMap in
+// memory.Update). This ensures the returned reference is safe for
+// concurrent read-only access without holding s.mu.
+func (s *DocumentStorage) GetMetadataOnly(id string) (map[string]interface{}, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Check buffer first (most recent data)
+	if idx, exists := s.bufferIndex[id]; exists {
+		return s.writeBuffer[idx].Metadata, true
+	}
+
+	// Check metadata store
+	s.metaStore.mu.RLock()
+	defer s.metaStore.mu.RUnlock()
+
+	hash, exists := s.metaStore.idToHash[id]
+	if !exists {
+		return nil, false
+	}
+	meta, exists := s.metaStore.entries[hash]
+	if !exists {
+		return nil, false
+	}
+	return meta.Metadata, true
+}
+
+// CheckVisibility returns the metadata for the given document ID if the
+// document is visible (not deleted). It combines the deletion check and
+// metadata lookup into a single call to reduce lock overhead.
+//
+// Returns (metadata, true) if the document exists and is not deleted.
+// Returns (nil, false) if the document is deleted or does not exist.
+// The returned metadata map is an internal reference; callers must not
+// modify it.
+//
+// INVARIANT: Metadata maps are never modified in-place (new maps are
+// created on update). This guarantees the returned reference is safe for
+// concurrent read-only access after CheckVisibility releases s.mu.
+func (s *DocumentStorage) CheckVisibility(id string) (map[string]interface{}, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return nil, false
+	}
+
+	// Check buffer first (most recent data).
+	// No DV check needed: MarkDeleted already removes from buffer rather
+	// than setting a DV entry, and Put/update clears the metaStore entry
+	// for the old version (via deleteFromStorage). A document in the
+	// buffer therefore can never have a corresponding DV mark — the two
+	// deletion paths (buffer removal vs DV marking) are mutually exclusive.
+	if idx, exists := s.bufferIndex[id]; exists {
+		return s.writeBuffer[idx].Metadata, true
+	}
+
+	// Not in buffer: check metadata store + deletion vector.
+	s.metaStore.mu.RLock()
+	defer s.metaStore.mu.RUnlock()
+
+	hash, exists := s.metaStore.idToHash[id]
+	if !exists {
+		return nil, false
+	}
+	meta, exists := s.metaStore.entries[hash]
+	if !exists {
+		return nil, false
+	}
+	if s.deletionVector.IsDeleted(uint32(meta.RowIndex)) {
+		return nil, false
+	}
+	return meta.Metadata, true
+}
+
 // GetBatch retrieves multiple documents by IDs.
 func (s *DocumentStorage) GetBatch(ids []string) (map[string]*Document, error) {
 	results := make(map[string]*Document, len(ids))
@@ -355,12 +453,14 @@ func (s *DocumentStorage) Delete(id string) error {
 	}
 
 	// Remove from buffer if present
-	for i, doc := range s.writeBuffer {
-		if doc.ID == id {
-			s.writeBuffer = append(s.writeBuffer[:i], s.writeBuffer[i+1:]...)
-			s.bufferSize--
-			return nil
+	if idx, exists := s.bufferIndex[id]; exists {
+		s.writeBuffer = append(s.writeBuffer[:idx], s.writeBuffer[idx+1:]...)
+		s.bufferSize--
+		delete(s.bufferIndex, id)
+		for i := idx; i < len(s.writeBuffer); i++ {
+			s.bufferIndex[s.writeBuffer[i].ID] = i
 		}
+		return nil
 	}
 
 	return s.deleteFromStorage(id)
@@ -396,14 +496,16 @@ func (s *DocumentStorage) MarkDeleted(id string) error {
 	}
 
 	// Check if document is in write buffer (not yet flushed)
-	for i, doc := range s.writeBuffer {
-		if doc.ID == id {
-			// Remove from buffer - document never makes it to disk
-			s.writeBuffer = append(s.writeBuffer[:i], s.writeBuffer[i+1:]...)
-			s.bufferSize--
-			s.dirty = true
-			return nil
+	if idx, exists := s.bufferIndex[id]; exists {
+		// Remove from buffer - document never makes it to disk
+		s.writeBuffer = append(s.writeBuffer[:idx], s.writeBuffer[idx+1:]...)
+		s.bufferSize--
+		delete(s.bufferIndex, id)
+		for i := idx; i < len(s.writeBuffer); i++ {
+			s.bufferIndex[s.writeBuffer[i].ID] = i
 		}
+		s.dirty = true
+		return nil
 	}
 
 	// Document is in storage, use DV to mark as deleted
@@ -464,7 +566,10 @@ func (s *DocumentStorage) getRowID(id string) (int64, bool) {
 
 	meta, exists := s.metaStore.entries[idHash]
 	if !exists {
-		return -1, false
+		// Caller MUST check the bool return value; the int64 is undefined
+		// when bool is false. Returning 0 instead of -1 avoids the uint32
+		// overflow hazard (0xFFFFFFFF) if a caller ignores the bool.
+		return 0, false
 	}
 
 	return meta.RowIndex, true
@@ -571,16 +676,16 @@ func (s *DocumentStorage) ForEach(ctx context.Context, fn func(*Document) bool) 
 		return fmt.Errorf("storage is closed")
 	}
 
-	// Step 1: Iterate buffered documents first (most recent)
+	// Step 1: Iterate buffered documents first (most recent).
+	// No deletion check needed: buffer documents are always visible
+	// (MarkDeleted removes from buffer rather than setting a DV entry,
+	// so a document in the buffer can never be deleted).
 	bufferedIDs := make(map[string]struct{}, len(s.writeBuffer))
 	for _, doc := range s.writeBuffer {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
-		}
-		if s.isDeletedLocked(doc.ID) {
-			continue
 		}
 		bufferedIDs[doc.ID] = struct{}{}
 		if !fn(doc.Clone()) {
@@ -684,8 +789,16 @@ func (s *DocumentStorage) flush() error {
 		s.blockCache.InvalidateByPrefix(cacheKey)
 	}
 
+	// Invalidate cached RowIndex — the file was rewritten,
+	// so row positions have changed.
+	s.rowIdxMu.Lock()
+	s.cachedRowIndex = nil
+	s.rowIdxTried = false
+	s.rowIdxMu.Unlock()
+
 	// Clear buffer
 	s.writeBuffer = s.writeBuffer[:0]
+	s.bufferIndex = make(map[string]int)
 	s.bufferSize = 0
 
 	// Save deletion vector
@@ -760,6 +873,12 @@ func (s *DocumentStorage) rewriteStorage(docs []*Document) error {
 	if err := s.saveMetadata(); err != nil {
 		return fmt.Errorf("save metadata: %w", err)
 	}
+
+	// Invalidate cached RowIndex — file was rewritten, row positions changed.
+	s.rowIdxMu.Lock()
+	s.cachedRowIndex = nil
+	s.rowIdxTried = false
+	s.rowIdxMu.Unlock()
 
 	return nil
 }
@@ -992,22 +1111,88 @@ func (s *DocumentStorage) readVectorByHash(idHash int64) ([]float32, int64, erro
 	return nil, 0, fmt.Errorf("vector not found for hash: %d", idHash)
 }
 
+// ensureRowIndex loads and caches the parsed RowIndex for O(1) ID→row
+// lookup. Called once on the first Get that reaches tryReadByRowIndex.
+// Must be called with s.mu at least RLock'd.
+func (s *DocumentStorage) ensureRowIndex() {
+	s.rowIdxMu.Lock()
+	defer s.rowIdxMu.Unlock()
+
+	if s.cachedRowIndex != nil || s.rowIdxTried {
+		return
+	}
+	s.rowIdxTried = true
+
+	if s.closed {
+		return
+	}
+
+	dataFile := filepath.Join(s.path, dataFileName)
+	if _, err := os.Stat(dataFile); err != nil {
+		return
+	}
+
+	// Quick-reject: configured version lacks RowIndex support.
+	if !s.version.HasFeature(format.FeatureRowIndex) {
+		return
+	}
+
+	var reader *column.RowIndexReader
+	var err error
+	if s.blockCache != nil {
+		reader, err = column.NewRowIndexReaderWithCache(dataFile, s.blockCache)
+	} else {
+		reader, err = column.NewRowIndexReader(dataFile)
+	}
+	if err != nil {
+		return
+	}
+	defer reader.Close()
+
+	if !reader.HasRowIndex() {
+		return
+	}
+
+	// Defensive: confirm that the file's actual version matches the
+	// configured version. In normal operation these always agree; this
+	// check guards against a misconfigured or corrupt file.
+	if !reader.GetVersion().HasFeature(format.FeatureRowIndex) {
+		return
+	}
+
+	if err := reader.LoadRowIndex(); err != nil {
+		return
+	}
+
+	s.cachedRowIndex = reader.GetRowIndex()
+}
+
 // tryReadByRowIndex attempts to read a document using RowIndex.
+// Uses a cached parsed RowIndex for O(1) purely in-memory ID→row lookup,
+// avoiding the expensive LoadRowIndex (200KB page parse) on every call.
 // Returns (doc, usedRowIndex, error). If RowIndex is not available, returns (nil, false, nil).
 func (s *DocumentStorage) tryReadByRowIndex(id string) (*Document, bool, error) {
+	// Load cached RowIndex once per storage lifecycle
+	s.ensureRowIndex()
+
+	// O(1) pure-memory lookup on the cached parsed RowIndex
+	s.rowIdxMu.Lock()
+	ri := s.cachedRowIndex
+	s.rowIdxMu.Unlock()
+
+	if ri == nil {
+		return nil, false, nil // RowIndex not available
+	}
+
+	rowIdx := ri.Lookup(id)
+	if rowIdx == -1 {
+		return nil, true, ErrDocumentNotFound
+	}
+
+	// Create a lightweight reader for ReadRowAt only.
+	// File open + footer read is microseconds; the expensive
+	// LoadRowIndex is avoided via the cached RowIndex above.
 	dataFile := filepath.Join(s.path, dataFileName)
-	
-	// Check if file exists
-	if _, err := os.Stat(dataFile); err != nil {
-		return nil, false, nil
-	}
-	
-	// Check if file supports RowIndex (version check)
-	if !s.supportsRowIndex() {
-		return nil, false, nil
-	}
-	
-	// Open RowIndexReader with cache if available
 	var reader *column.RowIndexReader
 	var err error
 	if s.blockCache != nil {
@@ -1019,30 +1204,18 @@ func (s *DocumentStorage) tryReadByRowIndex(id string) (*Document, bool, error) 
 		return nil, false, nil
 	}
 	defer reader.Close()
-	
-	// Double-check: file has RowIndex
-	if !reader.HasRowIndex() {
-		return nil, false, nil
-	}
-	
-	// Lookup row index by ID (O(1))
-	rowIdx, err := reader.LookupRowID(id)
-	if err != nil {
-		// ID not found in RowIndex
-		return nil, true, ErrDocumentNotFound
-	}
-	
+
 	// Read the specific row using O(1) random access
 	rowValues, err := reader.ReadRowAt(rowIdx)
 	if err != nil {
 		return nil, true, fmt.Errorf("read row %d: %w", rowIdx, err)
 	}
-	
+
 	// Extract values: [id_hash, vector, timestamp]
 	if len(rowValues) != 3 {
 		return nil, true, fmt.Errorf("expected 3 columns, got %d", len(rowValues))
 	}
-	
+
 	idHash, ok := rowValues[0].(int64)
 	if !ok {
 		return nil, true, fmt.Errorf("invalid id_hash type: %T", rowValues[0])
@@ -1055,7 +1228,7 @@ func (s *DocumentStorage) tryReadByRowIndex(id string) (*Document, bool, error) 
 	if !ok {
 		return nil, true, fmt.Errorf("invalid timestamp type: %T", rowValues[2])
 	}
-	
+
 	// Get metadata
 	s.metaStore.mu.RLock()
 	meta, exists := s.metaStore.entries[idHash]
@@ -1063,7 +1236,7 @@ func (s *DocumentStorage) tryReadByRowIndex(id string) (*Document, bool, error) 
 	if !exists {
 		return nil, true, ErrDocumentNotFound
 	}
-	
+
 	return &Document{
 		ID:        meta.ID,
 		Vector:    vector,
@@ -1311,6 +1484,13 @@ func (s *DocumentStorage) Close() error {
 	}
 
 	s.closed = true
+
+	// Release cached RowIndex
+	s.rowIdxMu.Lock()
+	s.cachedRowIndex = nil
+	s.rowIdxTried = false
+	s.rowIdxMu.Unlock()
+
 	return nil
 }
 

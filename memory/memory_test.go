@@ -917,3 +917,100 @@ func TestDeleteSemanticsSearchInvisible(t *testing.T) {
 		}
 	}
 }
+
+
+// ----------------------------------------------------------------------
+// ContentHashIndex.RebuildBatch
+// ----------------------------------------------------------------------
+
+func TestContentHashIndexRebuildBatch(t *testing.T) {
+	idx := NewContentHashIndex()
+
+	entries := []HashIndexEntry{
+		{SessionID: "s1", Hash: "h1", MemoryID: "m1", Seq: 1},
+		{SessionID: "s1", Hash: "h2", MemoryID: "m2", Seq: 2},
+		{SessionID: "s2", Hash: "h1", MemoryID: "m3", Seq: 1},
+	}
+
+	idx.RebuildBatch(entries)
+
+	if !idx.Has("s1", "h1") {
+		t.Error("expected s1:h1 to exist")
+	}
+	if !idx.Has("s1", "h2") {
+		t.Error("expected s1:h2 to exist")
+	}
+	if !idx.Has("s2", "h1") {
+		t.Error("expected s2:h1 to exist")
+	}
+	if idx.Has("s1", "h3") {
+		t.Error("expected s1:h3 to not exist")
+	}
+
+	if idx.MaxSeq("s1") != 2 {
+		t.Errorf("MaxSeq s1: want 2, got %d", idx.MaxSeq("s1"))
+	}
+	if idx.MaxSeq("s2") != 1 {
+		t.Errorf("MaxSeq s2: want 1, got %d", idx.MaxSeq("s2"))
+	}
+	if idx.MaxSeq("s3") != 0 {
+		t.Errorf("MaxSeq s3: want 0, got %d", idx.MaxSeq("s3"))
+	}
+}
+
+func TestContentHashIndexRebuildBatchEmpty(t *testing.T) {
+	idx := NewContentHashIndex()
+	idx.RebuildBatch(nil)
+	if idx.Has("s1", "h1") {
+		t.Error("nil entries should not add anything")
+	}
+	idx.RebuildBatch([]HashIndexEntry{})
+	if idx.Has("s1", "h1") {
+		t.Error("empty entries should not add anything")
+	}
+}
+
+func TestContentHashIndexRebuildBatchPanicsOnNonEmpty(t *testing.T) {
+	idx := NewContentHashIndex()
+	idx.Add("s1", "h1", "m1", 1)
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic on non-empty index")
+		}
+	}()
+
+	idx.RebuildBatch([]HashIndexEntry{{SessionID: "s2", Hash: "h2", MemoryID: "m2", Seq: 1}})
+}
+
+func TestContentHashIndexRebuildBatchEquivalentToAdd(t *testing.T) {
+	// Build via Add
+	idx1 := NewContentHashIndex()
+	idx1.Add("s1", "h1", "m1", 1)
+	idx1.Add("s1", "h2", "m2", 3)
+	idx1.Add("s2", "h1", "m3", 2)
+
+	// Build via RebuildBatch
+	idx2 := NewContentHashIndex()
+	idx2.RebuildBatch([]HashIndexEntry{
+		{SessionID: "s1", Hash: "h1", MemoryID: "m1", Seq: 1},
+		{SessionID: "s1", Hash: "h2", MemoryID: "m2", Seq: 3},
+		{SessionID: "s2", Hash: "h1", MemoryID: "m3", Seq: 2},
+	})
+
+	// Verify equivalence
+	for _, tc := range []struct{ sid, hash string }{
+		{"s1", "h1"}, {"s1", "h2"}, {"s2", "h1"},
+		{"s1", "h3"}, {"s3", "h1"},
+	} {
+		if idx1.Has(tc.sid, tc.hash) != idx2.Has(tc.sid, tc.hash) {
+			t.Errorf("Has(%s,%s) mismatch: Add=%v RebuildBatch=%v", tc.sid, tc.hash, idx1.Has(tc.sid, tc.hash), idx2.Has(tc.sid, tc.hash))
+		}
+	}
+
+	for _, sid := range []string{"s1", "s2", "s3"} {
+		if idx1.MaxSeq(sid) != idx2.MaxSeq(sid) {
+			t.Errorf("MaxSeq(%s) mismatch: Add=%d RebuildBatch=%d", sid, idx1.MaxSeq(sid), idx2.MaxSeq(sid))
+		}
+	}
+}

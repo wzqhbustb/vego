@@ -82,14 +82,16 @@ func BenchmarkRebuildInvertedIndex_100K(b *testing.B) {
 		b.Fatalf("bootstrap: %v", err)
 	}
 
-	// Clear the inverted index so we can benchmark rebuildIndexes directly.
+	// Clear the indexes so we can benchmark rebuildIndexes directly.
 	s.inverted.Clear()
-	b.Logf("inverted index cleared, starting benchmark...")
+	s.contentHashIndex.Clear()
+	b.Logf("indexes cleared, starting benchmark...")
 
 	// Phase 3: benchmark rebuildIndexes directly.
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		s.inverted.Clear()
+		s.contentHashIndex.Clear()
 		if err := s.rebuildIndexes(); err != nil {
 			b.Fatalf("rebuildIndexes: %v", err)
 		}

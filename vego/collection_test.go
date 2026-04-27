@@ -874,3 +874,124 @@ func TestCollectionSaveAndClose(t *testing.T) {
 }
 
 
+
+// TestCollectionSearchWithFilterContextHighFilterRate verifies that
+// SearchWithFilterContext handles high filter-dropout rates correctly
+// using a single HNSW search + metadata pre-filtering.
+func TestCollectionSearchWithFilterContextHighFilterRate(t *testing.T) {
+	coll, cleanup := setupTestCollection(t)
+	defer cleanup()
+
+	// Insert 20 documents: 5 active, 15 archived (75% archive rate)
+	for i := 0; i < 20; i++ {
+		state := "archived"
+		if i < 5 {
+			state = "active"
+		}
+		doc := createTestDocument(fmt.Sprintf("filter_doc_%d", i), 64, map[string]interface{}{
+			"state": state,
+			"index": i,
+		})
+		for j := range doc.Vector {
+			doc.Vector[j] = float32(j+i) * 0.01
+		}
+		if err := coll.Insert(doc); err != nil {
+			t.Fatalf("Failed to insert document: %v", err)
+		}
+	}
+
+	filter := &MetadataFilter{
+		Field:    "state",
+		Operator: "eq",
+		Value:    "active",
+	}
+
+	query := make([]float32, 64)
+	for i := range query {
+		query[i] = float32(i) * 0.01
+	}
+
+	t.Run("Returns only active documents", func(t *testing.T) {
+		results, err := coll.SearchWithFilterContext(context.Background(), query, 5, filter)
+		if err != nil {
+			t.Fatalf("SearchWithFilterContext failed: %v", err)
+		}
+
+		if len(results) == 0 {
+			t.Fatal("Expected results, got none")
+		}
+
+		for _, r := range results {
+			if r.Document == nil {
+				t.Error("Result has nil document")
+				continue
+			}
+			state, _ := r.Document.Metadata["state"].(string)
+			if state != "active" {
+				t.Errorf("Expected active document, got state=%q", state)
+			}
+		}
+	})
+
+	t.Run("OverFetch returns more results", func(t *testing.T) {
+		// With default over-fetch=10, k=3 => HNSW searches 30 candidates.
+		// With 75% archive, ~7-8 should be active, but we cap at k=3.
+		results, err := coll.SearchWithFilterContext(context.Background(), query, 3, filter, WithOverFetch(10))
+		if err != nil {
+			t.Fatalf("SearchWithFilterContext failed: %v", err)
+		}
+		if len(results) != 3 {
+			t.Errorf("Expected 3 results, got %d", len(results))
+		}
+	})
+
+	t.Run("Small over-fetch may not fill k", func(t *testing.T) {
+		// With over-fetch=1, k=5 => HNSW searches 5 candidates.
+		// With 75% archive, expected ~1 active. Fallback to k*20 may help.
+		results, err := coll.SearchWithFilterContext(context.Background(), query, 5, filter, WithOverFetch(1))
+		if err != nil {
+			t.Fatalf("SearchWithFilterContext failed: %v", err)
+		}
+		// Should still return some results via the fallback mechanism.
+		if len(results) == 0 {
+			t.Error("Expected at least some results via fallback, got none")
+		}
+	})
+}
+
+// TestDocumentStorageGetMetadataOnly verifies the pure-memory metadata lookup.
+func TestDocumentStorageGetMetadataOnly(t *testing.T) {
+	coll, cleanup := setupTestCollection(t)
+	defer cleanup()
+
+	doc := createTestDocument("meta_only_doc", 64, map[string]interface{}{
+		"state": "active",
+		"tags":  []string{"a", "b"},
+	})
+	if err := coll.Insert(doc); err != nil {
+		t.Fatalf("Insert failed: %v", err)
+	}
+
+	// Flush to ensure metadata is in the store, not just buffer
+	if err := coll.Save(); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	meta, ok := coll.storage.GetMetadataOnly("meta_only_doc")
+	if !ok {
+		t.Fatal("GetMetadataOnly returned false")
+	}
+	if meta == nil {
+		t.Fatal("GetMetadataOnly returned nil map")
+	}
+	state, ok := meta["state"].(string)
+	if !ok || state != "active" {
+		t.Errorf("Expected state=active, got %v", meta["state"])
+	}
+
+	// Non-existent document
+	_, ok = coll.storage.GetMetadataOnly("non_existent")
+	if ok {
+		t.Error("Expected false for non-existent document")
+	}
+}

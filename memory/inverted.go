@@ -89,6 +89,46 @@ func (idx *InvertedIndex) Add(id, content string) {
 	idx.docCount++
 }
 
+// RebuildBatch inserts multiple documents in a single locked operation.
+// It is optimized for rebuildIndexes where the index is known to be empty
+// (no existing entries to remove). Callers must ensure id uniqueness.
+type RebuildEntry struct {
+	ID    string
+	Terms []string
+}
+
+func (idx *InvertedIndex) RebuildBatch(entries []RebuildEntry) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	if idx.docCount != 0 {
+		panic("RebuildBatch called on non-empty index: caller must Clear() first")
+	}
+	if len(entries) == 0 {
+		return
+	}
+
+	// Pre-size maps to avoid repeated rehashing during bulk insert.
+	idx.docTerms = make(map[string][]string, len(entries))
+	idx.docLen = make(map[string]int, len(entries))
+	// Heuristic: mixed CJK/English content yields ~3-5 unique terms per doc
+	// on average after stop-word filtering. Over-allocation is harmless.
+	idx.index = make(map[string][]string, len(entries)*4)
+
+	for _, e := range entries {
+		if e.ID == "" || len(e.Terms) == 0 {
+			continue
+		}
+		for _, term := range e.Terms {
+			idx.index[term] = append(idx.index[term], e.ID)
+		}
+		idx.docTerms[e.ID] = e.Terms
+		idx.docLen[e.ID] = len(e.Terms)
+		idx.totalTerms += int64(len(e.Terms))
+		idx.docCount++
+	}
+}
+
 // Remove deletes a document and all its terms from the index.
 func (idx *InvertedIndex) Remove(id string) {
 	idx.mu.Lock()

@@ -152,10 +152,9 @@ func (h *HNSWIndex) Search(query []float32, k int, ef int) ([]SearchResult, erro
 }
 
 // SearchWithDV searches for k nearest neighbors with deletion vector filtering.
-// It retrieves more candidates (k*2) to compensate for deleted nodes, then filters
-// using the provided isDeleted callback. This allows the Collection layer to
-// filter deleted nodes using Storage's DeletionVector without HNSW maintaining
-// its own deletion state.
+// It searches exactly k candidates then post-filters via the isDeleted callback.
+// Callers that expect a high deletion rate should multiply k before calling —
+// e.g. SearchContext passes k*2, SearchWithFilterContext passes k*OverFetch.
 //
 // The isDeleted callback receives a node ID and should return true if the node
 // is considered deleted and should be filtered out.
@@ -179,8 +178,8 @@ func (h *HNSWIndex) SearchWithDV(query []float32, k int, ef int, isDeleted func(
 	nodes := h.nodes // snapshot slice header
 	h.globalLock.RUnlock()
 
-	// Search for more candidates to compensate for deletions
-	candidates, err := h.search(query, k*2, ef, int(ep), int(maxLvl), nodes)
+	// Search for k candidates (caller is responsible for over-fetch).
+	candidates, err := h.search(query, k, ef, int(ep), int(maxLvl), nodes)
 	if err != nil {
 		return nil, err
 	}

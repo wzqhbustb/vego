@@ -31,6 +31,12 @@ func TestDefaultConfig(t *testing.T) {
 	if c.RRFK != 60.0 {
 		t.Errorf("RRFK: want 60.0, got %f", c.RRFK)
 	}
+	if c.SearchLimit != 10 {
+		t.Errorf("SearchLimit: want 10, got %d", c.SearchLimit)
+	}
+	if c.SearchOverFetch != 5 {
+		t.Errorf("SearchOverFetch: want 5, got %d", c.SearchOverFetch)
+	}
 	if c.MinScore != 0.3 {
 		t.Errorf("MinScore: want 0.3, got %f", c.MinScore)
 	}

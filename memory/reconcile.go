@@ -131,7 +131,7 @@ func (s *MemoryStore) findCandidates(ctx context.Context, fact *ExtractedFact) (
 		return nil, fmt.Errorf("embed: %w", err)
 	}
 
-	vecResults, err := s.coll.SearchWithFilterContext(ctx, vec, s.config.SearchLimit, activeFilter)
+	vecResults, err := s.coll.SearchWithFilterContext(ctx, vec, s.config.SearchLimit, activeFilter, vego.WithOverFetch(s.config.SearchOverFetch))
 	if err != nil {
 		return nil, fmt.Errorf("vector search: %w", err)
 	}

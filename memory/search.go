@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -81,6 +82,9 @@ func (s *MemoryStore) hybridSearch(ctx context.Context, query string, filter Mem
 	}
 	vecResults, err := s.vectorSearch(ctx, vec, limit*3, minScore)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
 		// Gracefully handle empty index or other non-fatal search errors.
 		vecResults = nil
 	}
@@ -190,7 +194,7 @@ func (s *MemoryStore) vectorSearch(ctx context.Context, queryVec []float32, limi
 		Value:    string(StateActive),
 	}
 
-	results, err := s.coll.SearchWithFilterContext(ctx, queryVec, limit, vf)
+	results, err := s.coll.SearchWithFilterContext(ctx, queryVec, limit, vf, vego.WithOverFetch(s.config.SearchOverFetch))
 	if err != nil {
 		return nil, fmt.Errorf("vector search: %w", err)
 	}
@@ -307,7 +311,7 @@ func (s *MemoryStore) secondHopSearch(ctx context.Context, seeds []Memory, limit
 			continue
 		}
 
-		results, err := s.coll.SearchWithFilterContext(ctx, doc.Vector, limit, vf)
+		results, err := s.coll.SearchWithFilterContext(ctx, doc.Vector, limit, vf, vego.WithOverFetch(s.config.SearchOverFetch))
 		if err != nil {
 			continue
 		}
