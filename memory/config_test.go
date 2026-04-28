@@ -75,7 +75,7 @@ func TestDefaultConfig(t *testing.T) {
 func TestNewConfigWithOptions(t *testing.T) {
 	c, err := NewConfig(
 		WithDataDir("/tmp/mem"),
-		WithDimension(768),
+		WithDimension(1024),
 		WithLLM("sk-test", "http://localhost:11434/v1", "llama3", 0.0),
 		WithEmbedding("sk-embed", "", "bge-m3", 1024),
 		WithDistanceFunc("l2"),
@@ -94,8 +94,8 @@ func TestNewConfigWithOptions(t *testing.T) {
 	if c.DataDir != "/tmp/mem" {
 		t.Errorf("DataDir: want /tmp/mem, got %s", c.DataDir)
 	}
-	if c.Dimension != 768 {
-		t.Errorf("Dimension: want 768, got %d", c.Dimension)
+	if c.Dimension != 1024 {
+		t.Errorf("Dimension: want 1024, got %d", c.Dimension)
 	}
 	if c.LLMAPIKey != "sk-test" {
 		t.Errorf("LLMAPIKey mismatch")
@@ -242,6 +242,7 @@ func TestConfigToLLMConfig(t *testing.T) {
 
 func TestConfigToEmbedConfig(t *testing.T) {
 	c, _ := NewConfig(
+		WithDimension(768),
 		WithEmbedding("sk-emb", "http://local.embed/v1", "m3e", 768),
 	)
 	ec := c.ToEmbedConfig()
@@ -326,6 +327,7 @@ func TestConfigEmptyStringNoOverride(t *testing.T) {
 
 func TestConfigFineGrainedOptions(t *testing.T) {
 	c, err := NewConfig(
+		WithDimension(512),
 		WithLLMAPIKey("sk-fine"),
 		WithLLMBaseURL("http://fine.local/v1"),
 		WithLLMModel("fine-model"),
@@ -358,6 +360,9 @@ func TestConfigFineGrainedOptions(t *testing.T) {
 	}
 	if c.EmbedModel != "emb-model" {
 		t.Errorf("EmbedModel mismatch: %s", c.EmbedModel)
+	}
+	if c.Dimension != 512 {
+		t.Errorf("Dimension: want 512, got %d", c.Dimension)
 	}
 	if c.EmbedDims != 512 {
 		t.Errorf("EmbedDims: want 512, got %d", c.EmbedDims)

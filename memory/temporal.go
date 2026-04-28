@@ -2,6 +2,7 @@ package memory
 
 import (
 	"fmt"
+	"log/slog"
 	"regexp"
 	"sort"
 	"strconv"
@@ -39,7 +40,7 @@ func NormalizeTemporalFacts(facts []ExtractedFact, messages []Message, now time.
 		resolved, meta := resolveInContent(f.Content, anchor, source)
 		if meta != nil {
 			out[i].Content = resolved
-			out[i].Metadata = shallowCopyMap(f.Metadata)
+			out[i].Metadata = copyMap(f.Metadata)
 			if out[i].Metadata == nil {
 				out[i].Metadata = make(map[string]interface{})
 			}
@@ -388,8 +389,16 @@ func parseEnglishDate(monthName, dayStr, yearStr string) (y, mo, d int, ok bool)
 	if !ok {
 		return 0, 0, 0, false
 	}
-	d, _ = strconv.Atoi(dayStr)
-	y, _ = strconv.Atoi(yearStr)
+	d, err := strconv.Atoi(dayStr)
+	if err != nil {
+		slog.Debug("parseEnglishDate: invalid day", "day", dayStr, "err", err)
+		return 0, 0, 0, false
+	}
+	y, err = strconv.Atoi(yearStr)
+	if err != nil {
+		slog.Debug("parseEnglishDate: invalid year", "year", yearStr, "err", err)
+		return 0, 0, 0, false
+	}
 	return y, mo, d, true
 }
 

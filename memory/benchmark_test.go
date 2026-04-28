@@ -49,37 +49,56 @@ func generateBenchmarkContent(r *rand.Rand, targetLen int) string {
 
 // BenchmarkRebuildInvertedIndex_100K measures the time to rebuild the
 // inverted index from 100K persisted documents. Target: < 1s.
+//
+// The HNSW vector dimension is set to 32 (instead of production 1536)
+// because the benchmark target is rebuildIndexes (tokenize + inverted insert),
+// not HNSW insertion. A smaller dimension dramatically reduces setup time
+// while the rebuild workload (content parsing) is identical.
 func BenchmarkRebuildInvertedIndex_100K(b *testing.B) {
+	if testing.Short() {
+		b.Skip("skipping 100K rebuild benchmark in short mode")
+	}
+
 	const numDocs = 100_000
 	const avgContentLen = 500
+	const benchDim = 32 // small dim to speed up HNSW setup (not part of benchmark target)
+	const batchSize = 5_000
 
 	ctx := context.Background()
 	r := rand.New(rand.NewSource(42))
 
-	// Phase 1: prepare documents with pre-computed vectors (no embed API calls).
-	memories := make([]*Memory, numDocs)
-	for i := 0; i < numDocs; i++ {
-		vec := make([]float32, 128)
-		for j := range vec {
-			vec[j] = r.Float32()
-		}
-		memories[i] = &Memory{
-			ID:         fmt.Sprintf("bench-%09d", i),
-			Content:    generateBenchmarkContent(r, avgContentLen),
-			State:      StateActive,
-			MemoryType: TypeInsight,
-			Tags:       []string{},
-			Vector:     vec,
-			CreatedAt:  time.Now(),
-			UpdatedAt:  time.Now(),
-		}
-	}
+	// Phase 1: open store with small dimension.
+	s := newTestStore(b, WithDimension(benchDim), WithEmbedding("test-key", "", "test-model", benchDim))
 
-	// Phase 2: open store and bootstrap all documents.
-	b.Logf("bootstrapping %d documents...", numDocs)
-	s := newTestStore(b)
-	if err := s.Bootstrap(ctx, memories); err != nil {
-		b.Fatalf("bootstrap: %v", err)
+	// Phase 2: batch-insert documents with pre-computed vectors.
+	// Batching in chunks of 5K avoids a single enormous InsertBatch call.
+	b.Logf("bootstrapping %d documents (dim=%d, batch=%d)...", numDocs, benchDim, batchSize)
+	for batchStart := 0; batchStart < numDocs; batchStart += batchSize {
+		batchEnd := batchStart + batchSize
+		if batchEnd > numDocs {
+			batchEnd = numDocs
+		}
+		memories := make([]*Memory, batchEnd-batchStart)
+		for i := range memories {
+			idx := batchStart + i
+			vec := make([]float32, benchDim)
+			for j := range vec {
+				vec[j] = r.Float32()
+			}
+			memories[i] = &Memory{
+				ID:         fmt.Sprintf("bench-%09d", idx),
+				Content:    generateBenchmarkContent(r, avgContentLen),
+				State:      StateActive,
+				MemoryType: TypeInsight,
+				Tags:       []string{},
+				Vector:     vec,
+				CreatedAt:  time.Now(),
+				UpdatedAt:  time.Now(),
+			}
+		}
+		if err := s.Bootstrap(ctx, memories); err != nil {
+			b.Fatalf("bootstrap batch %d: %v", batchStart/batchSize, err)
+		}
 	}
 
 	// Clear the indexes so we can benchmark rebuildIndexes directly.

@@ -418,16 +418,14 @@ func TestInvertedIndexSearchContextTimeout(t *testing.T) {
 			"the quick brown fox jumps over the lazy dog hello world")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+	// Use a deadline in the past to guarantee the context is already expired,
+	// making the test deterministic regardless of scheduling pressure.
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
 
-	// Allow a tiny window for the timeout to fire before scoring loop starts.
-	// The actual cancellation is checked inside the per-postings iteration as well.
-	time.Sleep(5 * time.Millisecond)
-
 	_, err := idx.SearchContext(ctx, "hello world quick brown", 10)
-	if err != context.DeadlineExceeded && err != context.Canceled {
-		t.Errorf("Expected timeout error, got %v", err)
+	if err != context.DeadlineExceeded {
+		t.Errorf("Expected context.DeadlineExceeded, got %v", err)
 	}
 }
 
@@ -526,7 +524,9 @@ func TestInvertedIndexRebuildBatch(t *testing.T) {
 		{ID: "doc3", Terms: []string{"world"}},
 	}
 
-	idx.RebuildBatch(entries)
+	if err := idx.RebuildBatch(entries); err != nil {
+		t.Fatalf("RebuildBatch: %v", err)
+	}
 
 	if idx.Len() != 3 {
 		t.Errorf("Len: want 3, got %d", idx.Len())
@@ -549,11 +549,15 @@ func TestInvertedIndexRebuildBatch(t *testing.T) {
 
 func TestInvertedIndexRebuildBatchEmpty(t *testing.T) {
 	idx := NewInvertedIndex()
-	idx.RebuildBatch(nil)
+	if err := idx.RebuildBatch(nil); err != nil {
+		t.Fatalf("RebuildBatch nil: %v", err)
+	}
 	if idx.Len() != 0 {
 		t.Errorf("nil entries: want 0, got %d", idx.Len())
 	}
-	idx.RebuildBatch([]RebuildEntry{})
+	if err := idx.RebuildBatch([]RebuildEntry{}); err != nil {
+		t.Fatalf("RebuildBatch empty: %v", err)
+	}
 	if idx.Len() != 0 {
 		t.Errorf("empty entries: want 0, got %d", idx.Len())
 	}
@@ -569,7 +573,9 @@ func TestInvertedIndexRebuildBatchSkipEmpty(t *testing.T) {
 		{ID: "doc4", Terms: []string{"valid"}},     // valid
 	}
 
-	idx.RebuildBatch(entries)
+	if err := idx.RebuildBatch(entries); err != nil {
+		t.Fatalf("RebuildBatch: %v", err)
+	}
 	if idx.Len() != 1 {
 		t.Errorf("want 1 valid doc, got %d", idx.Len())
 	}
@@ -580,15 +586,12 @@ func TestInvertedIndexRebuildBatchSkipEmpty(t *testing.T) {
 	}
 }
 
-func TestInvertedIndexRebuildBatchPanicsOnNonEmpty(t *testing.T) {
+func TestInvertedIndexRebuildBatchErrorOnNonEmpty(t *testing.T) {
 	idx := NewInvertedIndex()
 	idx.Add("doc1", "hello")
 
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic on non-empty index")
-		}
-	}()
-
-	idx.RebuildBatch([]RebuildEntry{{ID: "doc2", Terms: []string{"world"}}})
+	err := idx.RebuildBatch([]RebuildEntry{{ID: "doc2", Terms: []string{"world"}}})
+	if err == nil {
+		t.Error("expected error on non-empty index")
+	}
 }

@@ -114,6 +114,9 @@ func (c *Config) validate() error {
 	if c.EmbedDims <= 0 {
 		return fmt.Errorf("embed dims must be > 0, got %d", c.EmbedDims)
 	}
+	if c.Dimension != c.EmbedDims {
+		return fmt.Errorf("dimension %d must match embed dims %d", c.Dimension, c.EmbedDims)
+	}
 	if c.MinScore < 0 || c.MinScore > 1 {
 		return fmt.Errorf("min score must be in [0,1], got %f", c.MinScore)
 	}

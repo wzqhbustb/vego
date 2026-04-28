@@ -2,7 +2,7 @@
 # Unified interface for testing vego, index (HNSW), and storage modules
 
 .PHONY: all test test-race test-v test-coverage help
-.PHONY: test-vego test-index test-storage
+.PHONY: test-vego test-index test-storage test-memory test-memory-integration
 .PHONY: test-vego-race test-index-race test-storage-race
 .PHONY: bench bench-quick bench-all bench-compare
 .PHONY: ci pre-commit clean
@@ -14,20 +14,23 @@ all: test
 # All-in-One Test Commands
 # =============================================================================
 
-# Run all tests across all modules (vego + index + storage)
+# Run all tests across all modules (vego + index + storage + memory)
 test:
 	@echo "========================================"
-	@echo "Running all tests (vego + index + storage)..."
+	@echo "Running all tests (vego + index + storage + memory)..."
 	@echo "========================================"
 	@echo ""
-	@echo "[1/3] Running vego tests..."
+	@echo "[1/4] Running vego tests..."
 	@$(MAKE) -C vego test
 	@echo ""
-	@echo "[2/3] Running index tests..."
+	@echo "[2/4] Running index tests..."
 	@$(MAKE) -C index test
 	@echo ""
-	@echo "[3/3] Running storage tests..."
+	@echo "[3/4] Running storage tests..."
 	@$(MAKE) -C storage test
+	@echo ""
+	@echo "[4/4] Running memory tests..."
+	@cd $(CURDIR) && go test -count=1 ./memory/...
 	@echo ""
 	@echo "========================================"
 	@echo "✅ All tests passed!"
@@ -39,14 +42,17 @@ test-v:
 	@echo "Running all tests with verbose output..."
 	@echo "========================================"
 	@echo ""
-	@echo "[1/3] Running vego tests (verbose)..."
+	@echo "[1/4] Running vego tests (verbose)..."
 	@$(MAKE) -C vego test-v
 	@echo ""
-	@echo "[2/3] Running index tests (verbose)..."
+	@echo "[2/4] Running index tests (verbose)..."
 	@$(MAKE) -C index test-v
 	@echo ""
-	@echo "[3/3] Running storage tests (verbose)..."
+	@echo "[3/4] Running storage tests (verbose)..."
 	@$(MAKE) -C storage test-v
+	@echo ""
+	@echo "[4/4] Running memory tests (verbose)..."
+	@cd $(CURDIR) && go test -count=1 -v ./memory/...
 	@echo ""
 	@echo "========================================"
 	@echo "✅ All tests passed!"
@@ -58,14 +64,17 @@ test-race:
 	@echo "Running all tests with race detector..."
 	@echo "========================================"
 	@echo ""
-	@echo "[1/3] Running vego tests (race)..."
+	@echo "[1/4] Running vego tests (race)..."
 	@$(MAKE) -C vego test-race
 	@echo ""
-	@echo "[2/3] Running index tests (race)..."
+	@echo "[2/4] Running index tests (race)..."
 	@$(MAKE) -C index test-race
 	@echo ""
-	@echo "[3/3] Running storage tests (race)..."
+	@echo "[3/4] Running storage tests (race)..."
 	@$(MAKE) -C storage test-race
+	@echo ""
+	@echo "[4/4] Running memory tests (race)..."
+	@cd $(CURDIR) && go test -race -count=1 ./memory/...
 	@echo ""
 	@echo "========================================"
 	@echo "✅ All tests passed with race detector!"
@@ -77,14 +86,17 @@ test-coverage:
 	@echo "Running all tests with coverage..."
 	@echo "========================================"
 	@echo ""
-	@echo "[1/3] Running vego tests with coverage..."
+	@echo "[1/4] Running vego tests with coverage..."
 	@$(MAKE) -C vego test-cover
 	@echo ""
-	@echo "[2/3] Running index tests..."
+	@echo "[2/4] Running index tests..."
 	@$(MAKE) -C index test || true
 	@echo ""
-	@echo "[3/3] Running storage tests with coverage..."
+	@echo "[3/4] Running storage tests with coverage..."
 	@$(MAKE) -C storage test-coverage
+	@echo ""
+	@echo "[4/4] Running memory tests with coverage..."
+	@cd $(CURDIR) && go test -count=1 -coverprofile=coverage.out ./memory/...
 	@echo ""
 	@echo "========================================"
 	@echo "✅ Coverage report generated!"
@@ -126,6 +138,20 @@ test-index-race:
 # Run storage tests with race detector
 test-storage-race:
 	@$(MAKE) -C storage test-race
+
+# Run only memory tests
+test-memory:
+	@echo "========================================"
+	@echo "Running memory tests..."
+	@echo "========================================"
+	@go test -race -count=1 ./memory/...
+
+# Run memory integration tests (requires LLM API key)
+test-memory-integration:
+	@echo "========================================"
+	@echo "Running memory integration tests..."
+	@echo "========================================"
+	@VEGO_LLM_API_KEY=$(LLM_KEY) go test -tags=integration -race -count=1 -v ./memory/...
 
 # =============================================================================
 # Quick Benchmark Commands
@@ -249,6 +275,7 @@ clean:
 	@$(MAKE) -C vego clean
 	@$(MAKE) -C index clean
 	@$(MAKE) -C storage clean
+	@rm -f coverage.out
 	@go clean -testcache
 	@echo "✅ Clean complete!"
 
@@ -288,7 +315,7 @@ help:
 	@echo "═══════════════════════════════════════════════════════════════"
 	@echo "All-in-One Commands (Recommended)"
 	@echo "═══════════════════════════════════════════════════════════════"
-	@echo "  make test              - Run all tests (vego + index + storage)"
+	@echo "  make test              - Run all tests (vego + index + storage + memory)"
 	@echo "  make test-v            - Run all tests with verbose output"
 	@echo "  make test-race         - Run all tests with race detector"
 	@echo "  make test-coverage     - Run all tests with coverage report"
@@ -309,6 +336,10 @@ help:
 	@echo "Storage Tests:"
 	@echo "  make test-storage      - Run only storage tests"
 	@echo "  make test-storage-race - Run storage tests with race detector"
+	@echo ""
+	@echo "Memory Tests:"
+	@echo "  make test-memory              - Run memory tests with race detector"
+	@echo "  make test-memory-integration  - Run memory integration tests (needs LLM key)"
 	@echo ""
 	@echo "═══════════════════════════════════════════════════════════════"
 	@echo "Index (HNSW) Benchmarks"

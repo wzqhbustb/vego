@@ -12,6 +12,7 @@ import (
 
 	hnsw "github.com/wzqhbustb/vego/index"
 	vego "github.com/wzqhbustb/vego/vego"
+	"golang.org/x/sync/semaphore"
 )
 
 // ----------------------------------------------------------------------
@@ -75,15 +76,15 @@ type HashIndexEntry struct {
 	Seq       int
 }
 
-func (idx *ContentHashIndex) RebuildBatch(entries []HashIndexEntry) {
+func (idx *ContentHashIndex) RebuildBatch(entries []HashIndexEntry) error {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
 	if len(idx.index) != 0 {
-		panic("RebuildBatch called on non-empty index: caller must Clear() first")
+		return fmt.Errorf("RebuildBatch called on non-empty index: caller must Clear() first")
 	}
 	if len(entries) == 0 {
-		return
+		return nil
 	}
 
 	// Pre-size maps to avoid repeated rehashing during bulk insert.
@@ -96,6 +97,7 @@ func (idx *ContentHashIndex) RebuildBatch(entries []HashIndexEntry) {
 			idx.maxSeq[e.SessionID] = e.Seq
 		}
 	}
+	return nil
 }
 
 // ----------------------------------------------------------------------
@@ -112,7 +114,8 @@ type MemoryStore struct {
 	inverted         *InvertedIndex
 	contentHashIndex *ContentHashIndex
 	config           *Config
-	mu               sync.Mutex // guards all write operations (Store/Update/Delete/Bootstrap/StoreBatch)
+	mu               sync.Mutex           // guards all write operations (Store/Update/Delete/Bootstrap/StoreBatch)
+	llmSem           *semaphore.Weighted  // limits concurrent LLM calls in Reconcile (weight=1 = serialized)
 }
 
 // Open opens or creates a MemoryStore.
@@ -165,6 +168,7 @@ func Open(path string, opts ...Option) (*MemoryStore, error) {
 		inverted:         NewInvertedIndex(),
 		contentHashIndex: NewContentHashIndex(),
 		config:           cfg,
+		llmSem:           semaphore.NewWeighted(1),
 	}
 
 	if err := s.rebuildIndexes(); err != nil {
@@ -176,7 +180,17 @@ func Open(path string, opts ...Option) (*MemoryStore, error) {
 }
 
 // Close closes the MemoryStore and its underlying database.
+// It also releases idle HTTP connections held by the LLM and embedding clients.
 func (s *MemoryStore) Close() error {
+	if s == nil {
+		return nil
+	}
+	if s.llm != nil {
+		s.llm.CloseIdleConnections()
+	}
+	if s.embedder != nil {
+		s.embedder.CloseIdleConnections()
+	}
 	if s.db != nil {
 		return s.db.Close()
 	}
@@ -259,14 +273,18 @@ func (s *MemoryStore) update(ctx context.Context, id, content string, tags []str
 	}
 
 	newMem := &Memory{
-		ID:        vego.DocumentID(),
-		Content:   content,
-		State:     StateActive,
-		Tags:      append([]string(nil), tags...),
-		Version:   oldMem.Version + 1,
-		Metadata:  shallowCopyMap(oldMem.Metadata),
-		CreatedAt: oldMem.CreatedAt,
-		UpdatedAt: time.Now(),
+		ID:         vego.DocumentID(),
+		Content:    content,
+		MemoryType: oldMem.MemoryType,
+		State:      StateActive,
+		Tags:       append([]string(nil), tags...),
+		AgentID:    oldMem.AgentID,
+		SessionID:  oldMem.SessionID,
+		Seq:        oldMem.Seq,
+		Version:    oldMem.Version + 1,
+		Metadata:   copyMap(oldMem.Metadata),
+		CreatedAt:  oldMem.CreatedAt,
+		UpdatedAt:  time.Now(),
 	}
 
 	// Merge overlay metadata under the same lock as archiveAndCreate.
@@ -299,6 +317,12 @@ func (s *MemoryStore) Delete(ctx context.Context, id string) error {
 	mem, err := docToMemory(doc)
 	if err != nil {
 		return fmt.Errorf("decode: %w", err)
+	}
+
+	// Prevent overwriting SupersededBy/PreviousID chains of
+	// already-archived or already-deleted memories.
+	if mem.State != StateActive {
+		return fmt.Errorf("cannot delete memory %s: state is %s", id, mem.State)
 	}
 
 	mem.State = StateDeleted
@@ -357,7 +381,8 @@ func WithFilter(f MemoryFilter) SearchOption {
 // Pass EnableHybrid(false) to fall back to pure vector search.
 func (s *MemoryStore) Search(ctx context.Context, query string, opts ...SearchOption) ([]Memory, error) {
 	sc := &searchConfig{
-		hybrid: true,
+		hybrid:   true,
+		minScore: -1, // sentinel: -1 means not set; [0,1] are valid
 	}
 	for _, opt := range opts {
 		opt(sc)
@@ -368,14 +393,16 @@ func (s *MemoryStore) Search(ctx context.Context, query string, opts ...SearchOp
 	mf.Query = query
 	if sc.limit > 0 {
 		mf.Limit = sc.limit
+		mf.LimitSet = true
 	}
-	if mf.Limit <= 0 {
+	if !mf.LimitSet {
 		mf.Limit = s.config.SearchLimit
 	}
-	if sc.minScore > 0 {
+	if sc.minScore >= 0 {
 		mf.MinScore = sc.minScore
+		mf.MinScoreSet = true
 	}
-	if mf.MinScore <= 0 {
+	if !mf.MinScoreSet {
 		mf.MinScore = s.config.MinScore
 	}
 
@@ -399,7 +426,7 @@ func (s *MemoryStore) pureVectorSearch(ctx context.Context, query string, filter
 		limit = s.config.SearchLimit
 	}
 	minScore := filter.MinScore
-	if minScore <= 0 {
+	if !filter.MinScoreSet {
 		minScore = s.config.MinScore
 	}
 
@@ -462,16 +489,40 @@ type StoreItem struct {
 }
 
 // StoreBatch stores multiple memories in one batch.
+// Embedding calls run concurrently (up to 4 in parallel) to reduce latency.
 func (s *MemoryStore) StoreBatch(ctx context.Context, items []StoreItem) ([]Memory, error) {
+	if len(items) == 0 {
+		return nil, nil
+	}
+
+	// Phase 1: embed all items concurrently with bounded parallelism.
+	vecs := make([][]float32, len(items))
+	errs := make([]error, len(items))
+
+	var wg sync.WaitGroup
+	embedSem := make(chan struct{}, 4)
+	for i, item := range items {
+		wg.Add(1)
+		go func(idx int, content string) {
+			defer wg.Done()
+			embedSem <- struct{}{}
+			defer func() { <-embedSem }()
+			vecs[idx], errs[idx] = s.embed(ctx, content)
+		}(i, item.Content)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			return nil, fmt.Errorf("embed item %d: %w", i, err)
+		}
+	}
+
+	// Phase 2: build memories and documents.
 	mems := make([]Memory, len(items))
 	docs := make([]*vego.Document, len(items))
 
 	for i, item := range items {
-		vec, err := s.embed(ctx, item.Content)
-		if err != nil {
-			return nil, fmt.Errorf("embed item %d: %w", i, err)
-		}
-
 		mem := &Memory{
 			ID:        vego.DocumentID(),
 			Content:   item.Content,
@@ -483,16 +534,21 @@ func (s *MemoryStore) StoreBatch(ctx context.Context, items []StoreItem) ([]Memo
 		}
 		mems[i] = *mem
 
-		doc, err := memoryToDoc(mem, vec)
+		doc, err := memoryToDoc(mem, vecs[i])
 		if err != nil {
 			return nil, fmt.Errorf("convert item %d: %w", i, err)
 		}
 		docs[i] = doc
 	}
 
+	// Phase 3: batch insert under lock.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// InsertBatchContext is all-or-nothing: Vego validates all docs first,
+	// then inserts them one-by-one into HNSW. If any insertion fails, none
+	// are persisted. The caller receives a single error with no partial
+	// success information, so retries may produce duplicates.
 	if err := s.coll.InsertBatchContext(ctx, docs); err != nil {
 		return nil, fmt.Errorf("insert batch: %w", err)
 	}
@@ -516,6 +572,23 @@ func (s *MemoryStore) Bootstrap(ctx context.Context, memories []*Memory) error {
 	for i, mem := range memories {
 		if mem == nil {
 			return fmt.Errorf("memory %d is nil", i)
+		}
+		// Apply defaults for fields not set by the caller (consistent with
+		// Store / StoreBatch which default MemoryType to TypeInsight).
+		if mem.State == "" {
+			mem.State = StateActive
+		}
+		if mem.MemoryType == "" {
+			mem.MemoryType = TypeInsight
+		}
+		if mem.Version == 0 {
+			mem.Version = 1
+		}
+		if mem.CreatedAt.IsZero() {
+			mem.CreatedAt = time.Now()
+		}
+		if mem.UpdatedAt.IsZero() {
+			mem.UpdatedAt = time.Now()
 		}
 		var vec []float32
 		var err error
@@ -599,6 +672,7 @@ func (s *MemoryStore) rebuildIndexes() error {
 					defer func() {
 						if r := recover(); r != nil {
 							slog.Error("worker panic during rebuild", "id", doc.ID, "recover", r)
+							resultCh <- processed{doc: doc} // sentinel: consumer skips nil memory
 						}
 					}()
 					m, err := docToMemory(doc)
@@ -643,6 +717,10 @@ func (s *MemoryStore) rebuildIndexes() error {
 
 	for p := range resultCh {
 		m := p.memory
+		if m == nil {
+			slog.Warn("rebuildIndexes: skipped document due to worker panic", "id", p.doc.ID)
+			continue
+		}
 		if p.isOrphan {
 			orphans = append(orphans, p.doc)
 			// Orphan will be archived in Phase 4, but its ContentHash must still
@@ -680,12 +758,20 @@ func (s *MemoryStore) rebuildIndexes() error {
 	// data before Phase 4/5 crash recovery (which does not need them).
 	docs = nil
 
-	s.inverted.RebuildBatch(invertedEntries)
-	s.contentHashIndex.RebuildBatch(hashEntries)
+	if err := s.inverted.RebuildBatch(invertedEntries); err != nil {
+		return fmt.Errorf("rebuild inverted index: %w", err)
+	}
+	if err := s.contentHashIndex.RebuildBatch(hashEntries); err != nil {
+		return fmt.Errorf("rebuild hash index: %w", err)
+	}
 
 	// Phase 4: Fix orphans outside of ForEach to avoid RLock -> Lock deadlock.
 	for _, doc := range orphans {
-		m, _ := docToMemory(doc)
+		m, err := docToMemory(doc)
+		if err != nil {
+			slog.Warn("crash recovery: skip corrupt orphan", "id", doc.ID, "err", err)
+			continue
+		}
 		slog.Info("crash recovery: archiving orphaned memory", "id", doc.ID)
 		m.State = StateArchived
 		m.UpdatedAt = time.Now()
@@ -762,6 +848,25 @@ func (s *MemoryStore) archiveAndCreate(ctx context.Context, oldID string, newMem
 	if err != nil {
 		slog.Warn("corrupt old memory during archive", "old_id", oldID, "err", err)
 		return fmt.Errorf("archive old memory: decode old: %w", err)
+	}
+
+	// Re-verify state and type under lock: a concurrent Delete/Update may
+	// have changed the state between the caller's initial read (outside
+	// s.mu) and this re-read under s.mu.  Similarly, a concurrent pin
+	// operation may have changed MemoryType to TypePinned.
+	// If the state is no longer active (or memory became pinned), the new
+	// memory has already been inserted successfully. Returning an error
+	// would orphan it, so we log a warning and return nil — the new
+	// memory remains searchable as a separate entry (equivalent to ADD).
+	if oldMem.State != StateActive {
+		slog.Warn("archiveAndCreate: old memory state changed concurrently, new memory already inserted",
+			"old_id", oldID, "new_id", newMem.ID, "state", oldMem.State)
+		return nil
+	}
+	if oldMem.MemoryType == TypePinned {
+		slog.Warn("archiveAndCreate: target became pinned concurrently, skipping archive (new memory kept as separate entry)",
+			"old_id", oldID, "new_id", newMem.ID)
+		return nil
 	}
 
 	oldMem.State = StateArchived

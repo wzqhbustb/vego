@@ -72,6 +72,12 @@ type MemoryFilter struct {
 	Limit      int
 	Offset     int
 	MinScore   float64
+	// MinScoreSet distinguishes between MinScore=0 (accept all)
+	// and the zero-value sentinel (not set, use config default).
+	MinScoreSet bool
+	// LimitSet distinguishes between Limit=0 (return zero results)
+	// and the zero-value sentinel (not set, use config default).
+	LimitSet bool
 }
 
 // ----------------------------------------------------------------------
@@ -105,7 +111,18 @@ type ExtractedFact struct {
 	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
 
-// IngestResult summarizes the outcome of a Reconcile operation.
+// IngestRequest is the unified entry point for message ingestion.
+// It supports two modes:
+//   - ModeNormal: LLM fact extraction → Reconcile (AgentID required)
+//   - ModeRaw:    Direct session storage with dedup (SessionID required)
+type IngestRequest struct {
+	Messages  []Message
+	Mode      IngestMode
+	SessionID string // Required for ModeRaw
+	AgentID   string // Required for ModeNormal
+}
+
+// IngestResult summarizes the outcome of an Ingest or Reconcile operation.
 type IngestResult struct {
 	Added   int
 	Updated int
@@ -145,7 +162,7 @@ func memoryToDoc(m *Memory, vec []float32) (*vego.Document, error) {
 	vecCopy := make([]float32, len(vec))
 	copy(vecCopy, vec)
 
-	ts := m.UpdatedAt
+	ts := toStore.UpdatedAt
 	if ts.IsZero() {
 		ts = time.Now()
 	}
@@ -164,8 +181,8 @@ func docToMemory(doc *vego.Document) (*Memory, error) {
 		return nil, fmt.Errorf("document is nil")
 	}
 	dataStr, ok := doc.Metadata[metaKeyData].(string)
-	if !ok {
-		return nil, fmt.Errorf("document %s: missing %s field", doc.ID, metaKeyData)
+	if !ok || dataStr == "" {
+		return nil, fmt.Errorf("document %s: missing or empty %s field", doc.ID, metaKeyData)
 	}
 	var m Memory
 	if err := json.Unmarshal([]byte(dataStr), &m); err != nil {
@@ -175,14 +192,26 @@ func docToMemory(doc *vego.Document) (*Memory, error) {
 	return &m, nil
 }
 
-// shallowCopyMap returns a shallow copy of a map, or nil if src is nil.
-func shallowCopyMap(src map[string]interface{}) map[string]interface{} {
+// copyMap returns a copy of a metadata map, or nil if src is nil.
+// Known pointer types (e.g. *TemporalMetadata) are deep-copied so that
+// the returned map does not share mutable references with the source.
+func copyMap(src map[string]interface{}) map[string]interface{} {
 	if src == nil {
 		return nil
 	}
 	out := make(map[string]interface{}, len(src))
 	for k, v := range src {
-		out[k] = v
+		switch val := v.(type) {
+		case *TemporalMetadata:
+			if val != nil {
+				cp := *val
+				out[k] = &cp
+			} else {
+				out[k] = nil
+			}
+		default:
+			out[k] = v
+		}
 	}
 	return out
 }

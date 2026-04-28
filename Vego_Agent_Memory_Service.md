@@ -427,9 +427,11 @@ type Config struct {
     EmbedDims    int     // 默认 1536
 
     // 搜索
+    SearchLimit       int     // 默认 10
+    SearchOverFetch   int     // 默认 5（SearchWithFilterContext 的过取倍数）
     RRFK              float64 // 默认 60.0
     MinScore          float64 // 默认 0.3（基于相似度，0-1 范围）
-    SecondHopGate     float64 // 默认 0.5
+    SecondHopGate     float64 // 默认 0.02（低阈值确保二跳在高归档率下仍能触发；RRF K=60 时 max RRF≈0.033）
     SecondHopWeight   float64 // 默认 0.3
     SecondHopTopN     int     // 默认 3
     PinnedBoost       float64 // 默认 1.5
@@ -522,6 +524,36 @@ func (s *MemoryStore) ExtractFacts(ctx context.Context, messages []Message) ([]E
 - `query_intent` 过滤（丢弃搜索意图事实）
 - 事实上限 50 条
 - **ModeRaw 支持**：当 mode 为 raw 时，直接将消息存为 `TypeSession` 类型记忆，跳过 LLM 处理
+
+### 统一摄取入口 (`Ingest`)
+
+`Ingest()` 是摄取的统一入口方法，根据 mode 自动选择处理路径，并在处理前根据 `MaxConversationRunes` 截断超长消息。
+
+```go
+// IngestRequest 是消息摄取的统一入参。
+// 支持两种模式：
+//   - ModeNormal: LLM 事实提取 → Reconcile（需提供 AgentID）
+//   - ModeRaw:    直接 session 存储 + 去重（需提供 SessionID）
+type IngestRequest struct {
+    Messages  []Message
+    Mode      IngestMode
+    SessionID string // ModeRaw 时必填
+    AgentID   string // ModeNormal 时必填
+}
+
+// Ingest 编排完整摄取流水线：
+//
+// ModeNormal:
+//  1. 按 MaxConversationRunes 截断消息
+//  2. ExtractFacts → Reconcile
+//
+// ModeRaw:
+//  1. 按 MaxConversationRunes 截断消息
+//  2. StoreRawMessages（内部处理 ExtractFacts(ModeRaw) + 去重 + 插入）
+func (s *MemoryStore) Ingest(ctx context.Context, req IngestRequest) (*IngestResult, error)
+```
+
+此方法同时解决了 `MaxConversationRunes` 的生效问题：截断逻辑仅在 `Ingest()` 入口处执行，确保 LLM 提示词不会因过长消息而超出上下文窗口。
 
 ### ModeRaw 消息去重（ContentHash）
 
@@ -617,8 +649,9 @@ func (s *MemoryStore) Reconcile(ctx context.Context, agentID string, facts []Ext
 - DELETE 执行软删除：通过 `coll.UpdateContext()` 修改 `_state` 为 `"deleted"` + 同步更新 `_data` + 倒排索引 `Remove()`。
   **不使用 `coll.DeleteContext()`**，原因见 Task 6 的 Delete 语义说明
 - Pinned 记忆保护：不可自动删除，UPDATE 降级为 ADD
-- **并发控制**：Reconcile 阶段的并发搜索和 LLM 调用使用 `golang.org/x/sync/semaphore` 限制并发数（默认 4），
-  防止嵌入式场景下 goroutine 爆炸。LLM 调用使用独立的 semaphore（默认 1）串行执行
+- **并发控制**：Reconcile 阶段的并发搜索使用 `semaphore` 限制并发数（默认 4），防止嵌入式场景下 goroutine 爆炸。
+  Phase 2（决策 + 执行）目前**串行执行**（逐条 fact 处理）。LLM 调用通过 `MemoryStore.llmSem`（权重 1 的独立 semaphore）
+  串行化，作为防御性措施——即使未来 Phase 2 改为并发执行，也不会出现 LLM API 限流问题
 
 ### Archive-and-Create 原子性设计
 
@@ -744,20 +777,21 @@ func (s *MemoryStore) toScoredMemories(results []vego.SearchResult) ([]Memory, e
 Vego 的 `SearchWithFilter` 在 HNSW 搜索后应用 metadata filter，自动扩大批次重试
 （初始 k×2，每次翻倍，最大 k×20，最多 5 次）。这意味着：
 
-- **正常情况**（archived/deleted 记忆占比 <50%）：首次 k×2 即可获得足够 active 结果
-- **高归档率场景**（>80% 记忆已归档）：自动扩批到 k×20，仍可能不足
-- **兜底策略**：如果 `SearchWithFilter` 返回结果少于 `limit`，不做额外补偿。
+- **正常情况**（archived/deleted 记忆占比 <50%）：首次 k×OverFetch 即可获得足够 active 结果
+- **高归档率场景**（>80% 记忆已归档）：回退到 k×20，仍可能不足
+- **兜底策略**：如果搜索返回结果少于 `limit`，不做额外补偿。
   这对嵌入式场景可接受——如果 95% 的记忆都已归档，说明需要 `Compact` 清理
 
-使用 `SearchWithFilter` 替代手动 post-search 过滤的优势：
-1. Vego 内部自动处理扩批逻辑，memory 层无需实现
-2. DeletionVector 过滤在 HNSW 层完成，不浪费 metadata 过滤次数
-3. 代码更简洁，无需手动管理 over-fetch ratio
+实际实现使用 `SearchWithFilterContext`（带 context 支持和 over-fetch 参数的增强版）
+替代最初设计的 `SearchWithFilter`：
+1. 一次性大搜索（k×OverFetch）+ 单次回退（k×20），而非迭代扩批
+2. 在 HNSW 搜索回调中直接通过 `CheckVisibility` 过滤已删除/归档的文档
+3. 通过 `SearchOverFetch` 配置控制过取倍数（默认 5，范围 [1, 20]）
 
 ### 搜索流水线（十阶段）
 
 1. **时间归一化**：`NormalizeTemporalRecallQuery(query, now)`
-2. **向量搜索**：调用 `s.coll.SearchWithFilter(queryVec, limit*3, activeStateFilter())` 走 Vego HNSW + metadata 过滤
+2. **向量搜索**：调用 `s.coll.SearchWithFilterContext(queryVec, limit*3, activeFilter, WithOverFetch(searchOverFetch))` 走 Vego HNSW + DV 过滤 + metadata 过滤
 3. **距离转换**：`toScoredMemories()` 将 distance 转为 similarity（`SearchWithFilter` 已过滤非 active，此处无需重复检查）
 4. **相似度过滤**：丢弃 similarity < MinScore (0.3) 的结果
 5. **关键词搜索**：调用 `s.inverted.Search(query, limit*3)` 走倒排索引

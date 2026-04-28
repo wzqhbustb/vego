@@ -83,7 +83,7 @@ func TestEmbedSuccess(t *testing.T) {
 			t.Errorf("encode response: %v", err)
 		}
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	embedder := NewEmbedder(EmbedConfig{
 		APIKey:  "sk-test",
@@ -120,7 +120,7 @@ func TestEmbed500Error(t *testing.T) {
 			t.Errorf("write response: %v", err)
 		}
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	embedder := NewEmbedder(EmbedConfig{
 		APIKey:  "sk-test",
@@ -147,7 +147,7 @@ func TestEmbedNoData(t *testing.T) {
 			t.Errorf("encode response: %v", err)
 		}
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	embedder := NewEmbedder(EmbedConfig{
 		APIKey:  "sk-test",
@@ -173,7 +173,7 @@ func TestEmbedDimensionMismatch(t *testing.T) {
 			t.Errorf("encode response: %v", err)
 		}
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	embedder := NewEmbedder(EmbedConfig{
 		APIKey:  "sk-test",

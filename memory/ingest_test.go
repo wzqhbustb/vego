@@ -107,7 +107,7 @@ func TestExtractFactsModeNormalFallback(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 	s.llm = NewLLMClient(LLMConfig{APIKey: "test", BaseURL: srv.URL, Model: "test"})
 
 	messages := []Message{
@@ -395,7 +395,7 @@ func TestExtractFactsWithRetryLLMError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 	s.llm = NewLLMClient(LLMConfig{APIKey: "test", BaseURL: srv.URL, Model: "test"})
 
 	messages := []Message{{Role: "user", Content: "fallback test"}}

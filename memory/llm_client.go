@@ -59,6 +59,14 @@ func NewLLMClient(cfg LLMConfig) *LLMClient {
 	}
 }
 
+// CloseIdleConnections closes any idle connections in the underlying
+// HTTP client to prevent TCP connection leaks in long-running processes.
+func (c *LLMClient) CloseIdleConnections() {
+	if c != nil && c.http != nil {
+		c.http.CloseIdleConnections()
+	}
+}
+
 // CompleteJSON sends a chat completion request with system + user prompts
 // and returns the assistant's content. It forces JSON output via
 // response_format and falls back on HTTP 400 (Ollama/vLLM compatibility).
@@ -124,14 +132,23 @@ func (c *LLMClient) complete(ctx context.Context, system, user string, withForma
 	}
 	defer resp.Body.Close()
 
-	// HTTP 400 fallback: Ollama/vLLM may not support response_format
+	// HTTP 400 fallback: Ollama/vLLM may not support response_format.
+	// Read the response body to check whether the error really relates to
+	// response_format before permanently caching the failure.
 	if resp.StatusCode == http.StatusBadRequest && withFormat {
-		io.Copy(io.Discard, resp.Body) // drain for connection reuse
-		c.formatNotSupported.Store(true)
-		slog.Warn("llm request returned 400 with response_format, retrying without",
-			"model", c.model,
-		)
-		return c.complete(ctx, system, user, false)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+		bodyStr := strings.ToLower(string(body))
+		if strings.Contains(bodyStr, "response_format") ||
+			strings.Contains(bodyStr, "json_object") ||
+			strings.Contains(bodyStr, "json_schema") {
+			c.formatNotSupported.Store(true)
+			slog.Warn("llm server does not support response_format, disabling JSON mode",
+				"model", c.model,
+			)
+			return c.complete(ctx, system, user, false)
+		}
+		// 400 was for some other reason — treat as a hard error.
+		return "", 0, 0, fmt.Errorf("unexpected status 400: %s", bodyStr)
 	}
 
 	if resp.StatusCode != http.StatusOK {

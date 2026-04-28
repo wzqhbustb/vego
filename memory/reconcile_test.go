@@ -537,7 +537,7 @@ func TestReconcileLLMInvalidTargetID(t *testing.T) {
 
 // TestReconcileUpdateNilMetadataOverlay verifies that UPDATE works when the
 // old memory has nil Metadata and the incoming fact carries metadata (e.g.
-// temporal).  This path previously panicked because shallowCopyMap(nil)
+// temporal).  This path previously panicked because copyMap(nil)
 // returns nil, and the overlay loop tried to write into a nil map.
 func TestReconcileUpdateNilMetadataOverlay(t *testing.T) {
 	s := newTestStore(t)

@@ -60,6 +60,14 @@ func NewEmbedder(cfg EmbedConfig) *Embedder {
 	}
 }
 
+// CloseIdleConnections closes any idle connections in the underlying
+// HTTP client to prevent TCP connection leaks in long-running processes.
+func (e *Embedder) CloseIdleConnections() {
+	if e != nil && e.http != nil {
+		e.http.CloseIdleConnections()
+	}
+}
+
 // Embed generates an embedding vector for the given text.
 func (e *Embedder) Embed(ctx context.Context, text string) ([]float32, error) {
 	start := time.Now()

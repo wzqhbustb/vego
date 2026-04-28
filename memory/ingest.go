@@ -8,9 +8,87 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	vego "github.com/wzqhbustb/vego/vego"
 )
+
+// ----------------------------------------------------------------------
+// Unified Ingest entry point
+// ----------------------------------------------------------------------
+
+// Ingest orchestrates the full ingestion pipeline:
+//
+// ModeNormal:
+//  1. Truncate messages to MaxConversationRunes
+//  2. ExtractFacts → Reconcile
+//
+// ModeRaw:
+//  1. Truncate messages to MaxConversationRunes
+//  2. StoreRawMessages (which internally handles ExtractFacts(ModeRaw) + dedup + insert)
+//
+// Returns IngestResult and any error.
+func (s *MemoryStore) Ingest(ctx context.Context, req IngestRequest) (*IngestResult, error) {
+	messages := req.Messages
+	if s.config.MaxConversationRunes > 0 {
+		messages = truncateMessages(messages, s.config.MaxConversationRunes)
+	}
+
+	switch req.Mode {
+	case ModeNormal:
+		if req.AgentID == "" {
+			return nil, fmt.Errorf("AgentID is required for ModeNormal")
+		}
+		facts, err := s.ExtractFacts(ctx, messages, ModeNormal)
+		if err != nil {
+			return nil, err
+		}
+		return s.Reconcile(ctx, req.AgentID, facts)
+
+	case ModeRaw:
+		if req.SessionID == "" {
+			return nil, fmt.Errorf("SessionID is required for ModeRaw")
+		}
+		stored, err := s.StoreRawMessages(ctx, req.SessionID, messages)
+		if err != nil {
+			return nil, err
+		}
+		// StoreRawMessages already handles ExtractFacts(ModeRaw) internally;
+		// wrap the count into an IngestResult.
+		return &IngestResult{Added: stored}, nil
+
+	default:
+		return nil, fmt.Errorf("unknown ingest mode: %d", req.Mode)
+	}
+}
+
+// truncateMessages keeps the newest messages (at the end of the slice) such
+// that the total rune count does not exceed maxRunes. Oldest messages are
+// dropped first. This ensures the LLM prompt does not grow unboundedly.
+func truncateMessages(messages []Message, maxRunes int) []Message {
+	if maxRunes <= 0 || len(messages) == 0 {
+		return messages
+	}
+
+	var total int
+	for _, m := range messages {
+		total += utf8.RuneCountInString(m.Content)
+	}
+	if total <= maxRunes {
+		return messages
+	}
+
+	// Drop oldest messages first until we fit within the budget.
+	for i := 0; i < len(messages)-1; i++ {
+		total -= utf8.RuneCountInString(messages[i].Content)
+		if total <= maxRunes {
+			return messages[i+1:]
+		}
+	}
+	// All messages dropped and total still exceeds maxRunes
+	// (single message longer than limit) — keep only the last message.
+	return messages[len(messages)-1:]
+}
 
 // ----------------------------------------------------------------------
 // Fact extraction
@@ -200,7 +278,7 @@ func (s *MemoryStore) StoreRawMessages(ctx context.Context, sessionID string, me
 			Seq:         nextSeq,
 			ContentHash: p.hash,
 			Version:     1,
-			Metadata:    shallowCopyMap(p.fact.Metadata),
+			Metadata:    copyMap(p.fact.Metadata),
 			CreatedAt:   time.Now(),
 			UpdatedAt:   time.Now(),
 		}

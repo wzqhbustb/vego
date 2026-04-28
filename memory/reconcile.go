@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -65,7 +66,7 @@ func (s *MemoryStore) Reconcile(ctx context.Context, agentID string, facts []Ext
 				return
 			}
 			works[idx].candidates, works[idx].err = s.findCandidates(ctx, &facts[idx])
-			searchSem.Release(1)
+			defer searchSem.Release(1)
 		}(i)
 	}
 	searchWg.Wait()
@@ -137,7 +138,10 @@ func (s *MemoryStore) findCandidates(ctx context.Context, fact *ExtractedFact) (
 	}
 
 	// 2. Keyword search.
-	keywordResults := s.inverted.Search(fact.Content, s.config.SearchLimit)
+	keywordResults, err := s.inverted.SearchContext(ctx, fact.Content, s.config.SearchLimit)
+	if err != nil {
+		return nil, fmt.Errorf("keyword search: %w", err)
+	}
 
 	// 3. Merge & deduplicate.
 	seen := make(map[string]struct{})
@@ -198,6 +202,15 @@ func (s *MemoryStore) decideAction(ctx context.Context, fact *ExtractedFact, can
 
 	systemPrompt := buildReconcileSystemPrompt()
 	userPrompt := buildReconcileUserPrompt(fact, candidates)
+
+	// Serialize LLM calls to avoid API rate limits in concurrent Reconcile.
+	// Currently Phase 2 is sequential, but this semaphore provides defense-
+	// in-depth if Phase 2 is ever made concurrent.
+	if err := s.llmSem.Acquire(ctx, 1); err != nil {
+		return "", "", fmt.Errorf("acquire llm sem: %w", err)
+	}
+	defer s.llmSem.Release(1)
+
 	resp, err := s.llm.CompleteJSON(ctx, systemPrompt, userPrompt)
 	if err != nil {
 		return "", "", fmt.Errorf("llm chat: %w", err)
@@ -255,7 +268,7 @@ func buildReconcileUserPrompt(fact *ExtractedFact, candidates []*candidateMappin
 	b.WriteString("候选记忆:\n")
 	for _, c := range candidates {
 		b.WriteString("候选记忆 ")
-		b.WriteString(fmt.Sprintf("%d", c.intID))
+		b.WriteString(strconv.Itoa(c.intID))
 		b.WriteString(": ")
 		b.WriteString(c.memory.Content)
 		b.WriteString("\n")
@@ -278,7 +291,7 @@ func (s *MemoryStore) executeAction(ctx context.Context, agentID string, fact *E
 			Tags:       append([]string(nil), fact.Tags...),
 			AgentID:    agentID,
 			Version:    1,
-			Metadata:   shallowCopyMap(fact.Metadata),
+			Metadata:   copyMap(fact.Metadata),
 			CreatedAt:  time.Now(),
 			UpdatedAt:  time.Now(),
 		}

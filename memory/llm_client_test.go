@@ -75,7 +75,7 @@ func TestCompleteJSONSuccess(t *testing.T) {
 			t.Errorf("encode response: %v", err)
 		}
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	client := NewLLMClient(LLMConfig{
 		APIKey:  "sk-test",
@@ -145,7 +145,7 @@ func TestCompleteJSON400Fallback(t *testing.T) {
 			t.Errorf("encode response: %v", err)
 		}
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	client := NewLLMClient(LLMConfig{
 		APIKey:  "sk-test",
@@ -169,7 +169,7 @@ func TestCompleteJSON500Error(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(`internal error`))
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	client := NewLLMClient(LLMConfig{
 		APIKey:  "sk-test",
@@ -200,7 +200,7 @@ func TestCompleteJSONNoChoices(t *testing.T) {
 			t.Errorf("encode response: %v", err)
 		}
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
 	client := NewLLMClient(LLMConfig{
 		APIKey:  "sk-test",

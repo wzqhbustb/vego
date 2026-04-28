@@ -60,15 +60,18 @@ func distanceToSimilarity(distance float32, distFunc string) float64 {
 //  9. Recency boost
 //  10. Sort + Gap Stop + Pagination + Relative age + Temporal projection
 func (s *MemoryStore) hybridSearch(ctx context.Context, query string, filter MemoryFilter) ([]Memory, error) {
+	if query == "" {
+		return nil, nil
+	}
 	now := time.Now()
 
 	// Resolve defaults from config.
 	limit := filter.Limit
-	if limit <= 0 {
+	if !filter.LimitSet {
 		limit = s.config.SearchLimit
 	}
 	minScore := filter.MinScore
-	if minScore <= 0 {
+	if !filter.MinScoreSet {
 		minScore = s.config.MinScore
 	}
 
@@ -85,12 +88,17 @@ func (s *MemoryStore) hybridSearch(ctx context.Context, query string, filter Mem
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, err
 		}
-		// Gracefully handle empty index or other non-fatal search errors.
+		// Log and continue with keyword-only results so a transient
+		// HNSW issue does not turn into a silent partial-failure.
+		slog.WarnContext(ctx, "vector search failed, continuing with keyword-only results", "err", err)
 		vecResults = nil
 	}
 
 	// Stage 5: Keyword search.
-	keywordResults := s.inverted.Search(normalizedQuery, limit*3)
+	keywordResults, err := s.inverted.SearchContext(ctx, normalizedQuery, limit*3)
+	if err != nil {
+		return nil, fmt.Errorf("keyword search: %w", err)
+	}
 
 	// Stage 6: First-hop RRF fusion.
 	scores := rrfMerge(vecResults, keywordResults, s.config.RRFK)
@@ -302,6 +310,11 @@ func (s *MemoryStore) secondHopSearch(ctx context.Context, seeds []Memory, limit
 	}
 
 	for _, seed := range seeds {
+		// Check context cancellation between seeds.
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
 		// Fetch the seed's vector from storage (Memory.Vector is transient).
 		doc, err := s.coll.GetContext(ctx, seed.ID)
 		if err != nil {

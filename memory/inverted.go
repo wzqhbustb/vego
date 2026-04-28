@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sort"
 	"strings"
@@ -97,15 +98,15 @@ type RebuildEntry struct {
 	Terms []string
 }
 
-func (idx *InvertedIndex) RebuildBatch(entries []RebuildEntry) {
+func (idx *InvertedIndex) RebuildBatch(entries []RebuildEntry) error {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 
 	if idx.docCount != 0 {
-		panic("RebuildBatch called on non-empty index: caller must Clear() first")
+		return fmt.Errorf("RebuildBatch called on non-empty index: caller must Clear() first")
 	}
 	if len(entries) == 0 {
-		return
+		return nil
 	}
 
 	// Pre-size maps to avoid repeated rehashing during bulk insert.
@@ -127,6 +128,7 @@ func (idx *InvertedIndex) RebuildBatch(entries []RebuildEntry) {
 		idx.totalTerms += int64(len(e.Terms))
 		idx.docCount++
 	}
+	return nil
 }
 
 // Remove deletes a document and all its terms from the index.

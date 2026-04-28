@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -563,6 +564,7 @@ func TestMemoryStoreEmbedderNil(t *testing.T) {
 	tmpDir := t.TempDir()
 	s, err := Open(tmpDir,
 		WithDimension(128),
+		WithEmbedDims(128),
 		WithLLM("test-key", "", "test-model", 0.5),
 	)
 	if err != nil {
@@ -932,7 +934,9 @@ func TestContentHashIndexRebuildBatch(t *testing.T) {
 		{SessionID: "s2", Hash: "h1", MemoryID: "m3", Seq: 1},
 	}
 
-	idx.RebuildBatch(entries)
+	if err := idx.RebuildBatch(entries); err != nil {
+		t.Fatalf("RebuildBatch: %v", err)
+	}
 
 	if !idx.Has("s1", "h1") {
 		t.Error("expected s1:h1 to exist")
@@ -960,27 +964,28 @@ func TestContentHashIndexRebuildBatch(t *testing.T) {
 
 func TestContentHashIndexRebuildBatchEmpty(t *testing.T) {
 	idx := NewContentHashIndex()
-	idx.RebuildBatch(nil)
+	if err := idx.RebuildBatch(nil); err != nil {
+		t.Fatalf("RebuildBatch nil: %v", err)
+	}
 	if idx.Has("s1", "h1") {
 		t.Error("nil entries should not add anything")
 	}
-	idx.RebuildBatch([]HashIndexEntry{})
+	if err := idx.RebuildBatch([]HashIndexEntry{}); err != nil {
+		t.Fatalf("RebuildBatch empty: %v", err)
+	}
 	if idx.Has("s1", "h1") {
 		t.Error("empty entries should not add anything")
 	}
 }
 
-func TestContentHashIndexRebuildBatchPanicsOnNonEmpty(t *testing.T) {
+func TestContentHashIndexRebuildBatchErrorOnNonEmpty(t *testing.T) {
 	idx := NewContentHashIndex()
 	idx.Add("s1", "h1", "m1", 1)
 
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic on non-empty index")
-		}
-	}()
-
-	idx.RebuildBatch([]HashIndexEntry{{SessionID: "s2", Hash: "h2", MemoryID: "m2", Seq: 1}})
+	err := idx.RebuildBatch([]HashIndexEntry{{SessionID: "s2", Hash: "h2", MemoryID: "m2", Seq: 1}})
+	if err == nil {
+		t.Error("expected error on non-empty index")
+	}
 }
 
 func TestContentHashIndexRebuildBatchEquivalentToAdd(t *testing.T) {
@@ -992,11 +997,13 @@ func TestContentHashIndexRebuildBatchEquivalentToAdd(t *testing.T) {
 
 	// Build via RebuildBatch
 	idx2 := NewContentHashIndex()
-	idx2.RebuildBatch([]HashIndexEntry{
+	if err := idx2.RebuildBatch([]HashIndexEntry{
 		{SessionID: "s1", Hash: "h1", MemoryID: "m1", Seq: 1},
 		{SessionID: "s1", Hash: "h2", MemoryID: "m2", Seq: 3},
 		{SessionID: "s2", Hash: "h1", MemoryID: "m3", Seq: 2},
-	})
+	}); err != nil {
+		t.Fatalf("RebuildBatch: %v", err)
+	}
 
 	// Verify equivalence
 	for _, tc := range []struct{ sid, hash string }{
@@ -1012,5 +1019,111 @@ func TestContentHashIndexRebuildBatchEquivalentToAdd(t *testing.T) {
 		if idx1.MaxSeq(sid) != idx2.MaxSeq(sid) {
 			t.Errorf("MaxSeq(%s) mismatch: Add=%d RebuildBatch=%d", sid, idx1.MaxSeq(sid), idx2.MaxSeq(sid))
 		}
+	}
+}
+
+// ----------------------------------------------------------------------
+// StoreBatch error paths (Problem 3)
+// ----------------------------------------------------------------------
+
+func TestMemoryStoreStoreBatchEmbedError(t *testing.T) {
+	s := newTestStore(t)
+	// Do NOT set up mock embedder — embed calls will fail.
+	defer s.Close()
+
+	ctx := context.Background()
+	items := []StoreItem{
+		{Content: "first item", Tags: []string{"a"}},
+		{Content: "second item", Tags: []string{"b"}},
+	}
+
+	_, err := s.StoreBatch(ctx, items)
+	if err == nil {
+		t.Fatal("expected error when embedder is nil")
+	}
+	// The error should mention embed failure.
+	if !strings.Contains(err.Error(), "embed") {
+		t.Errorf("expected embed error, got: %v", err)
+	}
+}
+
+func TestMemoryStoreStoreBatchEmpty(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	defer s.Close()
+
+	ctx := context.Background()
+	mems, err := s.StoreBatch(ctx, nil)
+	if err != nil {
+		t.Fatalf("StoreBatch(nil): %v", err)
+	}
+	if len(mems) != 0 {
+		t.Errorf("expected 0 memories for nil input, got %d", len(mems))
+	}
+
+	mems, err = s.StoreBatch(ctx, []StoreItem{})
+	if err != nil {
+		t.Fatalf("StoreBatch(empty): %v", err)
+	}
+	if len(mems) != 0 {
+		t.Errorf("expected 0 memories for empty input, got %d", len(mems))
+	}
+}
+
+// ----------------------------------------------------------------------
+// Open error paths (Problem 5)
+// ----------------------------------------------------------------------
+
+func TestMemoryStoreOpenInvalidPath(t *testing.T) {
+	// Attempt to open a store at a path that cannot be created.
+	_, err := Open("/dev/null/impossible/path",
+		WithDimension(128),
+		WithEmbedding("key", "", "model", 128),
+	)
+	if err == nil {
+		t.Fatal("expected error for invalid path")
+	}
+}
+
+func TestMemoryStoreOpenPathResolution(t *testing.T) {
+	dir := t.TempDir()
+
+	// When WithDataDir is set to a non-default value, it overrides the path argument.
+	s, err := Open("ignored-path",
+		WithDataDir(dir),
+		WithDimension(128),
+		WithEmbedding("key", "", "model", 128),
+	)
+	if err != nil {
+		t.Fatalf("Open with WithDataDir: %v", err)
+	}
+	s.Close()
+
+	// When path is provided and DataDir is left at default, path is used.
+	dir2 := t.TempDir()
+	s2, err := Open(dir2,
+		WithDimension(128),
+		WithEmbedding("key", "", "model", 128),
+	)
+	if err != nil {
+		t.Fatalf("Open with explicit path: %v", err)
+	}
+	s2.Close()
+}
+
+func TestMemoryStoreOpenDistanceFuncs(t *testing.T) {
+	for _, df := range []string{"cosine", "l2", "ip"} {
+		t.Run(df, func(t *testing.T) {
+			dir := t.TempDir()
+			s, err := Open(dir,
+				WithDimension(128),
+				WithEmbedding("key", "", "model", 128),
+				WithDistanceFunc(df),
+			)
+			if err != nil {
+				t.Fatalf("Open with %s: %v", df, err)
+			}
+			s.Close()
+		})
 	}
 }
