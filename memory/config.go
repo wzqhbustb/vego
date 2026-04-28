@@ -28,7 +28,7 @@ type Config struct {
 
 	// Search
 	SearchLimit       int     // 默认 10
-	SearchOverFetch   int     // 默认 5，控制 SearchWithFilterContext 的过取倍数
+	SearchOverFetch   int     // 默认 3，控制 SearchWithFilterContext 的过取倍数
 	RRFK              float64 // 默认 60.0
 	MinScore          float64 // 默认 0.3（相似度 0-1）
 	SecondHopGate     float64 // 默认 0.02
@@ -62,7 +62,7 @@ func DefaultConfig() *Config {
 		EmbedModel:           "text-embedding-3-small",
 		EmbedDims:            1536,
 		SearchLimit:          10,
-		SearchOverFetch:      5,
+		SearchOverFetch:      3,
 		RRFK:                 60.0,
 		MinScore:             0.3,
 		SecondHopGate:        0.02,

@@ -1,550 +1,181 @@
-# Memory Package — Architecture Improvement Plan
+# Vego 架构改进事项
 
-## Overview
-
-The `memory/` package (~10,000 lines, 24 files, 87.3% test coverage) implements an Agent Memory Service on top of Vego (HNSW vector database). The following improvements target architectural weaknesses while preserving the existing public API.
-
----
-
-## 1. Interface Abstractions — Decouple God Object
-
-### Problem
-
-`MemoryStore` holds concrete types for every dependency, making it impossible to swap backends or mock components in isolation.
-
-```go
-// Current
-type MemoryStore struct {
-    db       *vego.DB
-    llm      *LLMClient
-    embedder *Embedder
-    inverted *InvertedIndex
-    ...
-}
-```
-
-### Proposed
-
-```go
-type VectorStore interface {
-    Collection(name string) (VectorCollection, error)
-    Close() error
-}
-
-type VectorCollection interface {
-    InsertContext(ctx context.Context, doc *vego.Document) error
-    InsertBatchContext(ctx context.Context, docs []*vego.Document) error
-    GetContext(ctx context.Context, id string) (*vego.Document, error)
-    UpdateContext(ctx context.Context, doc *vego.Document) error
-    SearchWithFilterContext(ctx context.Context, vec []float32, limit int, filter vego.Filter, opts ...vego.SearchOption) ([]vego.SearchResult, error)
-    ForEach(fn func(*vego.Document) bool) error
-    Len() int
-}
-
-type TextEmbedder interface {
-    Embed(ctx context.Context, text string) ([]float32, error)
-    Dims() int
-}
-
-type LLMService interface {
-    CompleteJSON(ctx context.Context, system, user string) (string, error)
-}
-
-type FullTextIndex interface {
-    SearchContext(ctx context.Context, query string, limit int) ([]ScoredID, error)
-    Add(id string, content string)
-    Remove(id string)
-    RebuildBatch(entries []RebuildEntry)
-    Len() int
-}
-
-type MemoryStore struct {
-    db       VectorStore
-    coll     VectorCollection
-    llm      LLMService
-    embedder TextEmbedder
-    inverted FullTextIndex
-    ...
-}
-```
-
-### Impact
-
-- Unit tests can use mock implementations instead of real HTTP servers
-- Vector backend can be swapped (pgvector, Elasticsearch, Qdrant)
-- LLM provider can be swapped (Anthropic, local Ollama) without touching core logic
-- Each component can be tested and benchmarked independently
+> 记录当前因 Vego 底层限制而无法在 memory 层完全解决的问题，供未来 Vego 演进参考。
+>
+> 创建日期：2026-04-28
 
 ---
 
-## 2. Composable Search Pipeline
+## 1. HNSW 批量插入缺乏事务回滚机制
 
-### Problem
+### 问题描述
 
-The 10-stage hybrid search is a single 150-line function. Stages cannot be reordered, skipped, extended, or individually tested.
+`DocumentStorage.InsertBatchContext`（Vego 层）的语义是"先校验全部文档，再逐条插入 HNSW"。但 HNSW 索引的插入是**立即生效且不可回滚**的——如果第 N 个文档的插入失败（如内存不足、维度不匹配、内部错误），前 N-1 个文档已经存在于 HNSW 索引中，而持久化层（列式存储）和 metadata JSON 尚未写入。
+
+```
+InsertBatchContext flow:
+  1. Validate all docs (dimension, etc.) ✅
+  2. For each doc:
+     a. storage.Put(doc)          → 写入 buffer（未 flush 到磁盘）
+     b. index.Add(doc.Vector)     → 立即写入 HNSW（不可逆）
+  3. If step 2b fails at doc N:
+     → docs 1..N-1 are in HNSW
+     → docs N..end are not
+     → metadata JSON not saved
+     → caller gets error, no partial success info
+```
+
+### 影响
+
+| 场景 | 后果 |
+|------|------|
+| `MemoryStore.StoreBatch` | 返回 error，但部分文档已进入 HNSW；重试可能产生重复向量 |
+| `MemoryStore.Bootstrap` | 同上；大数据量导入时风险更高 |
+| 重复向量 | HNSW 中存在多个相同 ID 的节点（Vego 用 DV 过滤旧版，但批量插入场景无旧版概念） |
+
+### 为什么 memory 层无法解决
+
+- HNSW 索引在 `index/hnsw.go` 中，memory 包不直接操作它
+- `index.Add()` 没有 "prepare + commit" 接口，无法模拟事务
+- HNSW 的图结构一旦建立连接（邻居关系），撤销需要 O(degree) 的局部重建，Go 实现中无此功能
+
+### 当前 Workaround（memory 层）
+
+1. **Pre-validation**：在调用 `InsertBatchContext` 前，对文档做结构校验（nil、空 ID、空 vector、维度匹配），提前排除明显错误
+2. **注释说明**：明确告知调用方 `InsertBatchContext` 是"全有或全无"，但 HNSW 层的失败可能导致部分副作用残留
+3. **错误信息增强**：返回的错误中包含文档数量和原始 Vego error，便于排查
 
 ```go
-// Current: monolithic
-func (s *MemoryStore) hybridSearch(ctx context.Context, query string, filter MemoryFilter) ([]Memory, error) {
-    // Stage 1-10 all inline
+// memory/memory.go
+for i, doc := range docs {
+    if doc == nil { return nil, fmt.Errorf("item %d: document is nil", i) }
+    if len(doc.Vector) != s.config.Dimension {
+        return nil, fmt.Errorf("item %d (%s): vector dimension mismatch", i, doc.ID)
+    }
+}
+
+if err := s.coll.InsertBatchContext(ctx, docs); err != nil {
+    return nil, fmt.Errorf("insert batch (%d items): %w", len(docs), err)
 }
 ```
 
-### Proposed
+### 建议的 Vego 层修复方案
+
+#### 方案 A：HNSW 批量插入的两阶段提交
 
 ```go
-type SearchStage func(ctx context.Context, state *SearchState) error
-
-type SearchState struct {
-    Query      string
-    Now        time.Time
-    Vector     []float32
-    Candidates map[string]Memory
-    Scores     map[string]float64
-    Results    []Memory
-    Config     SearchConfig
-    Filter     MemoryFilter
-    Limit      int
-}
-
-type Pipeline struct {
-    stages []SearchStage
-}
-
-func NewPipeline(stages ...SearchStage) *Pipeline {
-    return &Pipeline{stages: stages}
-}
-
-func (p *Pipeline) Execute(ctx context.Context, state *SearchState) error {
-    for i, stage := range p.stages {
-        if err := ctx.Err(); err != nil {
+func (c *Collection) InsertBatchContext(ctx context.Context, docs []*Document) error {
+    // Phase 1: 准备阶段 —— 只校验，不插入
+    for _, doc := range docs {
+        if err := doc.Validate(c.dimension); err != nil {
             return err
         }
-        if err := stage(ctx, state); err != nil {
-            return fmt.Errorf("stage %d: %w", i, err)
+    }
+
+    // Phase 2: 执行阶段 —— 先存 metadata + 列式存储，最后批量插入 HNSW
+    // 如果 HNSW 插入失败，metadata 层可以回滚（buffer 尚未 flush）
+    nodeIDs := make([]int, 0, len(docs))
+    for _, doc := range docs {
+        if err := c.storage.Put(doc); err != nil {
+            // 回滚已插入的 HNSW 节点（需要新 API）
+            c.index.RemoveBatch(nodeIDs)
+            return err
         }
-    }
-    return nil
-}
-
-// Each stage is a standalone function.
-var StageTemporalNormalize SearchStage = func(ctx context.Context, s *SearchState) error {
-    s.Query = NormalizeTemporalRecallQuery(s.Query, s.Now)
-    return nil
-}
-
-var StageVectorSearch SearchStage = func(ctx context.Context, s *SearchState) error { ... }
-var StageKeywordSearch SearchStage = func(ctx context.Context, s *SearchState) error { ... }
-var StageRRFFusion     SearchStage = func(ctx context.Context, s *SearchState) error { ... }
-var StageSecondHop     SearchStage = func(ctx context.Context, s *SearchState) error { ... }
-var StagePinnedBoost   SearchStage = func(ctx context.Context, s *SearchState) error { ... }
-var StageRecencyBoost  SearchStage = func(ctx context.Context, s *SearchState) error { ... }
-var StageGapStop       SearchStage = func(ctx context.Context, s *SearchState) error { ... }
-
-func (s *MemoryStore) buildDefaultPipeline() *Pipeline {
-    return NewPipeline(
-        StageTemporalNormalize,
-        StageVectorSearch,
-        StageKeywordSearch,
-        StageRRFFusion,
-        StageSecondHop,
-        StagePinnedBoost,
-        StageRecencyBoost,
-        StageGapStop,
-    )
-}
-```
-
-### Impact
-
-- Each stage is independently testable with a `SearchState` fixture
-- Users can inject custom stages (e.g., authorization filter, business-specific boost)
-- Pipeline can be configured per-query or per-deployment
-- Performance profiling becomes per-stage
-
----
-
-## 3. Fine-Grained Locking
-
-### Problem
-
-A single `sync.Mutex` serializes all write operations, including long-running batch inserts.
-
-```go
-// Current: all writes contend on s.mu
-func (s *MemoryStore) StoreRawMessages(...) {
-    s.mu.Lock()         // held for entire insert loop
-    defer s.mu.Unlock()
-    for _, p := range preparedList {
-        s.coll.InsertContext(ctx, doc)
-        s.inverted.Add(...)
-        s.contentHashIndex.Add(...)
-    }
-}
-```
-
-### Proposed
-
-Separate the inverted index and content hash index into a self-locking composite structure. The HNSW vector store already has internal locking.
-
-```go
-// IndexState bundles inverted + content-hash indexes with their own mutex.
-type IndexState struct {
-    mu       sync.RWMutex
-    inverted *InvertedIndex
-    hashes   *ContentHashIndex
-}
-
-func (is *IndexState) Index(id, content string) {
-    is.mu.Lock()
-    defer is.mu.Unlock()
-    is.inverted.Add(id, content)
-}
-
-func (is *IndexState) Deindex(id string) {
-    is.mu.Lock()
-    defer is.mu.Unlock()
-    is.inverted.Remove(id)
-}
-
-// MemoryStore retains s.mu for atomicity between HNSW insert and index update,
-// but the critical section is now much shorter.
-func (s *MemoryStore) Store(ctx context.Context, content string, tags []string) (*Memory, error) {
-    vec, _ := s.embed(ctx, content)
-    mem := &Memory{ID: vego.DocumentID(), Content: content, ...}
-    doc, _ := memoryToDoc(mem, vec)
-
-    // HNSW insert + index update are the only serialized section.
-    s.mu.Lock()
-    if err := s.coll.InsertContext(ctx, doc); err != nil {
-        s.mu.Unlock()
-        return nil, err
-    }
-    s.indexes.Index(mem.ID, mem.Content) // internal lock
-    s.mu.Unlock()
-
-    return mem, nil
-}
-```
-
-### Impact
-
-- Reduced contention for multi-agent ingest scenarios
-- `StoreRawMessages` can batch HNSW inserts then batch index updates
-- 2-5x throughput improvement with 4+ concurrent writers
-
----
-
-## 4. Grouped Configuration
-
-### Problem
-
-30+ config fields in a flat struct. Sub-configs (LLM, Embedding, Search) are mixed together.
-
-```go
-// Current
-type Config struct {
-    DataDir, Dimension             // storage
-    LLMAPIKey, LLMBaseURL, ...     // llm
-    EmbedAPIKey, EmbedBaseURL, ... // embedding
-    SearchLimit, RRFK, ...         // search (9 fields)
-    MaxFacts, MaxConversationRunes // ingest
-    DistanceFunc
-}
-```
-
-### Proposed
-
-```go
-type StorageConfig struct {
-    DataDir      string
-    Dimension    int
-    DistanceFunc string
-}
-
-type LLMConfig struct {
-    APIKey      string
-    BaseURL     string
-    Model       string
-    Temperature float64
-}
-
-type EmbedConfig struct {
-    APIKey  string
-    BaseURL string
-    Model   string
-    Dims    int
-}
-
-type SearchConfig struct {
-    Limit             int
-    OverFetch         int
-    RRFK              float64
-    MinScore          float64
-    SecondHopGate     float64
-    SecondHopWeight   float64
-    SecondHopTopN     int
-    PinnedBoost       float64
-    RecencyBoostWeek  float64
-    RecencyBoostMonth float64
-    GapStopRatio      float64
-}
-
-type IngestConfig struct {
-    MaxFacts             int
-    MaxConversationRunes int
-}
-
-type Config struct {
-    Storage   StorageConfig
-    LLM       LLMConfig
-    Embedding EmbedConfig
-    Search    SearchConfig
-    Ingest    IngestConfig
-}
-```
-
-Functional options remain flat for backward compatibility but internally populate sub-structs:
-
-```go
-func WithDimension(dim int) Option {
-    return func(c *Config) { c.Storage.Dimension = dim }
-}
-```
-
-A new grouped option is added for bulk configuration:
-
-```go
-func WithSearchConfig(sc SearchConfig) Option {
-    return func(c *Config) { c.Search = sc }
-}
-```
-
-### Impact
-
-- Sub-configs are independently validatable (`func (sc *SearchConfig) validate() error`)
-- Sub-configs can be passed directly to sub-components (no bridge functions needed)
-- Configuration file (YAML/JSON) maps naturally to the nested structure
-- `Config.ToLLMConfig()` and `Config.ToEmbedConfig()` bridge methods are removed
-
----
-
-## 5. Observability Interface
-
-### Problem
-
-`slog` is called directly throughout the codebase. No metrics, no tracing, no way to plug in production monitoring.
-
-```go
-// Current: slog scattered inline
-slog.WarnContext(ctx, "vector search failed, continuing with keyword-only results", "err", err)
-slog.InfoContext(ctx, "llm request completed", "model", c.model, "duration_ms", ...)
-slog.Error("embed request failed", "model", e.model, "error", err)
-```
-
-### Proposed
-
-```go
-type Observer interface {
-    // Search
-    OnSearchStage(ctx context.Context, stage string, duration time.Duration)
-    OnSearchComplete(ctx context.Context, results int, duration time.Duration)
-
-    // Ingest
-    OnIngest(ctx context.Context, mode IngestMode, added, updated, deleted, skipped int, duration time.Duration)
-
-    // LLM
-    OnLLMCall(ctx context.Context, model string, promptTokens, completionTokens int, duration time.Duration, err error)
-
-    // Embedding
-    OnEmbedCall(ctx context.Context, model string, duration time.Duration, err error)
-
-    // Reconcile
-    OnReconcileDecision(ctx context.Context, action string, duration time.Duration)
-
-    // Health
-    OnError(ctx context.Context, op string, err error)
-}
-
-// Default implementation uses slog.
-type SlogObserver struct{}
-
-// NoopObserver for tests.
-type NoopObserver struct{}
-func (NoopObserver) OnSearchStage(context.Context, string, time.Duration) {}
-// ...
-
-type MemoryStore struct {
-    ...
-    observer Observer
-}
-```
-
-Key call sites become:
-
-```go
-func (s *MemoryStore) hybridSearch(ctx context.Context, ...) ([]Memory, error) {
-    start := time.Now()
-    defer func() { s.observer.OnSearchComplete(ctx, len(results), time.Since(start)) }()
-
-    // Stage 2: Vector search
-    stageStart := time.Now()
-    vecResults, err := s.vectorSearch(ctx, vec, ...)
-    s.observer.OnSearchStage(ctx, "vector_search", time.Since(stageStart))
-    ...
-}
-```
-
-### Impact
-
-- Production deployments inject an OpenTelemetry Observer for metrics + tracing
-- All key operations have latency histograms in Prometheus/Grafana
-- Error rates trackable per operation
-- Testing uses NoopObserver (zero overhead)
-
----
-
-## 6. Embedding Cache
-
-### Problem
-
-Identical text is re-embedded multiple times within a single ingest cycle. `findCandidates` and `executeAction(ADD)` each call `embed(ctx, fact.Content)` for the same content.
-
-```go
-// Reconcile: same content embedded twice
-func (s *MemoryStore) Reconcile(...) {
-    // Phase 1: findCandidates → embed(fact.Content)  ← first call
-    // Phase 2: executeAction(ADD) → embed(mem.Content) ← same text, second call
-}
-```
-
-### Proposed
-
-```go
-type CachedEmbedder struct {
-    inner TextEmbedder
-    cache *lru.Cache[string, []float32]
-    mu    sync.RWMutex
-    hits  uint64
-    misses uint64
-}
-
-func NewCachedEmbedder(inner TextEmbedder, maxEntries int) *CachedEmbedder {
-    cache, _ := lru.New[string, []float32](maxEntries)
-    return &CachedEmbedder{inner: inner, cache: cache}
-}
-
-func (e *CachedEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
-    e.mu.RLock()
-    if vec, ok := e.cache.Get(text); ok {
-        e.mu.RUnlock()
-        atomic.AddUint64(&e.hits, 1)
-        return vec, nil
-    }
-    e.mu.RUnlock()
-
-    vec, err := e.inner.Embed(ctx, text)
-    if err != nil {
-        return nil, err
-    }
-
-    e.mu.Lock()
-    e.cache.Add(text, vec)
-    e.mu.Unlock()
-    atomic.AddUint64(&e.misses, 1)
-    return vec, nil
-}
-
-func (e *CachedEmbedder) Stats() (hits, misses uint64) {
-    return atomic.LoadUint64(&e.hits), atomic.LoadUint64(&e.misses)
-}
-```
-
-Integration:
-
-```go
-func Open(path string, opts ...Option) (*MemoryStore, error) {
-    ...
-    embedder := NewEmbedder(cfg.ToEmbedConfig())
-    if cfg.EmbedCacheSize > 0 {
-        embedder = NewCachedEmbedder(embedder, cfg.EmbedCacheSize)
-    }
-    s.embedder = embedder
-    ...
-}
-```
-
-### Impact
-
-- 30-50% reduction in embedding API calls for typical workloads
-- Cache hit rate exposed via `Stats()` for monitoring
-- Zero overhead when disabled (`EmbedCacheSize = 0`)
-
----
-
-## 7. Lifecycle Management
-
-### Problem
-
-No health check, no graceful shutdown beyond `Close()`, no way to inspect internal state programmatically.
-
-### Proposed
-
-```go
-type StoreStats struct {
-    TotalDocuments  int
-    ActiveMemories  int
-    ArchivedMemories int
-    DeletedMemories int
-    InvertedDocCount int
-    InvertedTermCount int
-    HashIndexEntries int
-    EmbedCacheHits   uint64
-    EmbedCacheMisses uint64
-}
-
-func (s *MemoryStore) Stats() StoreStats { ... }
-
-// Ready returns true if the store is fully initialized and accepting requests.
-func (s *MemoryStore) Ready() bool {
-    return s.db != nil && s.coll != nil && s.embedder != nil
-}
-
-// Healthy performs a lightweight liveness check (no external calls).
-func (s *MemoryStore) Healthy(ctx context.Context) error {
-    if err := ctx.Err(); err != nil {
-        return err
-    }
-    if s.db == nil {
-        return errors.New("database not initialized")
+        nodeID, err := c.index.Add(doc.Vector)
+        if err != nil {
+            c.index.RemoveBatch(nodeIDs)
+            return err
+        }
+        nodeIDs = append(nodeIDs, nodeID)
+        c.docToNode[doc.ID] = nodeID
     }
     return nil
 }
 ```
 
-### Impact
+**需要 Vego 新增：**
+- `HNSWIndex.RemoveBatch(nodeIDs []int)` —— 批量移除节点并修复邻居连接
 
-- Kubernetes readiness/liveness probes can call `Ready()` / `Healthy()`
-- `Stats()` enables dashboards and alert thresholds (e.g., "archived ratio > 50%")
-- Graceful shutdown: drain in-flight requests before `Close()`
+#### 方案 B：批量插入改为单条事务
+
+将 `InsertBatchContext` 的循环改为每个文档独立的事务边界：
+
+```go
+for _, doc := range docs {
+    if err := c.InsertContext(ctx, doc); err != nil {
+        // 返回部分成功信息：哪些已插入，哪些失败
+        return &PartialBatchError{Inserted: i, Err: err}
+    }
+}
+```
+
+**代价：** 性能下降（每次 Insert 都涉及锁竞争），但语义清晰。
+
+#### 方案 C：引入 Write-Ahead Log（WAL）
+
+在 Vego 存储层引入轻量级 WAL：
+
+```
+1. 将批量操作写入 WAL（append-only）
+2. 执行 HNSW 插入
+3. 执行 metadata 持久化
+4. 删除 WAL 记录
+
+崩溃恢复时：
+- 读取 WAL，重放未完成的操作
+- 或回滚已完成的操作
+```
+
+**代价：** 增加 ~200 行代码和一个 WAL 文件，但解决所有非原子操作问题。
+
+### 优先级评估
+
+| 方案 | 复杂度 | 性能影响 | 推荐度 |
+|------|--------|---------|--------|
+| A（两阶段 + HNSW RemoveBatch）| 中 | 无 | ⭐⭐⭐⭐ 首选 |
+| B（单条事务）| 低 | 显著下降 | ⭐⭐ 备选 |
+| C（WAL）| 高 | 轻微下降 | ⭐⭐⭐ 长期考虑 |
 
 ---
 
-## Implementation Roadmap
+## 2. 其他待 Vego 层支持的改进（记录备查）
 
-| Priority | Item | Effort | Rationale |
-|----------|------|--------|-----------|
-| **P0** | Observability Interface | 1–2 days | Non-negotiable for production. Enables monitoring, alerting, SLO tracking. |
-| **P0** | Embedding Cache | 0.5 days | Immediate cost savings on API calls. Low risk, high impact. |
-| **P1** | Interface Abstractions | 2–3 days | Unlocks mock testing and backend portability. Backward-compatible API change. |
-| **P1** | Grouped Config | 1 day | Cleaner API surface. Sub-configs become independently validatable. |
-| **P1** | Lifecycle (Stats/Health) | 0.5 days | Required for container orchestration and operational visibility. |
-| **P2** | Composable Pipeline | 3–4 days | Requires API redesign. Benefits users who need custom search stages. |
-| **P2** | Fine-Grained Locking | 2–3 days | Only needed when multi-agent concurrent ingest is a confirmed bottleneck. |
+### 2.1 Metadata 存储从 JSON 升级为 SQLite
 
-### Migration Notes
+详见 [vego_json_metadata_analysis.md](./vego_json_metadata_analysis.md)。
 
-- Interface abstractions are backward-compatible: the existing concrete types already satisfy the proposed interfaces.
-- Grouped Config can be phased: add sub-structs alongside the existing flat fields; deprecate flat accessors over 2 releases.
-- Pipeline composition can be introduced as an opt-in parallel API (`Search` vs `SearchWithPipeline`); the current `Search` remains unchanged.
-- All changes can be made incrementally without breaking the existing public API.
+核心诉求：
+- 增量更新（当前 JSON 全量覆盖）
+- 事务支持
+- 字段级索引（`state`、`type` 等）
+
+### 2.2 `Collection.GetBatchContext` 公共 API
+
+`Reconcile` 阶段的 `findCandidates` 需要对每个候选 ID 单独调用 `GetContext`，产生 N 次 DB round-trip。如果 Vego 暴露批量 Get API，可将 N 次降为 1 次。
+
+```go
+// 建议新增
+func (c *Collection) GetBatchContext(ctx context.Context, ids []string) (map[string]*Document, error)
+```
+
+### 2.3 HNSW 遍历中内联 Metadata 过滤
+
+当前 `SearchWithFilterContext` 的 `isExcluded` 回调每次都需要调用 `CheckVisibility`（涉及 storage 层锁）。如果 HNSW 搜索时能将 metadata 预加载到节点上，可在 HNSW 内部完成过滤，避免跨层回调开销。
+
+```go
+// 建议：HNSW 节点携带轻量 metadata
+type Node struct {
+    Vector   []float32
+    Metadata map[string]interface{} // 或 string 类型的过滤字段
+}
+```
+
+---
+
+## 维护说明
+
+本文档中的改进事项**不应在 memory 包内修复**——它们是 Vego 核心层的架构问题。当 Vego 层实现对应功能后，memory 包应：
+
+1. 移除相关的 workaround 代码
+2. 更新本文档，标记为"已解决"
+3. 如有 breaking change，发布 migration 指南

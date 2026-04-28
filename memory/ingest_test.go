@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	vego "github.com/wzqhbustb/vego/vego"
 )
@@ -469,4 +470,255 @@ func TestStoreRawMessagesConcurrent(t *testing.T) {
 	if stored != 0 {
 		t.Errorf("expected 0 (dedup), got %d", stored)
 	}
+}
+// ----------------------------------------------------------------------
+// Ingest entry-point coverage (non-integration)
+// ----------------------------------------------------------------------
+
+func TestIngest_ModeRaw(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+	req := IngestRequest{
+		Messages: []Message{
+			{Role: "user", Content: "hello world"},
+			{Role: "assistant", Content: "hi there"},
+		},
+		Mode:      ModeRaw,
+		SessionID: "sess-ingest-raw",
+	}
+
+	res, err := s.Ingest(ctx, req)
+	if err != nil {
+		t.Fatalf("Ingest ModeRaw: %v", err)
+	}
+	if res.Added != 2 {
+		t.Errorf("expected Added=2, got %d", res.Added)
+	}
+	if res.Updated != 0 || res.Deleted != 0 || res.Skipped != 0 {
+		t.Errorf("unexpected non-zero fields: %+v", res)
+	}
+
+	// Deduplication on second ingest
+	res2, err := s.Ingest(ctx, req)
+	if err != nil {
+		t.Fatalf("Ingest ModeRaw second time: %v", err)
+	}
+	if res2.Added != 0 {
+		t.Errorf("expected Added=0 (dedup), got %d", res2.Added)
+	}
+}
+
+func TestIngest_ModeNormal_MissingAgentID(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	_, err := s.Ingest(context.Background(), IngestRequest{
+		Messages: []Message{{Role: "user", Content: "test"}},
+		Mode:     ModeNormal,
+		AgentID:  "",
+	})
+	if err == nil {
+		t.Fatal("expected error for missing AgentID in ModeNormal")
+	}
+}
+
+func TestIngest_ModeRaw_MissingSessionID(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	_, err := s.Ingest(context.Background(), IngestRequest{
+		Messages: []Message{{Role: "user", Content: "test"}},
+		Mode:     ModeRaw,
+		SessionID: "",
+	})
+	if err == nil {
+		t.Fatal("expected error for missing SessionID in ModeRaw")
+	}
+}
+
+func TestIngest_UnknownMode(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	_, err := s.Ingest(context.Background(), IngestRequest{
+		Messages: []Message{{Role: "user", Content: "test"}},
+		Mode:     IngestMode(99),
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown ingest mode")
+	}
+}
+
+func TestIngest_Truncation(t *testing.T) {
+	s := newTestStore(t, WithIngestParams(10, 5))
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+	req := IngestRequest{
+		Messages: []Message{
+			{Role: "user", Content: "hello"},
+			{Role: "user", Content: "world"}, // total 10 runes, max=5 → drop "hello" (5)
+		},
+		Mode:      ModeRaw,
+		SessionID: "sess-truncate",
+	}
+
+	res, err := s.Ingest(ctx, req)
+	if err != nil {
+		t.Fatalf("Ingest with truncation: %v", err)
+	}
+	// "hello" (5 runes) dropped, "world" (5 runes) kept → 1 stored
+	if res.Added != 1 {
+		t.Errorf("expected Added=1 after truncation, got %d", res.Added)
+	}
+}
+
+// ----------------------------------------------------------------------
+// truncateMessages pure-function tests
+// ----------------------------------------------------------------------
+
+func TestTruncateMessages(t *testing.T) {
+	tests := []struct {
+		name     string
+		msgs     []Message
+		max      int
+		wantLen  int
+		wantLast string
+	}{
+		{
+			name:     "no truncation needed",
+			msgs:     []Message{{Role: "user", Content: "hi"}},
+			max:      10,
+			wantLen:  1,
+			wantLast: "hi",
+		},
+		{
+			name: "drop oldest",
+			msgs: []Message{
+				{Role: "user", Content: "hello"},
+				{Role: "user", Content: "world"},
+			},
+			max:      5,
+			wantLen:  1,
+			wantLast: "world",
+		},
+		{
+			name: "drop multiple oldest",
+			msgs: []Message{
+				{Role: "user", Content: "a"},
+				{Role: "user", Content: "bb"},
+				{Role: "user", Content: "ccc"},
+			},
+			max:      4,
+			wantLen:  1,
+			wantLast: "ccc",
+		},
+		{
+			name:     "single message exceeds limit",
+			msgs:     []Message{{Role: "user", Content: "hello world"}},
+			max:      5,
+			wantLen:  1,
+			wantLast: "hello world",
+		},
+		{
+			name:     "empty messages",
+			msgs:     []Message{},
+			max:      10,
+			wantLen:  0,
+			wantLast: "",
+		},
+		{
+			name:     "maxRunes zero means no limit",
+			msgs:     []Message{{Role: "user", Content: "hello"}},
+			max:      0,
+			wantLen:  1,
+			wantLast: "hello",
+		},
+		{
+			name:     "negative maxRunes means no limit",
+			msgs:     []Message{{Role: "user", Content: "hello"}},
+			max:      -1,
+			wantLen:  1,
+			wantLast: "hello",
+		},
+		{
+			name: "utf8 rune counting",
+			msgs: []Message{
+				{Role: "user", Content: "你好"},    // 2 runes
+				{Role: "user", Content: "世界"},    // 2 runes
+			},
+			max:      2,
+			wantLen:  1,
+			wantLast: "世界",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := truncateMessages(tt.msgs, tt.max)
+			if len(got) != tt.wantLen {
+				t.Fatalf("len=%d, want %d", len(got), tt.wantLen)
+			}
+			if tt.wantLen > 0 && got[len(got)-1].Content != tt.wantLast {
+				t.Errorf("last content=%q, want %q", got[len(got)-1].Content, tt.wantLast)
+			}
+		})
+	}
+}
+
+// ----------------------------------------------------------------------
+// Fuzzing: LLM JSON response parsing
+// ----------------------------------------------------------------------
+
+func FuzzParseJSONExtractedFacts(f *testing.F) {
+	// Seed corpus with valid and edge-case inputs.
+	f.Add(`[{"content":"hello","tags":["greeting"],"query_intent":false}]`)
+	f.Add(`[]`)
+	f.Add(`[{"content":"","tags":[],"query_intent":true}]`)
+	f.Add(`[{"content":"a","tags":["tag1","tag2"],"query_intent":false,"source_msg":0}]`)
+	f.Add(`[{"content":"with metadata","tags":[],"metadata":{"temporal":{"kind":"explicit_absolute"}}}]`)
+
+	f.Fuzz(func(t *testing.T, raw string) {
+		// ParseJSON[[]ExtractedFact] must never panic, regardless of input.
+		facts, err := ParseJSON[[]ExtractedFact](raw)
+		_ = facts
+		_ = err
+	})
+}
+
+func FuzzExtractFactsRaw(f *testing.F) {
+	f.Add("hello world")
+	f.Add("")
+	f.Add("{\"key\": \"not an array\"}")
+	f.Add(string([]byte{0xFF, 0xFE, 0xFD})) // invalid UTF-8
+
+	f.Fuzz(func(t *testing.T, content string) {
+		// extractFactsRaw must never panic, regardless of input.
+		msg := Message{Content: content, Timestamp: time.Now()}
+		facts := extractFactsRaw([]Message{msg})
+		if len(facts) != 1 {
+			t.Errorf("expected 1 fact, got %d", len(facts))
+		}
+	})
+}
+
+func FuzzParseJSONTags(f *testing.F) {
+	f.Add(`["tag1","tag2"]`)
+	f.Add(`[]`)
+	f.Add(`[""]`)
+	f.Add(`["tag with spaces"]`)
+
+	f.Fuzz(func(t *testing.T, raw string) {
+		// ParseJSON[[]string] must never panic.
+		tags, err := ParseJSON[[]string](raw)
+		_ = tags
+		_ = err
+	})
 }

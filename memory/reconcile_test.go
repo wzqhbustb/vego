@@ -20,7 +20,7 @@ import (
 func TestReconcileEmpty(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	result, err := s.Reconcile(context.Background(), "agent-1", nil)
 	if err != nil {
@@ -34,7 +34,7 @@ func TestReconcileEmpty(t *testing.T) {
 func TestReconcileQueryIntentFilter(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	facts := []ExtractedFact{
 		{Content: "search for something", QueryIntent: true},
@@ -56,7 +56,7 @@ func TestReconcileQueryIntentFilter(t *testing.T) {
 func TestReconcileHeuristicAdd(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 	s.llm = nil // force heuristic path
 
 	ctx := context.Background()
@@ -81,7 +81,7 @@ func TestReconcileHeuristicAdd(t *testing.T) {
 func TestReconcileHeuristicUpdate(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 	s.llm = nil // force heuristic path
 
 	ctx := context.Background()
@@ -129,7 +129,7 @@ func TestReconcileHeuristicUpdate(t *testing.T) {
 func TestReconcilePinnedProtectDelete(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 	s.llm = nil
 
 	ctx := context.Background()
@@ -174,7 +174,7 @@ func TestReconcilePinnedProtectDelete(t *testing.T) {
 func TestReconcilePinnedProtectUpdate(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 	s.llm = nil
 
 	ctx := context.Background()
@@ -214,7 +214,7 @@ func TestReconcilePinnedProtectUpdate(t *testing.T) {
 func TestReconcileMaxFacts(t *testing.T) {
 	s := newTestStore(t, WithIngestParams(2, 1000))
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 	s.llm = nil
 
 	facts := []ExtractedFact{
@@ -238,7 +238,7 @@ func TestReconcileMaxFacts(t *testing.T) {
 func TestReconcileNoop(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 	s.llm = nil
 
 	result := &IngestResult{}
@@ -259,7 +259,7 @@ func TestReconcileNoop(t *testing.T) {
 func TestReconcileDelete(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 	s.llm = nil
 
 	ctx := context.Background()
@@ -296,7 +296,7 @@ func TestReconcileDelete(t *testing.T) {
 func TestReconcileConcurrent(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 	s.llm = nil
 
 	ctx := context.Background()
@@ -380,7 +380,7 @@ func setupMockLLM(t *testing.T, s *MemoryStore, response string) {
 func TestReconcileLLMAdd(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	ctx := context.Background()
 	_, err := s.Store(ctx, "existing memory", []string{"tag"})
@@ -403,7 +403,7 @@ func TestReconcileLLMAdd(t *testing.T) {
 func TestReconcileLLMUpdate(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	ctx := context.Background()
 	mem, err := s.Store(ctx, "old content", []string{"tag"})
@@ -434,7 +434,7 @@ func TestReconcileLLMUpdate(t *testing.T) {
 func TestReconcileLLMDelete(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	ctx := context.Background()
 	mem, err := s.Store(ctx, "to delete", []string{"tag"})
@@ -465,7 +465,7 @@ func TestReconcileLLMDelete(t *testing.T) {
 func TestReconcileLLMNoop(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	ctx := context.Background()
 	_, err := s.Store(ctx, "keep this", []string{"tag"})
@@ -488,7 +488,7 @@ func TestReconcileLLMNoop(t *testing.T) {
 func TestReconcileLLMInvalidAction(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	ctx := context.Background()
 	_, err := s.Store(ctx, "existing", []string{"tag"})
@@ -511,7 +511,7 @@ func TestReconcileLLMInvalidAction(t *testing.T) {
 func TestReconcileLLMInvalidTargetID(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	ctx := context.Background()
 	_, err := s.Store(ctx, "existing", []string{"tag"})
@@ -542,7 +542,7 @@ func TestReconcileLLMInvalidTargetID(t *testing.T) {
 func TestReconcileUpdateNilMetadataOverlay(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 	s.llm = nil // force heuristic path
 
 	ctx := context.Background()
@@ -598,5 +598,325 @@ func TestReconcileUpdateNilMetadataOverlay(t *testing.T) {
 	}
 	if _, ok := newMem.Metadata["temporal"]; !ok {
 		t.Errorf("expected temporal metadata in new memory, got %v", newMem.Metadata)
+	}
+}
+
+// ----------------------------------------------------------------------
+// executeAction white-box tests (coverage gaps in action execution)
+// ----------------------------------------------------------------------
+
+func TestExecuteAction_UpdateWithoutTarget(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	result := &IngestResult{}
+	fact := &ExtractedFact{Content: "update content", Tags: []string{"a"}}
+	err := s.executeAction(context.Background(), "agent-1", fact, "UPDATE", "", result)
+	if err == nil {
+		t.Fatal("expected error for UPDATE without targetID")
+	}
+	if result.Updated != 0 {
+		t.Errorf("Updated should be 0, got %d", result.Updated)
+	}
+}
+
+func TestExecuteAction_UpdatePinnedTarget(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+
+	mem := &Memory{
+		ID:         vego.DocumentID(),
+		Content:    "pinned content",
+		MemoryType: TypePinned,
+		State:      StateActive,
+		Version:    1,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	vec, err := s.embed(ctx, mem.Content)
+	if err != nil {
+		t.Fatalf("embed: %v", err)
+	}
+	doc, err := memoryToDoc(mem, vec)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := s.coll.InsertContext(ctx, doc); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	s.inverted.Add(mem.ID, mem.Content)
+
+	result := &IngestResult{}
+	fact := &ExtractedFact{Content: "updated content", Tags: []string{"a"}}
+	err = s.executeAction(ctx, "agent-1", fact, "UPDATE", mem.ID, result)
+	if err != nil {
+		t.Fatalf("UPDATE on pinned should downgrade to ADD, got error: %v", err)
+	}
+	if result.Added != 1 {
+		t.Errorf("expected 1 Added (downgrade), got %+v", result)
+	}
+	if result.Updated != 0 {
+		t.Errorf("expected 0 Updated, got %d", result.Updated)
+	}
+}
+
+func TestExecuteAction_UpdateNonActiveTarget(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+
+	mem := &Memory{
+		ID:         vego.DocumentID(),
+		Content:    "archived content",
+		MemoryType: TypeInsight,
+		State:      StateArchived,
+		Version:    1,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	vec, err := s.embed(ctx, mem.Content)
+	if err != nil {
+		t.Fatalf("embed: %v", err)
+	}
+	doc, err := memoryToDoc(mem, vec)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := s.coll.InsertContext(ctx, doc); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	result := &IngestResult{}
+	fact := &ExtractedFact{Content: "updated content", Tags: []string{"a"}}
+	err = s.executeAction(ctx, "agent-1", fact, "UPDATE", mem.ID, result)
+	if err != nil {
+		t.Fatalf("UPDATE on non-active should downgrade to ADD, got error: %v", err)
+	}
+	if result.Added != 1 {
+		t.Errorf("expected 1 Added (downgrade), got %+v", result)
+	}
+}
+
+func TestExecuteAction_UpdateGetError(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	result := &IngestResult{}
+	fact := &ExtractedFact{Content: "content", Tags: []string{"a"}}
+	err := s.executeAction(context.Background(), "agent-1", fact, "UPDATE", "nonexistent", result)
+	if err == nil {
+		t.Fatal("expected error for UPDATE with non-existent target")
+	}
+}
+
+func TestExecuteAction_DeleteWithoutTarget(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	result := &IngestResult{}
+	fact := &ExtractedFact{Content: "delete me"}
+	err := s.executeAction(context.Background(), "agent-1", fact, "DELETE", "", result)
+	if err == nil {
+		t.Fatal("expected error for DELETE without targetID")
+	}
+	if result.Deleted != 0 {
+		t.Errorf("Deleted should be 0, got %d", result.Deleted)
+	}
+}
+
+func TestExecuteAction_DeletePinnedTarget(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+
+	mem := &Memory{
+		ID:         vego.DocumentID(),
+		Content:    "pinned content",
+		MemoryType: TypePinned,
+		State:      StateActive,
+		Version:    1,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	vec, err := s.embed(ctx, mem.Content)
+	if err != nil {
+		t.Fatalf("embed: %v", err)
+	}
+	doc, err := memoryToDoc(mem, vec)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := s.coll.InsertContext(ctx, doc); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	s.inverted.Add(mem.ID, mem.Content)
+
+	result := &IngestResult{}
+	fact := &ExtractedFact{Content: "delete me"}
+	err = s.executeAction(ctx, "agent-1", fact, "DELETE", mem.ID, result)
+	if err != nil {
+		t.Fatalf("DELETE on pinned should skip, got error: %v", err)
+	}
+	if result.Skipped != 1 {
+		t.Errorf("expected 1 Skipped, got %+v", result)
+	}
+	if result.Deleted != 0 {
+		t.Errorf("expected 0 Deleted, got %d", result.Deleted)
+	}
+}
+
+func TestExecuteAction_DeleteNonActiveTarget(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+
+	mem := &Memory{
+		ID:         vego.DocumentID(),
+		Content:    "archived content",
+		MemoryType: TypeInsight,
+		State:      StateArchived,
+		Version:    1,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	vec, err := s.embed(ctx, mem.Content)
+	if err != nil {
+		t.Fatalf("embed: %v", err)
+	}
+	doc, err := memoryToDoc(mem, vec)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := s.coll.InsertContext(ctx, doc); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	result := &IngestResult{}
+	fact := &ExtractedFact{Content: "delete me"}
+	err = s.executeAction(ctx, "agent-1", fact, "DELETE", mem.ID, result)
+	if err != nil {
+		t.Fatalf("DELETE on non-active should skip, got error: %v", err)
+	}
+	if result.Skipped != 1 {
+		t.Errorf("expected 1 Skipped, got %+v", result)
+	}
+}
+
+func TestExecuteAction_DeleteGetError(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	result := &IngestResult{}
+	fact := &ExtractedFact{Content: "delete me"}
+	err := s.executeAction(context.Background(), "agent-1", fact, "DELETE", "nonexistent", result)
+	if err == nil {
+		t.Fatal("expected error for DELETE with non-existent target")
+	}
+}
+
+func TestExecuteAction_UnknownAction(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	result := &IngestResult{}
+	fact := &ExtractedFact{Content: "hello"}
+	err := s.executeAction(context.Background(), "agent-1", fact, "INVALID", "", result)
+	if err == nil {
+		t.Fatal("expected error for unknown action")
+	}
+}
+
+// ----------------------------------------------------------------------
+// Reconcile error path tests
+// ----------------------------------------------------------------------
+
+func TestReconcile_SearchError(t *testing.T) {
+	s := newTestStore(t)
+	t.Cleanup(func() { s.Close() })
+
+	// Explicitly break the embedder to force a deterministic search error
+	// (rather than relying on HTTP 401 from the real OpenAI endpoint).
+	s.embedder = nil
+
+	facts := []ExtractedFact{{Content: "test fact"}}
+	result, err := s.Reconcile(context.Background(), "agent-1", facts)
+	if err != nil {
+		t.Fatalf("Reconcile should not fail on search error: %v", err)
+	}
+	// Without embedder: findCandidates returns error → candidates=nil.
+	// decideAction with no candidates → ADD → executeAction ADD also
+	// fails (embedder nil) → Skipped++.
+	if result.Skipped != 1 {
+		t.Errorf("expected 1 Skipped, got %+v", result)
+	}
+}
+
+func TestReconcile_DecideActionLLMError(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+	mem, err := s.Store(ctx, "existing content", nil)
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+
+	// LLM returns invalid chat response → CompleteJSON fails → decideAction returns error → ADD fallback.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`not-valid-json`))
+	}))
+	t.Cleanup(srv.Close)
+	s.llm = NewLLMClient(LLMConfig{
+		APIKey:  "test",
+		BaseURL: srv.URL,
+		Model:   "test-model",
+	})
+
+	facts := []ExtractedFact{{Content: "brand new fact"}}
+	result, err := s.Reconcile(ctx, "agent-1", facts)
+	if err != nil {
+		t.Fatalf("Reconcile should not fail: %v", err)
+	}
+	// Fallback to ADD after decideAction parse error.
+	if result.Added != 1 {
+		t.Errorf("expected 1 Added (fallback), got %+v", result)
+	}
+	_ = mem
+}
+
+
+// ----------------------------------------------------------------------
+// ADD error path test
+// ----------------------------------------------------------------------
+
+func TestExecuteAction_ADD_EmbedError(t *testing.T) {
+	s := newTestStore(t)
+	// Deliberately no mock embedder → embed will fail.
+	t.Cleanup(func() { s.Close() })
+
+	result := &IngestResult{}
+	fact := &ExtractedFact{Content: "brand new fact", Tags: []string{"test"}}
+	err := s.executeAction(context.Background(), "agent-1", fact, "ADD", "", result)
+	if err == nil {
+		t.Fatal("expected embed error for ADD without embedder")
+	}
+	if result.Added != 0 {
+		t.Errorf("Added should be 0 on error, got %d", result.Added)
 	}
 }

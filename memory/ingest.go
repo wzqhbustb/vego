@@ -262,6 +262,9 @@ func (s *MemoryStore) StoreRawMessages(ctx context.Context, sessionID string, me
 	nextSeq := s.contentHashIndex.MaxSeq(sessionID) + 1
 	stored := 0
 	for _, p := range preparedList {
+		if err := ctx.Err(); err != nil {
+			return stored, err
+		}
 		// Re-check dedup under lock: another goroutine may have inserted it.
 		if s.contentHashIndex.Has(sessionID, p.hash) {
 			continue

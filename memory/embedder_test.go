@@ -74,10 +74,8 @@ func TestEmbedSuccess(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(embeddingResponse{
-			Data: []struct {
-				Embedding []float32 `json:"embedding"`
-			}{
-				{Embedding: []float32{0.1, 0.2, 0.3, 0.4}},
+			Data: []embeddingData{
+				{Index: 0, Embedding: []float32{0.1, 0.2, 0.3, 0.4}},
 			},
 		}); err != nil {
 			t.Errorf("encode response: %v", err)
@@ -105,8 +103,21 @@ func TestEmbedSuccess(t *testing.T) {
 	if gotReq.Model != "test-model" {
 		t.Errorf("Request model: want test-model, got %s", gotReq.Model)
 	}
-	if gotReq.Input != "hello world" {
-		t.Errorf("Request input: want 'hello world', got %s", gotReq.Input)
+	var inputTexts []string
+	switch v := gotReq.Input.(type) {
+	case []string:
+		inputTexts = v
+	case []interface{}:
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				inputTexts = append(inputTexts, s)
+			}
+		}
+	case string:
+		inputTexts = []string{v}
+	}
+	if len(inputTexts) != 1 || inputTexts[0] != "hello world" {
+		t.Errorf("Request input: want ['hello world'], got %v", gotReq.Input)
 	}
 	if gotReq.EncodingFormat != "float" {
 		t.Errorf("Request encoding_format: want float, got %s", gotReq.EncodingFormat)
@@ -140,9 +151,7 @@ func TestEmbedNoData(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(embeddingResponse{
-			Data: []struct {
-				Embedding []float32 `json:"embedding"`
-			}{},
+			Data: []embeddingData{},
 		}); err != nil {
 			t.Errorf("encode response: %v", err)
 		}
@@ -164,10 +173,8 @@ func TestEmbedDimensionMismatch(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(embeddingResponse{
-			Data: []struct {
-				Embedding []float32 `json:"embedding"`
-			}{
-				{Embedding: []float32{0.1, 0.2}}, // only 2 dims, but expected 4
+			Data: []embeddingData{
+				{Index: 0, Embedding: []float32{0.1, 0.2}}, // only 2 dims, but expected 4
 			},
 		}); err != nil {
 			t.Errorf("encode response: %v", err)

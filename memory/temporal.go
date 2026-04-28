@@ -58,26 +58,31 @@ func NormalizeTemporalRecallQuery(query string, now time.Time) string {
 	return resolved
 }
 
+// temporalMetadataFrom extracts display and resolved_start from a
+// *TemporalMetadata (unit-test path) or map[string]interface{}
+// (post-JSON-round-trip production path).
+func temporalMetadataFrom(raw interface{}) (display, resolved string, ok bool) {
+	switch tm := raw.(type) {
+	case *TemporalMetadata:
+		// Preserve original behaviour: *TemporalMetadata is always honoured
+		// and empty-value handling is left to replaceResolvedDate.
+		return tm.Display, tm.ResolvedStart, true
+	case map[string]interface{}:
+		display, _ = tm["display"].(string)
+		resolved, _ = tm["resolved_start"].(string)
+		return display, resolved, display != "" && resolved != ""
+	}
+	return "", "", false
+}
+
 // TemporalRecallProjection replaces absolute ISO dates in content with
 // human-relative descriptions (e.g. "2026-04-21" → "昨天") for display.
 // It prefers metadata-driven replacement when available.
 func TemporalRecallProjection(content string, metadata map[string]interface{}, now time.Time) string {
 	if metadata != nil {
 		if raw, ok := metadata["temporal"]; ok {
-			switch tm := raw.(type) {
-			case *TemporalMetadata:
-				// This branch is primarily exercised in unit tests where
-				// TemporalMetadata is constructed directly.  After a JSON
-				// round-trip (memoryToDoc → docToMemory) the type becomes
-				// map[string]interface{}, so the production path hits the
-				// second branch below.
-				return replaceResolvedDate(content, tm.ResolvedStart, tm.Display)
-			case map[string]interface{}:
-				if display, _ := tm["display"].(string); display != "" {
-					if resolved, _ := tm["resolved_start"].(string); resolved != "" {
-						return replaceResolvedDate(content, resolved, display)
-					}
-				}
+			if display, resolved, ok := temporalMetadataFrom(raw); ok {
+				return replaceResolvedDate(content, resolved, display)
 			}
 		}
 	}

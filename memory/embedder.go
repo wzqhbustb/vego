@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -92,11 +93,36 @@ func (e *Embedder) Dims() int {
 	return e.dims
 }
 
-// embed performs the actual HTTP request.
-func (e *Embedder) embed(ctx context.Context, text string) ([]float32, error) {
+// EmbedBatch generates embedding vectors for multiple texts in a single API call.
+// Returns a slice of vectors in the same order as the input texts.
+func (e *Embedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	if len(texts) == 0 {
+		return nil, nil
+	}
+	start := time.Now()
+	vecs, err := e.embedBatch(ctx, texts)
+	if err != nil {
+		slog.Error("embed batch request failed",
+			"model", e.model,
+			"batch_size", len(texts),
+			"duration_ms", time.Since(start).Milliseconds(),
+			"error", err,
+		)
+		return nil, err
+	}
+	slog.Info("embed batch request completed",
+		"model", e.model,
+		"batch_size", len(texts),
+		"duration_ms", time.Since(start).Milliseconds(),
+	)
+	return vecs, nil
+}
+
+// embedBatch performs the actual batch HTTP request.
+func (e *Embedder) embedBatch(ctx context.Context, texts []string) ([][]float32, error) {
 	reqBody := embeddingRequest{
 		Model:          e.model,
-		Input:          text,
+		Input:          texts,
 		EncodingFormat: "float",
 	}
 
@@ -133,24 +159,54 @@ func (e *Embedder) embed(ctx context.Context, text string) ([]float32, error) {
 		return nil, fmt.Errorf("response has no data")
 	}
 
-	vec := result.Data[0].Embedding
-	if len(vec) != e.dims {
-		return nil, fmt.Errorf("dimension mismatch: expected %d, got %d", e.dims, len(vec))
+	// Sort by index to preserve input order.
+	sort.Slice(result.Data, func(i, j int) bool {
+		return result.Data[i].Index < result.Data[j].Index
+	})
+
+	vecs := make([][]float32, len(texts))
+	for _, d := range result.Data {
+		if d.Index < 0 || d.Index >= len(texts) {
+			return nil, fmt.Errorf("invalid index %d in response", d.Index)
+		}
+		if len(d.Embedding) != e.dims {
+			return nil, fmt.Errorf("dimension mismatch at index %d: expected %d, got %d", d.Index, e.dims, len(d.Embedding))
+		}
+		vecs[d.Index] = d.Embedding
 	}
 
-	return vec, nil
+	// Verify all slots filled.
+	for i, v := range vecs {
+		if v == nil {
+			return nil, fmt.Errorf("missing embedding at index %d", i)
+		}
+	}
+
+	return vecs, nil
+}
+
+// embed performs the actual HTTP request for a single text.
+func (e *Embedder) embed(ctx context.Context, text string) ([]float32, error) {
+	vecs, err := e.embedBatch(ctx, []string{text})
+	if err != nil {
+		return nil, err
+	}
+	return vecs[0], nil
 }
 
 // --- internal request/response types ---
 
 type embeddingRequest struct {
-	Model          string `json:"model"`
-	Input          string `json:"input"`
-	EncodingFormat string `json:"encoding_format,omitempty"`
+	Model          string      `json:"model"`
+	Input          interface{} `json:"input"`
+	EncodingFormat string      `json:"encoding_format,omitempty"`
+}
+
+type embeddingData struct {
+	Index     int       `json:"index"`
+	Embedding []float32 `json:"embedding"`
 }
 
 type embeddingResponse struct {
-	Data []struct {
-		Embedding []float32 `json:"embedding"`
-	} `json:"data"`
+	Data []embeddingData `json:"data"`
 }

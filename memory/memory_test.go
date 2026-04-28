@@ -75,7 +75,7 @@ func setupMockEmbedder(t testing.TB, s *MemoryStore, dims int) {
 
 func TestMemoryStoreOpenClose(t *testing.T) {
 	s := newTestStore(t)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	if s.db == nil {
 		t.Error("db should not be nil")
@@ -105,7 +105,7 @@ func TestMemoryStoreOpenInvalidConfig(t *testing.T) {
 func TestMemoryStoreStoreAndGet(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	ctx := context.Background()
 	mem, err := s.Store(ctx, "hello world", []string{"greeting"})
@@ -148,7 +148,7 @@ func TestMemoryStoreStoreAndGet(t *testing.T) {
 func TestMemoryStoreUpdate(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	ctx := context.Background()
 	old, err := s.Store(ctx, "original content", nil)
@@ -209,7 +209,7 @@ func TestMemoryStoreUpdate(t *testing.T) {
 func TestMemoryStoreDelete(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	ctx := context.Background()
 	mem, err := s.Store(ctx, "delete me", nil)
@@ -246,7 +246,7 @@ func TestMemoryStoreDelete(t *testing.T) {
 func TestMemoryStoreSearch(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	ctx := context.Background()
 	_, err := s.Store(ctx, "hello world", nil)
@@ -285,7 +285,7 @@ func TestMemoryStoreSearch(t *testing.T) {
 func TestMemoryStoreStoreBatch(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	ctx := context.Background()
 	items := []StoreItem{
@@ -315,7 +315,7 @@ func TestMemoryStoreStoreBatch(t *testing.T) {
 func TestMemoryStoreBootstrap(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	ctx := context.Background()
 	memories := []*Memory{
@@ -346,7 +346,7 @@ func TestMemoryStoreBootstrap(t *testing.T) {
 func TestMemoryStoreBootstrapEmpty(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	if err := s.Bootstrap(context.Background(), nil); err != nil {
 		t.Fatalf("Bootstrap empty: %v", err)
@@ -457,7 +457,7 @@ func TestMemoryStoreReopenRebuildsIndex(t *testing.T) {
 func TestMemoryStoreConcurrentStoreDelete(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	ctx := context.Background()
 	mem, err := s.Store(ctx, "concurrent test content", nil)
@@ -500,7 +500,7 @@ func TestMemoryStoreConcurrentStoreDelete(t *testing.T) {
 func TestMemoryStoreBootstrapWithVectors(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	ctx := context.Background()
 	vec := make([]float32, 128)
@@ -570,7 +570,7 @@ func TestMemoryStoreEmbedderNil(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	ctx := context.Background()
 	_, err = s.Store(ctx, "hello", nil)
@@ -590,7 +590,7 @@ func TestMemoryStoreEmbedderNil(t *testing.T) {
 func TestMemoryStoreSearchSkipsCorrupt(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	ctx := context.Background()
 	_, err := s.Store(ctx, "valid memory", nil)
@@ -681,7 +681,7 @@ func TestMemoryStoreCrashRecoveryPreviousID(t *testing.T) {
 func TestMemoryStoreUpdateDeleted(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	ctx := context.Background()
 	mem, err := s.Store(ctx, "to be deleted", nil)
@@ -701,7 +701,7 @@ func TestMemoryStoreUpdateDeleted(t *testing.T) {
 func TestMemoryStoreBootstrapNilElement(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	ctx := context.Background()
 	memories := []*Memory{
@@ -716,7 +716,7 @@ func TestMemoryStoreBootstrapNilElement(t *testing.T) {
 func TestMemoryStoreGetNonExistent(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	_, err := s.Get(context.Background(), "does-not-exist")
 	if err == nil {
@@ -727,7 +727,7 @@ func TestMemoryStoreGetNonExistent(t *testing.T) {
 func TestMemoryStoreDeleteNonExistent(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	if err := s.Delete(context.Background(), "does-not-exist"); err == nil {
 		t.Fatal("expected error for non-existent ID")
@@ -737,7 +737,7 @@ func TestMemoryStoreDeleteNonExistent(t *testing.T) {
 func TestMemoryStoreSearchNoResults(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	ctx := context.Background()
 	_, err := s.Store(ctx, "hello world", nil)
@@ -778,7 +778,7 @@ func TestMemoryStoreCloseTwice(t *testing.T) {
 func TestSeqMonotonic(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	ctx := context.Background()
 	sessionID := "sess-seq"
@@ -858,7 +858,7 @@ func TestSeqMonotonic(t *testing.T) {
 func TestDeleteSemanticsSearchInvisible(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	ctx := context.Background()
 	mem, err := s.Store(ctx, "searchable content", nil)
@@ -1029,7 +1029,7 @@ func TestContentHashIndexRebuildBatchEquivalentToAdd(t *testing.T) {
 func TestMemoryStoreStoreBatchEmbedError(t *testing.T) {
 	s := newTestStore(t)
 	// Do NOT set up mock embedder — embed calls will fail.
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	ctx := context.Background()
 	items := []StoreItem{
@@ -1050,7 +1050,7 @@ func TestMemoryStoreStoreBatchEmbedError(t *testing.T) {
 func TestMemoryStoreStoreBatchEmpty(t *testing.T) {
 	s := newTestStore(t)
 	setupMockEmbedder(t, s, 128)
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
 
 	ctx := context.Background()
 	mems, err := s.StoreBatch(ctx, nil)
@@ -1109,6 +1109,276 @@ func TestMemoryStoreOpenPathResolution(t *testing.T) {
 		t.Fatalf("Open with explicit path: %v", err)
 	}
 	s2.Close()
+}
+
+// ----------------------------------------------------------------------
+// archiveAndCreate error paths (coverage: rollback, concurrent state/pinned)
+// ----------------------------------------------------------------------
+
+func TestArchiveAndCreate_RollbackOnGetOld(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+	newMem := &Memory{
+		ID:         vego.DocumentID(),
+		Content:    "new content",
+		MemoryType: TypeInsight,
+		State:      StateActive,
+		Version:    1,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	vec := make([]float32, 128)
+	for i := range vec {
+		vec[i] = 0.1
+	}
+
+	err := s.archiveAndCreate(ctx, "nonexistent-id", newMem, vec)
+	if err == nil {
+		t.Fatal("expected error for non-existent oldID, got nil")
+	}
+
+	// Verify the new memory was rolled back (not left as orphan).
+	_, err = s.Get(ctx, newMem.ID)
+	if err == nil {
+		t.Error("new memory should have been rolled back (compensateInsert)")
+	}
+}
+
+func TestArchiveAndCreate_RollbackOnCorruptOld(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+
+	// Insert a corrupt document directly into Vego (no _data field).
+	corruptID := vego.DocumentID()
+	corruptDoc := &vego.Document{
+		ID:       corruptID,
+		Vector:   make([]float32, 128),
+		Metadata: map[string]interface{}{}, // missing "_data" → docToMemory fails
+	}
+	if err := s.coll.InsertContext(ctx, corruptDoc); err != nil {
+		t.Fatalf("insert corrupt doc: %v", err)
+	}
+
+	newMem := &Memory{
+		ID:         vego.DocumentID(),
+		Content:    "new content",
+		MemoryType: TypeInsight,
+		State:      StateActive,
+		Version:    1,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	vec := make([]float32, 128)
+
+	err := s.archiveAndCreate(ctx, corruptID, newMem, vec)
+	if err == nil {
+		t.Fatal("expected error for corrupt old document, got nil")
+	}
+
+	// Verify rollback.
+	_, err = s.Get(ctx, newMem.ID)
+	if err == nil {
+		t.Error("new memory should have been rolled back")
+	}
+}
+
+func TestArchiveAndCreate_ConcurrentStateChange(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+
+	// Store a memory normally.
+	old, err := s.Store(ctx, "original content", nil)
+	if err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+
+	// Simulate a concurrent state change: directly archive the old memory
+	// in Vego (bypassing MemoryStore.update) so that when archiveAndCreate
+	// re-reads it under lock, State != Active.
+	oldDoc, err := s.coll.GetContext(ctx, old.ID)
+	if err != nil {
+		t.Fatalf("get old doc: %v", err)
+	}
+	oldMem, err := docToMemory(oldDoc)
+	if err != nil {
+		t.Fatalf("decode old: %v", err)
+	}
+	oldMem.State = StateArchived
+	oldMem.UpdatedAt = time.Now()
+	archivedDoc, err := memoryToDoc(oldMem, oldDoc.Vector)
+	if err != nil {
+		t.Fatalf("marshal archived: %v", err)
+	}
+	if err := s.coll.UpdateContext(ctx, archivedDoc); err != nil {
+		t.Fatalf("update archived in vego: %v", err)
+	}
+
+	// Now call archiveAndCreate. The old memory is no longer active,
+	// so the new memory should be kept as a separate ADD (no error).
+	newMem := &Memory{
+		ID:         vego.DocumentID(),
+		Content:    "new content",
+		MemoryType: TypeInsight,
+		State:      StateActive,
+		Version:    1,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	vec := make([]float32, 128)
+	for i := range vec {
+		vec[i] = 0.1
+	}
+
+	err = s.archiveAndCreate(ctx, old.ID, newMem, vec)
+	if err != nil {
+		t.Fatalf("concurrent state change should not error (new kept as ADD): %v", err)
+	}
+
+	// Verify new memory exists.
+	got, err := s.Get(ctx, newMem.ID)
+	if err != nil {
+		t.Fatalf("new memory should exist: %v", err)
+	}
+	if got.State != StateActive {
+		t.Errorf("new memory state: want active, got %s", got.State)
+	}
+}
+
+func TestArchiveAndCreate_ConcurrentPinned(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+
+	// Store a memory.
+	old, err := s.Store(ctx, "original content", nil)
+	if err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+
+	// Simulate concurrent pin: change the old memory to TypePinned in Vego.
+	oldDoc, err := s.coll.GetContext(ctx, old.ID)
+	if err != nil {
+		t.Fatalf("get old doc: %v", err)
+	}
+	oldMem, err := docToMemory(oldDoc)
+	if err != nil {
+		t.Fatalf("decode old: %v", err)
+	}
+	oldMem.MemoryType = TypePinned
+	oldMem.UpdatedAt = time.Now()
+	pinnedDoc, err := memoryToDoc(oldMem, oldDoc.Vector)
+	if err != nil {
+		t.Fatalf("marshal pinned: %v", err)
+	}
+	if err := s.coll.UpdateContext(ctx, pinnedDoc); err != nil {
+		t.Fatalf("update pinned in vego: %v", err)
+	}
+
+	// archiveAndCreate should detect the pinned type and keep new as ADD.
+	newMem := &Memory{
+		ID:         vego.DocumentID(),
+		Content:    "new content",
+		MemoryType: TypeInsight,
+		State:      StateActive,
+		Version:    1,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	vec := make([]float32, 128)
+	for i := range vec {
+		vec[i] = 0.1
+	}
+
+	err = s.archiveAndCreate(ctx, old.ID, newMem, vec)
+	if err != nil {
+		t.Fatalf("concurrent pinned should not error (new kept as ADD): %v", err)
+	}
+
+	// Verify new memory exists and old is still pinned (not archived).
+	got, err := s.Get(ctx, newMem.ID)
+	if err != nil {
+		t.Fatalf("new memory should exist: %v", err)
+	}
+	if got.State != StateActive {
+		t.Errorf("new memory state: want active, got %s", got.State)
+	}
+	oldGot, err := s.Get(ctx, old.ID)
+	if err != nil {
+		t.Fatalf("old memory should still exist: %v", err)
+	}
+	if oldGot.MemoryType != TypePinned {
+		t.Errorf("old type: want pinned, got %s", oldGot.MemoryType)
+	}
+}
+
+// ----------------------------------------------------------------------
+// rebuildIndexes: panic recovery in worker
+// ----------------------------------------------------------------------
+
+// TestRebuildIndexesRecoverFromPanic verifies that a panic inside a rebuild
+// TestRebuildIndexesRecoverFromPanic verifies that a panic inside a rebuild
+// worker does not crash the entire rebuild. Uses testWorkerPanicHook to
+// inject a panic and exercise the recover path.
+func TestRebuildIndexesRecoverFromPanic(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+
+	// Insert healthy documents so the corpus is non-empty.
+	_, err := s.Store(ctx, "healthy document one", nil)
+	if err != nil {
+		t.Fatalf("Store 1: %v", err)
+	}
+	_, err = s.Store(ctx, "healthy document two", nil)
+	if err != nil {
+		t.Fatalf("Store 2: %v", err)
+	}
+
+	// Set the panic hook: panics once (only for the first document),
+	// then clears itself so subsequent documents proceed normally.
+	var mu sync.Mutex
+	panicCount := 0
+	testWorkerPanicHook = func() {
+		mu.Lock()
+		count := panicCount
+		panicCount++
+		mu.Unlock()
+		if count == 0 {
+			panic("injected panic for test coverage")
+		}
+	}
+	t.Cleanup(func() { testWorkerPanicHook = nil })
+
+	s.inverted.Clear()
+	s.contentHashIndex.Clear()
+
+	if err := s.rebuildIndexes(); err != nil {
+		t.Fatalf("rebuildIndexes: %v", err)
+	}
+
+	// Verify the panic hook was triggered.
+	if panicCount < 1 {
+		t.Error("panic hook was not triggered; recover path not exercised")
+	}
+
+	// Verify remaining healthy documents are still indexed after rebuild
+	// (the panicked doc is skipped via sentinel; the second doc is indexed).
+	if s.inverted.Len() < 1 {
+		t.Error("inverted index should contain at least 1 document after rebuild")
+	}
 }
 
 func TestMemoryStoreOpenDistanceFuncs(t *testing.T) {

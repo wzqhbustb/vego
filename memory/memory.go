@@ -15,6 +15,19 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
+// testWorkerPanicHook is set by tests to exercise the panic-recovery path
+// in rebuildIndexes workers. It is called after a successful docToMemory
+// (before tokenize) from multiple concurrent worker goroutines.
+//
+// Callers MUST provide their own synchronization (e.g., sync.Mutex) if the
+// hook accesses shared state. The hook is called once per document, so
+// limit side effects (e.g., panic only on the first invocation) to avoid
+// skipping all documents.
+//
+// Parallel tests MUST NOT set this hook concurrently — it is package-level
+// and not safe for concurrent assignment. Use t.Cleanup to restore it to nil.
+var testWorkerPanicHook func()
+
 // ----------------------------------------------------------------------
 // ContentHashIndex
 // ----------------------------------------------------------------------
@@ -234,6 +247,17 @@ func (s *MemoryStore) Store(ctx context.Context, content string, tags []string) 
 // Get retrieves a memory by ID.
 func (s *MemoryStore) Get(ctx context.Context, id string) (*Memory, error) {
 	doc, err := s.coll.GetContext(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("get: %w", err)
+	}
+	return docToMemory(doc)
+}
+
+// getWithoutVector retrieves a memory without reading the vector from
+// column storage. Used by hybrid search to cheaply resolve keyword-only
+// candidates that need Content/State/Type/UpdatedAt but not the vector.
+func (s *MemoryStore) getWithoutVector(ctx context.Context, id string) (*Memory, error) {
+	doc, err := s.coll.GetDocumentWithoutVector(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("get: %w", err)
 	}
@@ -545,12 +569,32 @@ func (s *MemoryStore) StoreBatch(ctx context.Context, items []StoreItem) ([]Memo
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Pre-validate at application layer so that validation failures
+	// identify the specific item rather than surfacing a generic
+	// Vego error with no per-document context.
+	for i, doc := range docs {
+		if doc == nil {
+			return nil, fmt.Errorf("item %d: document is nil", i)
+		}
+		if doc.ID == "" {
+			return nil, fmt.Errorf("item %d: document ID is empty", i)
+		}
+		if len(doc.Vector) == 0 {
+			return nil, fmt.Errorf("item %d (%s): vector is empty", i, doc.ID)
+		}
+		if len(doc.Vector) != s.config.Dimension {
+			return nil, fmt.Errorf("item %d (%s): vector dimension mismatch: expected %d, got %d",
+				i, doc.ID, s.config.Dimension, len(doc.Vector))
+		}
+	}
+
 	// InsertBatchContext is all-or-nothing: Vego validates all docs first,
-	// then inserts them one-by-one into HNSW. If any insertion fails, none
-	// are persisted. The caller receives a single error with no partial
-	// success information, so retries may produce duplicates.
+	// then inserts them one-by-one into HNSW. If any insertion fails, no
+	// documents are persisted. The pre-validation above catches structural
+	// problems before reaching Vego, so errors from this call are typically
+	// storage-layer issues (disk full, corruption).
 	if err := s.coll.InsertBatchContext(ctx, docs); err != nil {
-		return nil, fmt.Errorf("insert batch: %w", err)
+		return nil, fmt.Errorf("insert batch (%d items): %w", len(docs), err)
 	}
 
 	for i := range mems {
@@ -610,8 +654,27 @@ func (s *MemoryStore) Bootstrap(ctx context.Context, memories []*Memory) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Pre-validate before calling InsertBatchContext so that
+	// validation failures identify the specific item.
+	for i, doc := range docs {
+		if doc == nil {
+			return fmt.Errorf("bootstrap item %d (%s): document is nil",
+				i, memories[i].ID)
+		}
+		if doc.ID == "" {
+			return fmt.Errorf("bootstrap item %d: document ID is empty", i)
+		}
+		if len(doc.Vector) == 0 {
+			return fmt.Errorf("bootstrap item %d (%s): vector is empty", i, doc.ID)
+		}
+		if len(doc.Vector) != s.config.Dimension {
+			return fmt.Errorf("bootstrap item %d (%s): vector dimension mismatch: expected %d, got %d",
+				i, doc.ID, s.config.Dimension, len(doc.Vector))
+		}
+	}
+
 	if err := s.coll.InsertBatchContext(ctx, docs); err != nil {
-		return fmt.Errorf("insert batch: %w", err)
+		return fmt.Errorf("insert batch (%d items): %w", len(docs), err)
 	}
 
 	for _, mem := range memories {
@@ -629,6 +692,13 @@ func (s *MemoryStore) embed(ctx context.Context, text string) ([]float32, error)
 		return nil, fmt.Errorf("embedder not configured")
 	}
 	return s.embedder.Embed(ctx, text)
+}
+
+func (s *MemoryStore) embedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	if s.embedder == nil {
+		return nil, fmt.Errorf("embedder not configured")
+	}
+	return s.embedder.EmbedBatch(ctx, texts)
 }
 
 // rebuildIndexes rebuilds the inverted index and ContentHashIndex from
@@ -679,6 +749,10 @@ func (s *MemoryStore) rebuildIndexes() error {
 					if err != nil {
 						slog.Warn("skip corrupt document during rebuild", "id", doc.ID, "err", err)
 						return
+					}
+					// Test hook: if set, panics to exercise the recover path.
+					if testWorkerPanicHook != nil {
+						testWorkerPanicHook()
 					}
 					var terms []string
 					if m.State == StateActive {
@@ -822,6 +896,11 @@ func (s *MemoryStore) rebuildIndexes() error {
 
 // archiveAndCreate performs the two-phase update: insert new memory,
 // then archive the old one. Caller must not hold s.mu.
+//
+// If archiving the old memory fails (e.g. GetContext, decode, or UpdateContext
+// errors), the new memory is rolled back via compensateInsert to prevent an
+// orphan. Pinned memories and concurrent state changes are not rollback
+// triggers — the new memory is intentionally kept as a separate ADD.
 func (s *MemoryStore) archiveAndCreate(ctx context.Context, oldID string, newMem *Memory, newVec []float32) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -837,34 +916,42 @@ func (s *MemoryStore) archiveAndCreate(ctx context.Context, oldID string, newMem
 	}
 	s.inverted.Add(newMem.ID, newMem.Content)
 
-	// Step 2: archive old memory.
+	// Step 2: archive old memory. If any step fails (excluding concurrent
+	// state-change and pinned-target cases), compensate by removing the
+	// new memory to avoid leaving an orphan.
 	oldDoc, err := s.coll.GetContext(ctx, oldID)
 	if err != nil {
-		slog.Warn("archive old memory failed, orphan created", "old_id", oldID, "new_id", newMem.ID, "err", err)
+		slog.Error("archiveAndCreate: get old memory failed, rolling back new memory",
+			"old_id", oldID, "new_id", newMem.ID, "err", err)
+		s.compensateInsert(newMem.ID)
 		return fmt.Errorf("archive old memory: get old: %w", err)
 	}
 
 	oldMem, err := docToMemory(oldDoc)
 	if err != nil {
-		slog.Warn("corrupt old memory during archive", "old_id", oldID, "err", err)
+		slog.Error("archiveAndCreate: corrupt old memory, rolling back new memory",
+			"old_id", oldID, "new_id", newMem.ID, "err", err)
+		s.compensateInsert(newMem.ID)
 		return fmt.Errorf("archive old memory: decode old: %w", err)
 	}
 
-	// Re-verify state and type under lock: a concurrent Delete/Update may
-	// have changed the state between the caller's initial read (outside
-	// s.mu) and this re-read under s.mu.  Similarly, a concurrent pin
-	// operation may have changed MemoryType to TypePinned.
-	// If the state is no longer active (or memory became pinned), the new
-	// memory has already been inserted successfully. Returning an error
-	// would orphan it, so we log a warning and return nil — the new
-	// memory remains searchable as a separate entry (equivalent to ADD).
+	// Re-verify state under lock: a concurrent Delete/Update may have
+	// changed the state between the caller's initial read (outside s.mu)
+	// and this re-read under s.mu.
+	// If the state is no longer active, the new memory has already been
+	// inserted successfully. Returning an error would orphan it, so we
+	// log a warning and return nil — the new memory remains searchable
+	// as a separate entry (equivalent to ADD).
 	if oldMem.State != StateActive {
-		slog.Warn("archiveAndCreate: old memory state changed concurrently, new memory already inserted",
+		slog.Warn("archiveAndCreate: old memory state changed concurrently, new memory kept as separate entry",
 			"old_id", oldID, "new_id", newMem.ID, "state", oldMem.State)
 		return nil
 	}
+	// Pinned memories must not be archived. The caller (update) already
+	// checked, but a concurrent pin operation may have changed the type.
+	// Keep the new memory as a separate ADD rather than rolling back.
 	if oldMem.MemoryType == TypePinned {
-		slog.Warn("archiveAndCreate: target became pinned concurrently, skipping archive (new memory kept as separate entry)",
+		slog.Warn("archiveAndCreate: target became pinned concurrently, new memory kept as separate entry",
 			"old_id", oldID, "new_id", newMem.ID)
 		return nil
 	}
@@ -875,15 +962,63 @@ func (s *MemoryStore) archiveAndCreate(ctx context.Context, oldID string, newMem
 
 	archivedDoc, err := memoryToDoc(oldMem, oldDoc.Vector)
 	if err != nil {
-		slog.Warn("marshal archived memory failed", "old_id", oldID, "err", err)
+		slog.Error("archiveAndCreate: marshal archived memory failed, rolling back new memory",
+			"old_id", oldID, "new_id", newMem.ID, "err", err)
+		s.compensateInsert(newMem.ID)
 		return fmt.Errorf("archive old memory: marshal: %w", err)
 	}
 
 	if err := s.coll.UpdateContext(ctx, archivedDoc); err != nil {
-		slog.Warn("archive old memory state update failed", "old_id", oldID, "err", err)
+		slog.Error("archiveAndCreate: update archived memory failed, rolling back new memory",
+			"old_id", oldID, "new_id", newMem.ID, "err", err)
+		s.compensateInsert(newMem.ID)
 		return fmt.Errorf("archive old memory: update: %w", err)
 	}
 	s.inverted.Remove(oldID)
 
+	return nil
+}
+
+// compensateInsert removes a memory that was just inserted (rollback
+// for when archiveAndCreate fails after inserting the new memory).
+// Caller must hold s.mu.
+func (s *MemoryStore) compensateInsert(id string) {
+	s.inverted.Remove(id)
+	if err := s.coll.DeleteContext(context.Background(), id); err != nil {
+		slog.Warn("compensateInsert: DeleteContext failed, trying soft-delete fallback",
+			"id", id, "err", err)
+		// Fallback: soft-delete via UpdateContext so the orphan at least
+		// becomes invisible to search (state=deleted).
+		if err := s.softDelete(context.Background(), id); err != nil {
+			slog.Error("compensateInsert: all rollback attempts failed, orphan remains active",
+				"id", id, "soft_delete_err", err)
+		}
+	}
+}
+
+// softDelete changes a memory's state to deleted via UpdateContext
+// (Vego MarkDeleted + Put with updated metadata). This is used as a
+// fallback when DeleteContext fails, ensuring the memory becomes
+// invisible to search even if the docToNode mapping could not be
+// removed.
+func (s *MemoryStore) softDelete(ctx context.Context, id string) error {
+	doc, err := s.coll.GetContext(ctx, id)
+	if err != nil {
+		return fmt.Errorf("get for soft-delete: %w", err)
+	}
+	m, err := docToMemory(doc)
+	if err != nil {
+		return fmt.Errorf("decode for soft-delete: %w", err)
+	}
+	m.State = StateDeleted
+	m.UpdatedAt = time.Now()
+	delDoc, err := memoryToDoc(m, doc.Vector)
+	if err != nil {
+		return fmt.Errorf("marshal for soft-delete: %w", err)
+	}
+	if err := s.coll.UpdateContext(ctx, delDoc); err != nil {
+		return fmt.Errorf("UpdateContext for soft-delete: %w", err)
+	}
+	s.inverted.Remove(id)
 	return nil
 }

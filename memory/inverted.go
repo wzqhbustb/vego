@@ -27,10 +27,10 @@ type ScoredID struct {
 // Thread-safe: all methods are safe for concurrent use.
 type InvertedIndex struct {
 	mu         sync.RWMutex
-	index      map[string][]string // term → []docID (with duplicates for tf)
-	docTerms   map[string][]string // docID → []term (for cleanup on Remove)
-	docLen     map[string]int      // docID → term count
-	totalTerms int64               // sum of all docLens
+	index      map[string]map[string]int // term → docID → tf
+	docTerms   map[string][]string       // docID → []term (for cleanup on Remove)
+	docLen     map[string]int            // docID → term count
+	totalTerms int64                     // sum of all docLens
 	docCount   int
 	k1         float64
 	b          float64
@@ -39,7 +39,7 @@ type InvertedIndex struct {
 // NewInvertedIndex creates an empty in-memory inverted index.
 func NewInvertedIndex() *InvertedIndex {
 	return &InvertedIndex{
-		index:    make(map[string][]string),
+		index:    make(map[string]map[string]int),
 		docTerms: make(map[string][]string),
 		docLen:   make(map[string]int),
 		k1:       defaultK1,
@@ -82,7 +82,10 @@ func (idx *InvertedIndex) Add(id, content string) {
 	}
 
 	for _, term := range terms {
-		idx.index[term] = append(idx.index[term], id)
+		if idx.index[term] == nil {
+			idx.index[term] = make(map[string]int)
+		}
+		idx.index[term][id]++
 	}
 	idx.docTerms[id] = terms
 	idx.docLen[id] = len(terms)
@@ -114,14 +117,17 @@ func (idx *InvertedIndex) RebuildBatch(entries []RebuildEntry) error {
 	idx.docLen = make(map[string]int, len(entries))
 	// Heuristic: mixed CJK/English content yields ~3-5 unique terms per doc
 	// on average after stop-word filtering. Over-allocation is harmless.
-	idx.index = make(map[string][]string, len(entries)*4)
+	idx.index = make(map[string]map[string]int, len(entries)*4)
 
 	for _, e := range entries {
 		if e.ID == "" || len(e.Terms) == 0 {
 			continue
 		}
 		for _, term := range e.Terms {
-			idx.index[term] = append(idx.index[term], e.ID)
+			if idx.index[term] == nil {
+				idx.index[term] = make(map[string]int)
+			}
+			idx.index[term][e.ID]++
 		}
 		idx.docTerms[e.ID] = e.Terms
 		idx.docLen[e.ID] = len(e.Terms)
@@ -152,25 +158,9 @@ func (idx *InvertedIndex) removeLocked(id string) {
 		termFreq[term]++
 	}
 
-	for term, count := range termFreq {
-		postings := idx.index[term]
-		removed := 0
-		writeIdx := 0
-		for _, docID := range postings {
-			if docID == id && removed < count {
-				removed++
-				continue
-			}
-			postings[writeIdx] = docID
-			writeIdx++
-		}
-		// Zero out removed slots to allow GC of string references.
-		for i := writeIdx; i < len(postings); i++ {
-			postings[i] = ""
-		}
-		postings = postings[:writeIdx]
-		idx.index[term] = postings
-		if len(postings) == 0 {
+	for term := range termFreq {
+		delete(idx.index[term], id)
+		if len(idx.index[term]) == 0 {
 			delete(idx.index, term)
 		}
 	}
@@ -214,7 +204,7 @@ func (idx *InvertedIndex) SearchContext(ctx context.Context, query string, limit
 	// Deduplicate query terms and collect postings.
 	seenTerms := make(map[string]struct{}, len(queryTerms))
 	type termPostings struct {
-		postings []string
+		postings map[string]int
 	}
 	termsData := make([]termPostings, 0, len(queryTerms))
 	docLenSnap := make(map[string]int)
@@ -228,15 +218,15 @@ func (idx *InvertedIndex) SearchContext(ctx context.Context, query string, limit
 		if !ok {
 			continue
 		}
-		// Deep-copy postings so we can release the lock before scoring.
-		pcopy := make([]string, len(postings))
-		copy(pcopy, postings)
-		termsData = append(termsData, termPostings{postings: pcopy})
-		for _, docID := range pcopy {
+		// Deep-copy postings map so we can release the lock before scoring.
+		pcopy := make(map[string]int, len(postings))
+		for docID, tf := range postings {
+			pcopy[docID] = tf
 			if _, ok := docLenSnap[docID]; !ok {
 				docLenSnap[docID] = idx.docLen[docID]
 			}
 		}
+		termsData = append(termsData, termPostings{postings: pcopy})
 	}
 	k1 := idx.k1
 	b := idx.b
@@ -256,16 +246,8 @@ func (idx *InvertedIndex) SearchContext(ctx context.Context, query string, limit
 		default:
 		}
 
-		// Compute term frequency per document; len(tfMap) is the true df.
-		tfMap := make(map[string]int, len(td.postings))
-		for _, docID := range td.postings {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			default:
-			}
-			tfMap[docID]++
-		}
+		// postings is already map[docID]tf — no counting needed.
+		tfMap := td.postings
 		df := len(tfMap)
 		idf := math.Log((float64(docCount)-float64(df)+0.5)/(float64(df)+0.5) + 1.0)
 
@@ -311,7 +293,7 @@ func (idx *InvertedIndex) DocCount() int {
 func (idx *InvertedIndex) Clear() {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-	idx.index = make(map[string][]string)
+	idx.index = make(map[string]map[string]int)
 	idx.docTerms = make(map[string][]string)
 	idx.docLen = make(map[string]int)
 	idx.totalTerms = 0

@@ -348,6 +348,69 @@ func (c *Collection) GetContext(ctx context.Context, id string) (*Document, erro
 	return c.storage.Get(id)
 }
 
+// GetDocumentWithoutVector retrieves a document's metadata without reading
+// the vector from column storage. This is an O(1) pure-memory operation
+// suitable for paths that only need ID + Metadata (e.g. keyword search
+// candidate resolution, filter-only lookups).
+//
+// The returned Document has a nil Vector. Callers must not modify the
+// Metadata map (it is an internal reference protected by the INVARIANT
+// that metadata maps are never mutated in-place).
+func (c *Collection) GetDocumentWithoutVector(ctx context.Context, id string) (*Document, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	metadata, ok := c.storage.GetMetadataOnly(id)
+	if !ok {
+		return nil, ErrDocumentNotFound
+	}
+	return &Document{
+		ID:       id,
+		Vector:   nil,
+		Metadata: metadata,
+	}, nil
+}
+
+// GetBatchDocumentsWithoutVector is the batch version of
+// GetDocumentWithoutVector. It fetches metadata for multiple documents
+// without reading vectors from column storage.
+func (c *Collection) GetBatchDocumentsWithoutVector(ctx context.Context, ids []string) (map[string]*Document, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	results := make(map[string]*Document, len(ids))
+	for _, id := range ids {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		metadata, ok := c.storage.GetMetadataOnly(id)
+		if !ok {
+			continue
+		}
+		results[id] = &Document{
+			ID:       id,
+			Vector:   nil,
+			Metadata: metadata,
+		}
+	}
+	return results, nil
+}
+
 // ForEach iterates over all valid (non-deleted) documents in the collection.
 // The callback receives each document; returning false stops iteration early.
 // Documents are provided in an unspecified order.

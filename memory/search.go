@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"sync"
 	"time"
 
 	vego "github.com/wzqhbustb/vego/vego"
@@ -83,7 +84,7 @@ func (s *MemoryStore) hybridSearch(ctx context.Context, query string, filter Mem
 	if err != nil {
 		return nil, fmt.Errorf("embed query: %w", err)
 	}
-	vecResults, err := s.vectorSearch(ctx, vec, limit*3, minScore)
+	vecResults, err := s.vectorSearch(ctx, vec, limit, minScore)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, err
@@ -113,7 +114,7 @@ func (s *MemoryStore) hybridSearch(ctx context.Context, query string, filter Mem
 		if _, ok := candidates[si.ID]; ok {
 			continue
 		}
-		m, err := s.Get(ctx, si.ID)
+		m, err := s.getWithoutVector(ctx, si.ID)
 		if err != nil {
 			slog.Warn("skip vanished keyword result", "id", si.ID, "err", err)
 			continue
@@ -300,48 +301,68 @@ func (s *MemoryStore) secondHopSearch(ctx context.Context, seeds []Memory, limit
 		Value:    string(StateActive),
 	}
 
-	seen := make(map[string]struct{})
-	var all []Memory
-
 	// Pre-populate seen with seed IDs so seeds don't receive second-hop
 	// self-boost (the design intent is to discover *related* documents).
+	seen := make(map[string]struct{}, len(seeds))
 	for _, seed := range seeds {
 		seen[seed.ID] = struct{}{}
 	}
 
-	for _, seed := range seeds {
-		// Check context cancellation between seeds.
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
+	// Launch parallel searches — each seed is independent.
+	type seedResult struct {
+		mems []Memory
+	}
+	results := make([]seedResult, len(seeds))
+	var wg sync.WaitGroup
 
-		// Fetch the seed's vector from storage (Memory.Vector is transient).
-		doc, err := s.coll.GetContext(ctx, seed.ID)
-		if err != nil {
-			continue
-		}
-		if len(doc.Vector) == 0 {
-			continue
-		}
+	for i, seed := range seeds {
+		wg.Add(1)
+		go func(idx int, seedID string) {
+			defer wg.Done()
 
-		results, err := s.coll.SearchWithFilterContext(ctx, doc.Vector, limit, vf, vego.WithOverFetch(s.config.SearchOverFetch))
-		if err != nil {
-			continue
-		}
-
-		for _, r := range results {
-			if _, ok := seen[r.Document.ID]; ok {
-				continue
+			// Check context cancellation.
+			if err := ctx.Err(); err != nil {
+				return
 			}
-			seen[r.Document.ID] = struct{}{}
 
-			m, err := docToMemory(r.Document)
+			// Fetch the seed's vector from storage (Memory.Vector is transient).
+			doc, err := s.coll.GetContext(ctx, seedID)
 			if err != nil {
+				return
+			}
+			if len(doc.Vector) == 0 {
+				return
+			}
+
+			vecResults, err := s.coll.SearchWithFilterContext(ctx, doc.Vector, limit, vf, vego.WithOverFetch(s.config.SearchOverFetch))
+			if err != nil {
+				return
+			}
+
+			var local []Memory
+			for _, r := range vecResults {
+				m, err := docToMemory(r.Document)
+				if err != nil {
+					continue
+				}
+				sim := distanceToSimilarity(r.Distance, s.config.DistanceFunc)
+				m.Score = sim
+				local = append(local, *m)
+			}
+			results[idx].mems = local
+		}(i, seed.ID)
+	}
+	wg.Wait()
+
+	// Merge and deduplicate across all seed results.
+	var all []Memory
+	for _, sr := range results {
+		for _, m := range sr.mems {
+			if _, ok := seen[m.ID]; ok {
 				continue
 			}
-			sim := distanceToSimilarity(r.Distance, s.config.DistanceFunc)
-			m.Score = sim
-			all = append(all, *m)
+			seen[m.ID] = struct{}{}
+			all = append(all, m)
 		}
 	}
 

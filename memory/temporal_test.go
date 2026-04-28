@@ -623,3 +623,105 @@ func TestResolveInContent_CN_FalsePositive_Mooncake(t *testing.T) {
 		t.Errorf("content should be unchanged, got %q", content)
 	}
 }
+
+// ----------------------------------------------------------------------
+// Fuzzing tests for temporal parsing
+// ----------------------------------------------------------------------
+
+func FuzzResolveInContent(f *testing.F) {
+	// Seed corpus with known patterns.
+	f.Add("昨天", "2026-04-28", "now")
+	f.Add("明天", "2026-04-28", "now")
+	f.Add("上周", "2026-04-28", "header")
+	f.Add("last week", "2026-04-28", "now")
+	f.Add("tomorrow", "2026-04-28", "now")
+	f.Add("2026-04-28", "2026-04-28", "now")
+	f.Add("April 28, 2026", "2026-04-28", "now")
+	f.Add("今天是个好日子", "2026-04-28", "now")
+	f.Add("no temporal here", "2026-04-28", "now")
+
+	f.Fuzz(func(t *testing.T, content, anchorISO, source string) {
+		anchor, err := time.Parse("2006-01-02", anchorISO)
+		if err != nil {
+			t.Skip()
+		}
+		// resolveInContent must never panic, regardless of input.
+		resolved, meta := resolveInContent(content, anchor, source)
+		_ = resolved
+		_ = meta
+	})
+}
+
+func FuzzNormalizeTemporalRecallQuery(f *testing.F) {
+	f.Add("yesterday's design decisions", "2026-04-28")
+	f.Add("last week's meeting notes", "2026-04-28")
+	f.Add("今天讨论的架构", "2026-04-28")
+	f.Add("", "2026-04-28")
+
+	f.Fuzz(func(t *testing.T, query, nowISO string) {
+		now, err := time.Parse("2006-01-02", nowISO)
+		if err != nil {
+			t.Skip()
+		}
+		// NormalizeTemporalRecallQuery must never panic.
+		resolved := NormalizeTemporalRecallQuery(query, now)
+		_ = resolved
+	})
+}
+
+func FuzzParseEnglishDate(f *testing.F) {
+	f.Add("January", "15", "2026")
+	f.Add("December", "31", "2025")
+	f.Add("February", "29", "2024")
+
+	f.Fuzz(func(t *testing.T, monthName, dayStr, yearStr string) {
+		// parseEnglishDate must never panic, regardless of input.
+		y, mo, d, ok := parseEnglishDate(monthName, dayStr, yearStr)
+		if ok {
+			// If it succeeded, the values should be usable in a date check.
+			if t, valid := validDate(y, mo, d); valid {
+				_ = t
+			}
+		}
+	})
+}
+
+func FuzzNormalizeTemporalFacts(f *testing.F) {
+	f.Add("昨天完成了代码审查", "2026-04-28")
+	f.Add("last week deployed to production", "2026-04-28")
+	f.Add("今天修复了一个 bug", "2026-04-28")
+
+	f.Fuzz(func(t *testing.T, factContent, nowISO string) {
+		now, err := time.Parse("2006-01-02", nowISO)
+		if err != nil {
+			t.Skip()
+		}
+		facts := []ExtractedFact{{Content: factContent}}
+		messages := []Message{{Timestamp: now}}
+		// NormalizeTemporalFacts must never panic.
+		normalized := NormalizeTemporalFacts(facts, messages, now)
+		if len(normalized) != 1 {
+			t.Errorf("expected 1 fact, got %d", len(normalized))
+		}
+	})
+}
+
+func FuzzHumanRelative(f *testing.F) {
+	f.Add("2026-04-21", "2026-04-28")
+	f.Add("2026-01-01", "2026-12-31")
+	f.Add("2025-04-28", "2026-04-28")
+
+	f.Fuzz(func(t *testing.T, tISO, nowISO string) {
+		tm, err := time.Parse("2006-01-02", tISO)
+		if err != nil {
+			t.Skip()
+		}
+		now, err := time.Parse("2006-01-02", nowISO)
+		if err != nil {
+			t.Skip()
+		}
+		// humanRelative must never panic.
+		result := humanRelative(tm, now)
+		_ = result
+	})
+}

@@ -41,6 +41,21 @@ func (s *MemoryStore) Reconcile(ctx context.Context, agentID string, facts []Ext
 	}
 
 	result := &IngestResult{}
+
+	// ------------------------------------------------------------------
+	// Phase 0: batch embed all facts to amortize network RTT.
+	// If batch embed fails, fallback to per-fact embed in findCandidates.
+	// ------------------------------------------------------------------
+	texts := make([]string, len(facts))
+	for i, f := range facts {
+		texts[i] = f.Content
+	}
+	factVecs, embedErr := s.embedBatch(ctx, texts)
+	if embedErr != nil {
+		slog.WarnContext(ctx, "batch embed failed, falling back to per-fact embed", "error", embedErr)
+		factVecs = make([][]float32, len(facts)) // all nil → findCandidates will embed individually
+	}
+
 	searchSem := semaphore.NewWeighted(4) // concurrent search limit
 
 	// ------------------------------------------------------------------
@@ -65,7 +80,7 @@ func (s *MemoryStore) Reconcile(ctx context.Context, agentID string, facts []Ext
 				works[idx].err = err
 				return
 			}
-			works[idx].candidates, works[idx].err = s.findCandidates(ctx, &facts[idx])
+			works[idx].candidates, works[idx].err = s.findCandidates(ctx, &facts[idx], factVecs[idx])
 			defer searchSem.Release(1)
 		}(i)
 	}
@@ -125,11 +140,14 @@ var activeFilter = &vego.MetadataFilter{
 	Value:    string(StateActive),
 }
 
-func (s *MemoryStore) findCandidates(ctx context.Context, fact *ExtractedFact) ([]*candidateMapping, error) {
-	// 1. Vector search.
-	vec, err := s.embed(ctx, fact.Content)
-	if err != nil {
-		return nil, fmt.Errorf("embed: %w", err)
+func (s *MemoryStore) findCandidates(ctx context.Context, fact *ExtractedFact, vec []float32) ([]*candidateMapping, error) {
+	// 1. Vector search (vec may be nil — caller embeds in batch).
+	if vec == nil {
+		var err error
+		vec, err = s.embed(ctx, fact.Content)
+		if err != nil {
+			return nil, fmt.Errorf("embed: %w", err)
+		}
 	}
 
 	vecResults, err := s.coll.SearchWithFilterContext(ctx, vec, s.config.SearchLimit, activeFilter, vego.WithOverFetch(s.config.SearchOverFetch))
