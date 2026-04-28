@@ -127,15 +127,15 @@ type MemoryStore struct {
 	inverted         *InvertedIndex
 	contentHashIndex *ContentHashIndex
 	config           *Config
-	mu               sync.Mutex           // guards all write operations (Store/Update/Delete/Bootstrap/StoreBatch)
-	llmSem           *semaphore.Weighted  // limits concurrent LLM calls in Reconcile (weight=1 = serialized)
+	mu               sync.Mutex          // guards all write operations (Store/Update/Delete/Bootstrap/StoreBatch)
+	llmSem           *semaphore.Weighted // limits concurrent LLM calls in Reconcile (weight=1 = serialized)
 }
 
 // Open opens or creates a MemoryStore.
 // The database path is determined as follows:
-//   1. If opts includes WithDataDir with a non-default value, that value is used.
-//   2. Otherwise, the path argument is used.
-//   3. If both are empty, falls back to the default DataDir.
+//  1. If opts includes WithDataDir with a non-default value, that value is used.
+//  2. Otherwise, the path argument is used.
+//  3. If both are empty, falls back to the default DataDir.
 func Open(path string, opts ...Option) (*MemoryStore, error) {
 	cfg, err := NewConfig(opts...)
 	if err != nil {
@@ -721,6 +721,7 @@ func (s *MemoryStore) rebuildIndexes() error {
 		terms         []string
 		isOrphan      bool
 		hasPreviousID bool
+		migrated      bool // true if schema migration was applied
 	}
 
 	numWorkers := runtime.GOMAXPROCS(0)
@@ -754,6 +755,12 @@ func (s *MemoryStore) rebuildIndexes() error {
 					if testWorkerPanicHook != nil {
 						testWorkerPanicHook()
 					}
+					// Apply schema migration if needed.
+					migrated, err := migrateMemory(doc, m)
+					if err != nil {
+						slog.Warn("skip document during migration", "id", doc.ID, "err", err)
+						return
+					}
 					var terms []string
 					if m.State == StateActive {
 						terms = tokenize(m.Content)
@@ -764,6 +771,7 @@ func (s *MemoryStore) rebuildIndexes() error {
 						terms:         terms,
 						isOrphan:      m.State == StateActive && m.SupersededBy != "",
 						hasPreviousID: m.State == StateActive && m.PreviousID != "",
+						migrated:      migrated,
 					}
 				}()
 			}
@@ -784,6 +792,7 @@ func (s *MemoryStore) rebuildIndexes() error {
 
 	// Phase 3: Serial batch insert + orphan collection.
 	var orphans []*vego.Document
+	var migratedDocs []*vego.Document
 	previousIDSet := make(map[string]struct{})
 	// Pre-allocate to avoid repeated slice growth during append.
 	invertedEntries := make([]RebuildEntry, 0, len(docs))
@@ -826,6 +835,9 @@ func (s *MemoryStore) rebuildIndexes() error {
 				Seq:       m.Seq,
 			})
 		}
+		if p.migrated {
+			migratedDocs = append(migratedDocs, p.doc)
+		}
 	}
 
 	// Release cloned document references so GC can reclaim ~50 MB of Vector
@@ -837,6 +849,13 @@ func (s *MemoryStore) rebuildIndexes() error {
 	}
 	if err := s.contentHashIndex.RebuildBatch(hashEntries); err != nil {
 		return fmt.Errorf("rebuild hash index: %w", err)
+	}
+
+	// Persist schema migrations applied during Phase 2.
+	for _, doc := range migratedDocs {
+		if err := s.coll.UpdateContext(context.Background(), doc); err != nil {
+			slog.Warn("failed to persist schema migration", "id", doc.ID, "err", err)
+		}
 	}
 
 	// Phase 4: Fix orphans outside of ForEach to avoid RLock -> Lock deadlock.

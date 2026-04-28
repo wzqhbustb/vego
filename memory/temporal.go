@@ -199,7 +199,7 @@ func validCNBoundary(content string, start, end int) bool {
 			return true
 		}
 		switch matched {
-		case "今年":
+		case "今年", "去年", "前年", "明年":
 			// "今年轻人" → natural seg: "今" + "年轻人"
 			if r == '轻' && size > 0 && end+size < len(content) {
 				r2, _ := utf8.DecodeRuneInString(content[end+size:])
@@ -207,7 +207,7 @@ func validCNBoundary(content string, start, end int) bool {
 					return false
 				}
 			}
-		case "上个月":
+		case "上个月", "下个月", "本月":
 			// "上个月饼" → natural seg: "上个" + "月饼"
 			if r == '饼' {
 				return false

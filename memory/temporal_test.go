@@ -449,12 +449,21 @@ func TestResolveInContent_CrossYear_LateYear(t *testing.T) {
 
 // P1-3: Chinese substring boundary check.
 func TestResolveInContent_CN_Boundary(t *testing.T) {
-	content, meta := resolveInContent("今年轻人喜欢编程", fixedAnchor, "now")
-	if meta != nil {
-		t.Errorf("substring match should be blocked, got content=%q meta=%v", content, meta)
+	tests := []string{
+		"今年轻人喜欢编程",
+		"去年轻人面试",
+		"前年轻人创业",
+		"明年轻人入职",
+		"今年轻女设计师",
 	}
-	if content != "今年轻人喜欢编程" {
-		t.Errorf("content should be unchanged, got %q", content)
+	for _, input := range tests {
+		content, meta := resolveInContent(input, fixedAnchor, "now")
+		if meta != nil {
+			t.Errorf("substring match should be blocked for %q, got content=%q meta=%v", input, content, meta)
+		}
+		if content != input {
+			t.Errorf("content should be unchanged for %q, got %q", input, content)
+		}
 	}
 }
 
@@ -613,14 +622,21 @@ func TestResolveInContent_EN_CaseInsensitive(t *testing.T) {
 	}
 }
 
-// P2-1: Chinese false-positive "上个月饼".
+// P2-1: Chinese false-positive "X个月饼".
 func TestResolveInContent_CN_FalsePositive_Mooncake(t *testing.T) {
-	content, meta := resolveInContent("上个月饼很好吃", fixedAnchor, "now")
-	if meta != nil {
-		t.Errorf("false positive: '上个月' in '上个月饼' should not match, got content=%q meta=%v", content, meta)
+	tests := []string{
+		"上个月饼很好吃",
+		"下个月饼打折",
+		"本月饼已经卖完",
 	}
-	if content != "上个月饼很好吃" {
-		t.Errorf("content should be unchanged, got %q", content)
+	for _, input := range tests {
+		content, meta := resolveInContent(input, fixedAnchor, "now")
+		if meta != nil {
+			t.Errorf("false positive: temporal in %q should not match, got content=%q meta=%v", input, content, meta)
+		}
+		if content != input {
+			t.Errorf("content should be unchanged for %q, got %q", input, content)
+		}
 	}
 }
 

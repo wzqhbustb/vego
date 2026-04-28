@@ -29,11 +29,17 @@ const (
 	StateDeleted  MemoryState = "deleted"
 )
 
+// CurrentSchemaVersion is the current Memory schema version.
+// It is written to every document at creation time and checked during
+// rebuildIndexes so that stale documents can be migrated.
+const CurrentSchemaVersion = 1
+
 // Metadata keys used for Vego Document serialization.
 const (
-	metaKeyData  = "_data"  // Full Memory JSON string
-	metaKeyState = "_state" // Redundant index field for SearchWithFilter
-	metaKeyType  = "_type"  // Redundant index field for SearchWithFilter
+	metaKeyData      = "_data"      // Full Memory JSON string
+	metaKeyState     = "_state"     // Redundant index field for SearchWithFilter
+	metaKeyType      = "_type"      // Redundant index field for SearchWithFilter
+	metaKeySchemaVer = "_schema_ver" // Schema version (int)
 )
 
 // Memory is the core domain type for the Agent memory service.
@@ -154,9 +160,10 @@ func memoryToDoc(m *Memory, vec []float32) (*vego.Document, error) {
 		return nil, fmt.Errorf("marshal memory: %w", err)
 	}
 	meta := map[string]interface{}{
-		metaKeyData:  string(data),
-		metaKeyState: string(toStore.State),
-		metaKeyType:  string(toStore.MemoryType),
+		metaKeyData:      string(data),
+		metaKeyState:     string(toStore.State),
+		metaKeyType:      string(toStore.MemoryType),
+		metaKeySchemaVer: CurrentSchemaVersion,
 	}
 	// Deep-copy vector so caller's slice is not aliased
 	vecCopy := make([]float32, len(vec))
