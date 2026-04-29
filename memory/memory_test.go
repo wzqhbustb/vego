@@ -19,14 +19,35 @@ type mockEmbedServer struct {
 }
 
 func (m *mockEmbedServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	vec := make([]float32, m.dims)
-	for i := range vec {
-		vec[i] = 0.1
+	// Determine how many embeddings the request expects.
+	count := 1
+	var body struct {
+		Input interface{} `json:"input"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
+		switch v := body.Input.(type) {
+		case []interface{}:
+			if len(v) > 0 {
+				count = len(v)
+			}
+		case string:
+			count = 1
+		}
+	}
+
+	data := make([]map[string]interface{}, count)
+	for i := 0; i < count; i++ {
+		vec := make([]float32, m.dims)
+		for j := range vec {
+			vec[j] = 0.1
+		}
+		data[i] = map[string]interface{}{
+			"index":     i,
+			"embedding": vec,
+		}
 	}
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"data": []map[string]interface{}{
-			{"embedding": vec},
-		},
+		"data": data,
 	})
 }
 

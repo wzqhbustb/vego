@@ -76,12 +76,18 @@ func (s *MemoryStore) Reconcile(ctx context.Context, agentID string, facts []Ext
 		searchWg.Add(1)
 		go func(idx int) {
 			defer searchWg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("search goroutine panic", "idx", idx, "fact", facts[idx].Content, "recover", r)
+					works[idx].err = fmt.Errorf("panic in search goroutine: %v", r)
+				}
+			}()
 			if err := searchSem.Acquire(ctx, 1); err != nil {
 				works[idx].err = err
 				return
 			}
-			works[idx].candidates, works[idx].err = s.findCandidates(ctx, &facts[idx], factVecs[idx])
 			defer searchSem.Release(1)
+			works[idx].candidates, works[idx].err = s.findCandidates(ctx, &facts[idx], factVecs[idx])
 		}(i)
 	}
 	searchWg.Wait()
@@ -140,7 +146,16 @@ var activeFilter = &vego.MetadataFilter{
 	Value:    string(StateActive),
 }
 
+// testReconcileSearchPanicHook is set by tests to exercise the panic-recovery
+// path in the Reconcile search goroutine. If set, findCandidates calls it
+// before any real work; if it panics, the defer searchSem.Release(1) (registered
+// before the findCandidates call) must still execute to avoid a semaphore leak.
+var testReconcileSearchPanicHook func()
+
 func (s *MemoryStore) findCandidates(ctx context.Context, fact *ExtractedFact, vec []float32) ([]*candidateMapping, error) {
+	if testReconcileSearchPanicHook != nil {
+		testReconcileSearchPanicHook()
+	}
 	// 1. Vector search (vec may be nil — caller embeds in batch).
 	if vec == nil {
 		var err error

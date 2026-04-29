@@ -920,3 +920,56 @@ func TestExecuteAction_ADD_EmbedError(t *testing.T) {
 		t.Errorf("Added should be 0 on error, got %d", result.Added)
 	}
 }
+
+// ----------------------------------------------------------------------
+// Reconcile: panic in search goroutine → semaphore release
+// ----------------------------------------------------------------------
+
+func TestReconcile_SearchPanicSemaphoreRelease(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	// Seed an existing memory so StoreBatch inside executeAction has something
+	// to work with (avoid nil embedder).
+	_, err := s.Store(context.Background(), "existing memory for reconcile", nil)
+	if err != nil {
+		t.Fatalf("Store seed: %v", err)
+	}
+
+	// Set up mock LLM so decideAction returns ADD with valid JSON.
+	setupMockLLM(t, s, `ADD||`)
+
+	// Inject a panic in findCandidates (called from the search goroutine).
+	// The panic must happen while searchSem is held. The defer searchSem.Release(1)
+	// (registered before findCandidates) must release the semaphore so the
+	// WaitGroup completes and Reconcile returns without deadlock.
+	var mu sync.Mutex
+	panicCount := 0
+	testReconcileSearchPanicHook = func() {
+		mu.Lock()
+		panicCount++
+		mu.Unlock()
+		panic("injected panic in findCandidates")
+	}
+	t.Cleanup(func() { testReconcileSearchPanicHook = nil })
+
+	ctx := context.Background()
+	result, err := s.Reconcile(ctx, "agent-panic-test", []ExtractedFact{
+		{Content: "fact one", SourceMsg: 0},
+		{Content: "fact two", SourceMsg: 1},
+		{Content: "fact three", SourceMsg: 2},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile should not error on search panic: %v", err)
+	}
+	// All facts fall through to ADD fallback when search panics.
+	if result.Added != 3 {
+		t.Errorf("expected 3 added (fallback), got %+v", result)
+	}
+	mu.Lock()
+	if panicCount != 3 {
+		t.Errorf("panic hook should have been called 3 times, got %d", panicCount)
+	}
+	mu.Unlock()
+}
