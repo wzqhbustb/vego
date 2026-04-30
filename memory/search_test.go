@@ -1049,3 +1049,188 @@ func TestSecondHopDiscoversRelatedDocs(t *testing.T) {
 		}
 	}
 }
+
+func TestDualChannelBonus(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+	_, err := s.Store(ctx, "hello world", nil)
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+
+	// Without bonus: RRF score = 1/61 + 1/61 = 2/61 ≈ 0.03279.
+	s.config.DualChannelBonus = 0
+	s.config.VectorSimilarityWeight = 0
+	resultsOff, err := s.Search(ctx, "hello", EnableHybrid(true))
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(resultsOff) != 1 {
+		t.Fatalf("want 1, got %d", len(resultsOff))
+	}
+	baseScore := resultsOff[0].Score
+
+	// With 0.5 bonus: score = base * 1.5.
+	s.config.DualChannelBonus = 0.5
+	resultsOn, err := s.Search(ctx, "hello", EnableHybrid(true))
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	expected := baseScore * 1.5
+	if math.Abs(resultsOn[0].Score-expected) > 0.0001 {
+		t.Errorf("dual-channel bonus: want %.6f, got %.6f", expected, resultsOn[0].Score)
+	}
+}
+
+func TestVectorSimilarityWeight(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+	_, err := s.Store(ctx, "hello world", nil)
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+
+	// Without weight: RRF score = 2/61.
+	s.config.DualChannelBonus = 0
+	s.config.VectorSimilarityWeight = 0
+	resultsOff, err := s.Search(ctx, "hello", EnableHybrid(true))
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	baseScore := resultsOff[0].Score
+
+	// With weight 0.5, vecSim=1.0: score = base * (1 + 1.0*0.5) = base * 1.5.
+	s.config.VectorSimilarityWeight = 0.5
+	resultsOn, err := s.Search(ctx, "hello", EnableHybrid(true))
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	expected := baseScore * 1.5
+	if math.Abs(resultsOn[0].Score-expected) > 0.0001 {
+		t.Errorf("vector similarity weight: want %.6f, got %.6f", expected, resultsOn[0].Score)
+	}
+}
+
+func TestDualChannelBonusKeywordOnly(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+	// Store a memory that differs from the query — it will appear in vector
+	// results (all memories do with mock embedder) but NOT in keyword results
+	// (BM25 won't match "hello" against "xyz").
+	_, err := s.Store(ctx, "xyz abc 123", nil)
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+
+	s.config.DualChannelBonus = 0.99 // near max, would be obvious if applied
+	s.config.VectorSimilarityWeight = 0
+
+	results, err := s.Search(ctx, "hello", EnableHybrid(true))
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("want 1, got %d", len(results))
+	}
+	// Without dual-channel hit, score should NOT be scaled by (1+0.99)=1.99.
+	// RRF: 1/61 from vector only (no keyword hit) = 1/61 ≈ 0.01639.
+	expected := 1.0 / 61.0
+	if math.Abs(results[0].Score-expected) > 0.001 {
+		t.Errorf("keyword-only: want ~%.6f, got %.6f", expected, results[0].Score)
+	}
+}
+
+
+// ----------------------------------------------------------------------
+// applySignalBoosts unit tests
+// ----------------------------------------------------------------------
+
+func TestApplySignalBoostsDualChannel(t *testing.T) {
+	scores := map[string]float64{
+		"a": 0.1, // dual-channel (in both)
+		"b": 0.1, // vec-only
+		"c": 0.1, // keyword-only
+	}
+	vecResults := []Memory{{ID: "a", Score: 0.8}, {ID: "b", Score: 0.6}}
+	keywordResults := []ScoredID{{ID: "a"}, {ID: "c"}}
+
+	applySignalBoosts(scores, vecResults, keywordResults, 0, 0.5)
+
+	// a: dual-channel → 0.1 * 1.5 = 0.15
+	if math.Abs(scores["a"]-0.15) > 0.0001 {
+		t.Errorf("dual-channel a: want 0.15, got %f", scores["a"])
+	}
+	// b: vec-only → unchanged
+	if math.Abs(scores["b"]-0.1) > 0.0001 {
+		t.Errorf("vec-only b: want 0.1, got %f", scores["b"])
+	}
+	// c: keyword-only → unchanged (MUST NOT get bonus)
+	if math.Abs(scores["c"]-0.1) > 0.0001 {
+		t.Errorf("keyword-only c: want 0.1, got %f", scores["c"])
+	}
+}
+
+func TestApplySignalBoostsVectorSimilarity(t *testing.T) {
+	scores := map[string]float64{
+		"a": 0.1, // vec sim = 1.0
+		"b": 0.1, // vec sim = 0.5
+		"c": 0.1, // no vec result
+	}
+	vecResults := []Memory{{ID: "a", Score: 1.0}, {ID: "b", Score: 0.5}}
+	keywordResults := []ScoredID{}
+
+	applySignalBoosts(scores, vecResults, keywordResults, 0.5, 0)
+
+	// a: 0.1 * (1 + 1.0*0.5) = 0.15
+	if math.Abs(scores["a"]-0.15) > 0.0001 {
+		t.Errorf("vec sim 1.0: want 0.15, got %f", scores["a"])
+	}
+	// b: 0.1 * (1 + 0.5*0.5) = 0.125
+	if math.Abs(scores["b"]-0.125) > 0.0001 {
+		t.Errorf("vec sim 0.5: want 0.125, got %f", scores["b"])
+	}
+	// c: no vec result → unchanged
+	if math.Abs(scores["c"]-0.1) > 0.0001 {
+		t.Errorf("no vec: want 0.1, got %f", scores["c"])
+	}
+}
+
+func TestApplySignalBoostsCombined(t *testing.T) {
+	scores := map[string]float64{
+		"a": 0.1, // dual-channel, vec sim = 1.0
+	}
+	vecResults := []Memory{{ID: "a", Score: 1.0}}
+	keywordResults := []ScoredID{{ID: "a"}}
+
+	applySignalBoosts(scores, vecResults, keywordResults, 0.5, 0.5)
+
+	// a: 0.1 * (1 + 1.0*0.5) * (1 + 0.5) = 0.1 * 1.5 * 1.5 = 0.225
+	expected := 0.1 * 1.5 * 1.5
+	if math.Abs(scores["a"]-expected) > 0.0001 {
+		t.Errorf("combined: want %f, got %f", expected, scores["a"])
+	}
+}
+
+func TestApplySignalBoostsDisabled(t *testing.T) {
+	scores := map[string]float64{
+		"a": 0.1,
+	}
+	orig := scores["a"]
+	vecResults := []Memory{{ID: "a", Score: 1.0}}
+	keywordResults := []ScoredID{{ID: "a"}}
+
+	// Both zero → no modification.
+	applySignalBoosts(scores, vecResults, keywordResults, 0, 0)
+	if scores["a"] != orig {
+		t.Errorf("disabled: want unchanged, got %f", scores["a"])
+	}
+}

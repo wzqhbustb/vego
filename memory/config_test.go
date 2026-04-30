@@ -79,6 +79,12 @@ func TestDefaultConfig(t *testing.T) {
 	if c.MaxBulkSize != 100 {
 		t.Errorf("MaxBulkSize: want 100, got %d", c.MaxBulkSize)
 	}
+	if c.DualChannelBonus != 0 {
+		t.Errorf("DualChannelBonus: want 0, got %f", c.DualChannelBonus)
+	}
+	if c.VectorSimilarityWeight != 0 {
+		t.Errorf("VectorSimilarityWeight: want 0, got %f", c.VectorSimilarityWeight)
+	}
 }
 
 func TestNewConfigWithOptions(t *testing.T) {
@@ -98,6 +104,8 @@ func TestNewConfigWithOptions(t *testing.T) {
 		WithMaxContentLen(1000),
 		WithMaxTags(5),
 		WithMaxBulkSize(10),
+		WithDualChannelBonus(0.3),
+		WithVectorSimilarityWeight(0.4),
 	)
 	if err != nil {
 		t.Fatalf("NewConfig error: %v", err)
@@ -178,6 +186,12 @@ func TestNewConfigWithOptions(t *testing.T) {
 	}
 	if c.MaxBulkSize != 10 {
 		t.Errorf("MaxBulkSize: want 10, got %d", c.MaxBulkSize)
+	}
+	if c.DualChannelBonus != 0.3 {
+		t.Errorf("DualChannelBonus: want 0.3, got %f", c.DualChannelBonus)
+	}
+	if c.VectorSimilarityWeight != 0.4 {
+		t.Errorf("VectorSimilarityWeight: want 0.4, got %f", c.VectorSimilarityWeight)
 	}
 }
 
@@ -455,6 +469,26 @@ func TestConfigValidationExtended(t *testing.T) {
 			name:    "zero max bulk size",
 			opts:    []Option{WithMaxBulkSize(0)},
 			wantErr: "max bulk size must be > 0, got 0",
+		},
+		{
+			name:    "negative dual channel bonus",
+			opts:    []Option{WithDualChannelBonus(-0.1)},
+			wantErr: "dual channel bonus must be in [0,1], got -0.100000",
+		},
+		{
+			name:    "dual channel bonus too high",
+			opts:    []Option{WithDualChannelBonus(1.5)},
+			wantErr: "dual channel bonus must be in [0,1], got 1.500000",
+		},
+		{
+			name:    "negative vector similarity weight",
+			opts:    []Option{WithVectorSimilarityWeight(-0.1)},
+			wantErr: "vector similarity weight must be in [0,5], got -0.100000",
+		},
+		{
+			name:    "vector similarity weight too high",
+			opts:    []Option{WithVectorSimilarityWeight(5.1)},
+			wantErr: "vector similarity weight must be in [0,5], got 5.100000",
 		},
 	}
 

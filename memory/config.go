@@ -34,10 +34,12 @@ type Config struct {
 	SecondHopGate     float64 // 默认 0.02
 	SecondHopWeight   float64 // 默认 0.3
 	SecondHopTopN     int     // 默认 3
-	PinnedBoost       float64 // 默认 1.5
-	RecencyBoostWeek  float64 // 默认 1.05（<=7 天）
-	RecencyBoostMonth float64 // 默认 1.02（<=30 天）
-	GapStopRatio      float64 // 默认 0.5（0=禁用）
+	PinnedBoost            float64 // 默认 1.5
+	RecencyBoostWeek       float64 // 默认 1.05（<=7 天）
+	RecencyBoostMonth      float64 // 默认 1.02（<=30 天）
+	GapStopRatio           float64 // 默认 0.5（0=禁用）
+	DualChannelBonus       float64 // 默认 0（双通道命中乘数加成，0=禁用）
+	VectorSimilarityWeight float64 // 默认 0（向量相似度加权，0=禁用）
 
 	// Ingest
 	MaxFacts             int // 默认 50
@@ -76,8 +78,10 @@ func DefaultConfig() *Config {
 		PinnedBoost:          1.5,
 		RecencyBoostWeek:     1.05,
 		RecencyBoostMonth:    1.02,
-		GapStopRatio:         0.5,
-		MaxFacts:             50,
+		GapStopRatio:          0.5,
+		DualChannelBonus:      0,
+		VectorSimilarityWeight: 0,
+		MaxFacts:              50,
 		MaxConversationRunes: 1_000_000,
 		MaxContentLen:        50_000,
 		MaxTags:              20,
@@ -175,6 +179,12 @@ func (c *Config) validate() error {
 	}
 	if c.RecencyBoostMonth < 0 {
 		return fmt.Errorf("recency boost month must be >= 0, got %f", c.RecencyBoostMonth)
+	}
+	if c.DualChannelBonus < 0 || c.DualChannelBonus > 1 {
+		return fmt.Errorf("dual channel bonus must be in [0,1], got %f", c.DualChannelBonus)
+	}
+	if c.VectorSimilarityWeight < 0 || c.VectorSimilarityWeight > 5 {
+		return fmt.Errorf("vector similarity weight must be in [0,5], got %f", c.VectorSimilarityWeight)
 	}
 	return nil
 }
@@ -353,4 +363,18 @@ func WithMaxTags(n int) Option {
 // WithMaxBulkSize sets the maximum number of items in a batch operation.
 func WithMaxBulkSize(n int) Option {
 	return func(c *Config) { c.MaxBulkSize = n }
+}
+
+// WithDualChannelBonus sets the dual-channel hit score multiplier bonus.
+// When a result appears in both vector and keyword search, its RRF score
+// is multiplied by (1 + bonus). Default is 0 (disabled).
+func WithDualChannelBonus(bonus float64) Option {
+	return func(c *Config) { c.DualChannelBonus = bonus }
+}
+
+// WithVectorSimilarityWeight sets the weight for raw vector similarity in
+// the final score. Each result's RRF score is multiplied by
+// (1 + vecSimilarity * weight). Default is 0 (disabled).
+func WithVectorSimilarityWeight(weight float64) Option {
+	return func(c *Config) { c.VectorSimilarityWeight = weight }
 }

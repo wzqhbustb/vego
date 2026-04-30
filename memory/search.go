@@ -104,6 +104,10 @@ func (s *MemoryStore) hybridSearch(ctx context.Context, query string, filter Mem
 	// Stage 6: First-hop RRF fusion.
 	scores := rrfMerge(vecResults, keywordResults, s.config.RRFK)
 
+	// Stage 6.5: Signal-injection boosts (before second-hop so it benefits
+	// from recalibrated scores).
+	applySignalBoosts(scores, vecResults, keywordResults, s.config.VectorSimilarityWeight, s.config.DualChannelBonus)
+
 	// Collect candidate memories.  Vector results already have Memory objects;
 	// keyword-only results need to be fetched.
 	candidates := make(map[string]Memory, len(scores))
@@ -240,6 +244,38 @@ func rrfMerge(vecResults []Memory, keywordResults []ScoredID, k float64) map[str
 		scores[si.ID] += 1.0 / (k + float64(rank+1))
 	}
 	return scores
+}
+
+// applySignalBoosts injects per-result signals that RRF discards:
+//   - vecSim: raw vector similarity (0-1), already in vecResults[i].Score
+//   - dual-channel: true if result appears in BOTH vector and keyword lists
+func applySignalBoosts(scores map[string]float64, vecResults []Memory, keywordResults []ScoredID, vecWeight, dualBonus float64) {
+	if vecWeight <= 0 && dualBonus <= 0 {
+		return
+	}
+	vecSims := make(map[string]float64, len(vecResults))
+	inVec := make(map[string]bool, len(vecResults))
+	inKeyword := make(map[string]bool, len(keywordResults))
+	for _, si := range keywordResults {
+		inKeyword[si.ID] = true
+	}
+	for _, m := range vecResults {
+		vecSims[m.ID] = m.Score
+		inVec[m.ID] = true
+	}
+	for id, score := range scores {
+		if vecWeight > 0 {
+			if sim, ok := vecSims[id]; ok {
+				score *= 1.0 + sim*vecWeight
+			}
+		}
+		if dualBonus > 0 {
+			if inVec[id] && inKeyword[id] {
+				score *= 1.0 + dualBonus
+			}
+		}
+		scores[id] = score
+	}
 }
 
 // ----------------------------------------------------------------------
