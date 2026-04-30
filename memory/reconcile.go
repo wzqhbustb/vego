@@ -288,11 +288,17 @@ func (s *MemoryStore) decideAction(ctx context.Context, fact *ExtractedFact, can
 
 func buildReconcileSystemPrompt() string {
 	return "你是一个记忆管理助手。给定一条新事实和若干候选记忆，决定操作类型：" +
-		"ADD（新增）、UPDATE（替换旧记忆）、DELETE（删除旧记忆）、NOOP（无操作）。\n\n" +
-		"规则：\n" +
-		"- 如果候选记忆内容与事实几乎相同 → UPDATE\n" +
-		"- 如果事实与候选记忆矛盾 → DELETE 旧 + ADD 新（即 UPDATE）\n" +
-		"- 如果完全无关 → ADD\n\n" +
+		"ADD（新增独立记忆）、UPDATE（用新事实完全替换旧记忆）、DELETE（删除错误记忆）、NOOP（无操作）。\n\n" +
+		"关键规则（按优先级排序）：\n" +
+		"1. UPDATE 意味着完全替换旧记忆的内容，旧记忆会被归档但内容不可再搜索。" +
+		"如果新事实是旧记忆的补充或扩展（例如旧记忆说\"喜欢咖啡\"，新事实说\"也喜欢茶\"），" +
+		"必须输出 ADD 而非 UPDATE，避免信息丢失。\n" +
+		"2. 候选记忆与新事实内容几乎相同，仅细节有更新 → UPDATE。\n" +
+		"3. 候选记忆与新事实直接矛盾（如偏好改变、状态迁移、事实更正）→ UPDATE。" +
+		"保留历史链可追溯，不要 DELETE。\n" +
+		"4. DELETE 仅用于完全错误且无用的信息（如事实提取错误、用户明确否定\"我从来没说过这个\"）。" +
+		"信息过时或偏好改变不应 DELETE。Pinned 记忆不可 DELETE。\n" +
+		"5. 候选记忆与新事实完全无关 → ADD。\n\n" +
 		"请返回 JSON: {\"action\": \"ADD|UPDATE|DELETE|NOOP\", \"target_id\": 1, \"reason\": \"...\"}"
 }
 
@@ -300,13 +306,24 @@ func buildReconcileUserPrompt(fact *ExtractedFact, candidates []*candidateMappin
 	var b strings.Builder
 	b.WriteString("新事实: ")
 	b.WriteString(fact.Content)
-	b.WriteString("\n\n")
-	b.WriteString("候选记忆:\n")
+	if len(fact.Tags) > 0 {
+		b.WriteString("\n标签: ")
+		b.WriteString(strings.Join(fact.Tags, ", "))
+	}
+	b.WriteString("\n\n候选记忆:\n")
 	for _, c := range candidates {
-		b.WriteString("候选记忆 ")
+		b.WriteString("[")
 		b.WriteString(strconv.Itoa(c.intID))
-		b.WriteString(": ")
+		b.WriteString("] ")
 		b.WriteString(c.memory.Content)
+		if c.memory.MemoryType != "" {
+			b.WriteString(" \n类型: ")
+			b.WriteString(string(c.memory.MemoryType))
+		}
+		if len(c.memory.Tags) > 0 {
+			b.WriteString(" 标签: ")
+			b.WriteString(strings.Join(c.memory.Tags, ", "))
+		}
 		b.WriteString("\n")
 	}
 	return b.String()
