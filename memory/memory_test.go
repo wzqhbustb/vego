@@ -1699,6 +1699,168 @@ func TestListEmptyStore(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------
+// ListBySessionIDs
+// ----------------------------------------------------------------------
+
+func TestListBySessionIDs(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+	now := time.Now()
+
+	memories := []*Memory{
+		{ID: "a1", Content: "s1-msg1", State: StateActive, SessionID: "session-1", MemoryType: TypeSession, UpdatedAt: now.Add(-3 * time.Hour), CreatedAt: now},
+		{ID: "a2", Content: "s1-msg2", State: StateActive, SessionID: "session-1", MemoryType: TypeSession, UpdatedAt: now.Add(-2 * time.Hour), CreatedAt: now},
+		{ID: "a3", Content: "s1-msg3", State: StateActive, SessionID: "session-1", MemoryType: TypeSession, UpdatedAt: now.Add(-1 * time.Hour), CreatedAt: now},
+		{ID: "b1", Content: "s2-msg1", State: StateActive, SessionID: "session-2", MemoryType: TypeSession, UpdatedAt: now.Add(-30 * time.Minute), CreatedAt: now},
+		{ID: "b2", Content: "s2-msg2", State: StateActive, SessionID: "session-2", MemoryType: TypeSession, UpdatedAt: now, CreatedAt: now},
+		{ID: "no1", Content: "nosession", State: StateActive, MemoryType: TypeInsight, UpdatedAt: now, CreatedAt: now},
+	}
+	if err := s.Bootstrap(ctx, memories); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	// Query two sessions with limit 2 per session.
+	result, err := s.ListBySessionIDs(ctx, []string{"session-1", "session-2"}, 2)
+	if err != nil {
+		t.Fatalf("ListBySessionIDs: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("want 2 sessions, got %d", len(result))
+	}
+
+	s1, ok := result["session-1"]
+	if !ok {
+		t.Fatal("session-1 missing")
+	}
+	if len(s1) != 2 {
+		t.Errorf("session-1: want 2, got %d", len(s1))
+	}
+	if s1[0].ID != "a3" || s1[1].ID != "a2" {
+		t.Errorf("session-1: want [a3 a2] (newest first), got [%s %s]", s1[0].ID, s1[1].ID)
+	}
+
+	s2, ok := result["session-2"]
+	if !ok {
+		t.Fatal("session-2 missing")
+	}
+	if len(s2) != 2 {
+		t.Errorf("session-2: want 2, got %d", len(s2))
+	}
+}
+
+func TestListBySessionIDs_EmptyInput(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+	result, err := s.ListBySessionIDs(ctx, nil, 10)
+	if err != nil {
+		t.Fatalf("ListBySessionIDs: %v", err)
+	}
+	if len(result) != 0 {
+		t.Errorf("want empty, got %d", len(result))
+	}
+
+	result, err = s.ListBySessionIDs(ctx, []string{}, 10)
+	if err != nil {
+		t.Fatalf("ListBySessionIDs: %v", err)
+	}
+	if len(result) != 0 {
+		t.Errorf("want empty, got %d", len(result))
+	}
+}
+
+func TestListBySessionIDs_NonExistentSession(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+	result, err := s.ListBySessionIDs(ctx, []string{"no-such-session"}, 10)
+	if err != nil {
+		t.Fatalf("ListBySessionIDs: %v", err)
+	}
+	if len(result) != 0 {
+		t.Errorf("want empty, got %d", len(result))
+	}
+}
+
+func TestListBySessionIDs_Unlimited(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+	now := time.Now()
+	memories := []*Memory{
+		{ID: "u1", Content: "m1", State: StateActive, SessionID: "s", MemoryType: TypeSession, UpdatedAt: now.Add(-2 * time.Hour), CreatedAt: now},
+		{ID: "u2", Content: "m2", State: StateActive, SessionID: "s", MemoryType: TypeSession, UpdatedAt: now.Add(-1 * time.Hour), CreatedAt: now},
+		{ID: "u3", Content: "m3", State: StateActive, SessionID: "s", MemoryType: TypeSession, UpdatedAt: now, CreatedAt: now},
+	}
+	if err := s.Bootstrap(ctx, memories); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	result, err := s.ListBySessionIDs(ctx, []string{"s"}, 0)
+	if err != nil {
+		t.Fatalf("ListBySessionIDs: %v", err)
+	}
+	ms := result["s"]
+	if len(ms) != 3 {
+		t.Errorf("want 3, got %d", len(ms))
+	}
+}
+
+func TestListBySessionIDs_SkipsNonActive(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+	now := time.Now()
+	memories := []*Memory{
+		{ID: "d1", Content: "deleted", State: StateDeleted, SessionID: "s", MemoryType: TypeSession, UpdatedAt: now, CreatedAt: now},
+		{ID: "d2", Content: "archived", State: StateArchived, SessionID: "s", MemoryType: TypeSession, UpdatedAt: now, CreatedAt: now},
+		{ID: "d3", Content: "paused", State: StatePaused, SessionID: "s", MemoryType: TypeSession, UpdatedAt: now, CreatedAt: now},
+		{ID: "d4", Content: "active", State: StateActive, SessionID: "s", MemoryType: TypeSession, UpdatedAt: now, CreatedAt: now},
+	}
+	if err := s.Bootstrap(ctx, memories); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+
+	result, err := s.ListBySessionIDs(ctx, []string{"s"}, 10)
+	if err != nil {
+		t.Fatalf("ListBySessionIDs: %v", err)
+	}
+	ms := result["s"]
+	if len(ms) != 1 {
+		t.Errorf("want 1 active, got %d", len(ms))
+	}
+	if ms[0].ID != "d4" {
+		t.Errorf("want d4, got %s", ms[0].ID)
+	}
+}
+
+func TestListBySessionIDs_EmptySessionIDIgnored(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+	result, err := s.ListBySessionIDs(ctx, []string{""}, 10)
+	if err != nil {
+		t.Fatalf("ListBySessionIDs: %v", err)
+	}
+	if len(result) != 0 {
+		t.Errorf("empty sessionID should be ignored")
+	}
+}
+
+// ----------------------------------------------------------------------
 // Stats
 // ----------------------------------------------------------------------
 

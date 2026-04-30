@@ -684,6 +684,76 @@ func (s *MemoryStore) List(ctx context.Context, filter MemoryFilter) ([]Memory, 
 	return results, nil
 }
 
+// ListBySessionIDs returns memories grouped by session.
+//
+// Only StateActive memories are returned; other states are always excluded.
+// This differs from List(), which returns all states when filter.State is empty.
+//
+// Each session is limited to at most limitPerSession items, ordered by
+// UpdatedAt descending (newest first). Sessions with no results are omitted.
+// Pass limitPerSession <= 0 for unlimited results per session.
+//
+// It performs a single full collection scan, making it O(n) regardless of the
+// number of sessions requested.
+func (s *MemoryStore) ListBySessionIDs(ctx context.Context, sessionIDs []string, limitPerSession int) (map[string][]Memory, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("context must not be nil")
+	}
+	if len(sessionIDs) == 0 {
+		return map[string][]Memory{}, nil
+	}
+
+	// Build set for O(1) lookup, skipping empty IDs.
+	sessionSet := make(map[string]struct{}, len(sessionIDs))
+	for _, sid := range sessionIDs {
+		if sid != "" {
+			sessionSet[sid] = struct{}{}
+		}
+	}
+	if len(sessionSet) == 0 {
+		return map[string][]Memory{}, nil
+	}
+
+	// Single-pass collection scan.
+	result := make(map[string][]Memory, len(sessionSet))
+	err := s.coll.ForEachContext(ctx, func(doc *vego.Document) bool {
+		select {
+		case <-ctx.Done():
+			return false
+		default:
+		}
+
+		mem, err := docToMemory(doc)
+		if err != nil {
+			slog.Warn("skip corrupt document during ListBySessionIDs", "id", doc.ID, "err", err)
+			return true
+		}
+		if mem.State != StateActive {
+			return true
+		}
+		if _, ok := sessionSet[mem.SessionID]; !ok {
+			return true
+		}
+		result[mem.SessionID] = append(result[mem.SessionID], *mem)
+		return true
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ListBySessionIDs: %w", err)
+	}
+
+	// Sort each session's results by UpdatedAt descending, then truncate.
+	for sid, mems := range result {
+		sort.Slice(mems, func(i, j int) bool {
+			return mems[i].UpdatedAt.After(mems[j].UpdatedAt)
+		})
+		if limitPerSession > 0 && len(mems) > limitPerSession {
+			result[sid] = mems[:limitPerSession]
+		}
+	}
+
+	return result, nil
+}
+
 // Stats returns aggregate statistics about the memory store.
 func (s *MemoryStore) Stats(ctx context.Context) (*MemoryStats, error) {
 	if ctx == nil {
