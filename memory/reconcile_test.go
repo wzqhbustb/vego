@@ -973,3 +973,52 @@ func TestReconcile_SearchPanicSemaphoreRelease(t *testing.T) {
 	}
 	mu.Unlock()
 }
+
+// ----------------------------------------------------------------------
+// Near-duplicate suppression
+// ----------------------------------------------------------------------
+
+func TestReconcileNearDupSuppression(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+
+	// Seed an existing memory.
+	_, err := s.Store(ctx, "user likes golang", nil)
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+
+	// Fact with identical content — mock embedder gives identical vectors,
+	// so cosine similarity = 1.0.
+	facts := []ExtractedFact{{Content: "user likes golang"}}
+
+	// With threshold = 0.95, the fact should be suppressed (NOOP) without LLM call.
+	s.config.NearDupThreshold = 0.95
+	result, err := s.Reconcile(ctx, "agent-1", facts)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if result.Added != 0 {
+		t.Errorf("added: want 0 (suppressed), got %d", result.Added)
+	}
+	if result.Updated != 0 {
+		t.Errorf("updated: want 0 (suppressed), got %d", result.Updated)
+	}
+	if result.NearDupSkipped != 1 {
+		t.Errorf("nearDupSkipped: want 1 (suppressed), got %d", result.NearDupSkipped)
+	}
+
+	// With threshold disabled (0), it should go through normal Reconcile path.
+	facts2 := []ExtractedFact{{Content: "user likes golang"}}
+	s.config.NearDupThreshold = 0
+	result2, err := s.Reconcile(ctx, "agent-1", facts2)
+	if err != nil {
+		t.Fatalf("reconcile no threshold: %v", err)
+	}
+	if result2.NearDupSkipped != 0 {
+		t.Errorf("nearDupSkipped: want 0 (disabled), got %d", result2.NearDupSkipped)
+	}
+}

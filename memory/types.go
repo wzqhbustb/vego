@@ -130,10 +130,11 @@ type IngestRequest struct {
 
 // IngestResult summarizes the outcome of an Ingest or Reconcile operation.
 type IngestResult struct {
-	Added   int
-	Updated int
-	Deleted int
-	Skipped int
+	Added          int
+	Updated        int
+	Deleted        int
+	Skipped        int
+	NearDupSkipped int // facts suppressed by near-duplicate threshold (not LLM NOOP)
 }
 
 // memoryToDoc converts a Memory to a Vego Document for storage.

@@ -40,6 +40,7 @@ type Config struct {
 	GapStopRatio           float64 // 默认 0.5（0=禁用）
 	DualChannelBonus       float64 // 默认 0（双通道命中乘数加成，0=禁用）
 	VectorSimilarityWeight float64 // 默认 0（向量相似度加权，0=禁用）
+	NearDupThreshold       float64 // 默认 0（近似去重阈值，0=禁用；>0 时 topSim>=threshold 直接 NOOP）
 
 	// Ingest
 	MaxFacts             int // 默认 50
@@ -79,8 +80,9 @@ func DefaultConfig() *Config {
 		RecencyBoostWeek:     1.05,
 		RecencyBoostMonth:    1.02,
 		GapStopRatio:          0.5,
-		DualChannelBonus:      0,
+		DualChannelBonus:       0,
 		VectorSimilarityWeight: 0,
+		NearDupThreshold:       0,
 		MaxFacts:              50,
 		MaxConversationRunes: 1_000_000,
 		MaxContentLen:        50_000,
@@ -185,6 +187,9 @@ func (c *Config) validate() error {
 	}
 	if c.VectorSimilarityWeight < 0 || c.VectorSimilarityWeight > 5 {
 		return fmt.Errorf("vector similarity weight must be in [0,5], got %f", c.VectorSimilarityWeight)
+	}
+	if c.NearDupThreshold < 0 || c.NearDupThreshold > 1 {
+		return fmt.Errorf("near dup threshold must be in [0,1], got %f", c.NearDupThreshold)
 	}
 	return nil
 }
@@ -377,4 +382,12 @@ func WithDualChannelBonus(bonus float64) Option {
 // (1 + vecSimilarity * weight). Default is 0 (disabled).
 func WithVectorSimilarityWeight(weight float64) Option {
 	return func(c *Config) { c.VectorSimilarityWeight = weight }
+}
+
+// WithNearDupThreshold sets the near-duplicate threshold for Reconcile.
+// When the top candidate's vector similarity exceeds this threshold,
+// the fact is treated as a duplicate and skipped (NOOP) without calling
+// the LLM. Use 0 to disable. Range: [0,1].
+func WithNearDupThreshold(threshold float64) Option {
+	return func(c *Config) { c.NearDupThreshold = threshold }
 }

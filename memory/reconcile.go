@@ -66,6 +66,7 @@ func (s *MemoryStore) Reconcile(ctx context.Context, agentID string, facts []Ext
 	// ------------------------------------------------------------------
 	type work struct {
 		candidates []*candidateMapping
+		topSim     float64 // highest vector similarity from findCandidates
 		err        error
 	}
 	works := make([]work, len(facts))
@@ -90,7 +91,7 @@ func (s *MemoryStore) Reconcile(ctx context.Context, agentID string, facts []Ext
 				return
 			}
 			defer searchSem.Release(1)
-			works[idx].candidates, works[idx].err = s.findCandidates(ctx, &facts[idx], factVecs[idx])
+			works[idx].candidates, works[idx].topSim, works[idx].err = s.findCandidates(ctx, &facts[idx], factVecs[idx])
 		}(i)
 	}
 	searchWg.Wait()
@@ -106,6 +107,14 @@ func (s *MemoryStore) Reconcile(ctx context.Context, agentID string, facts []Ext
 		if works[i].err != nil {
 			slog.WarnContext(ctx, "candidate search failed", "error", works[i].err)
 			works[i].candidates = nil // fallback: treat as no candidates → ADD
+		}
+
+		// Near-duplicate suppression: if the top candidate is extremely similar,
+		// skip LLM decision and treat as NOOP to save LLM call cost.
+		if s.config.NearDupThreshold > 0 && works[i].topSim >= s.config.NearDupThreshold {
+			slog.InfoContext(ctx, "near-duplicate suppressed", "fact", facts[i].Content, "top_sim", works[i].topSim, "threshold", s.config.NearDupThreshold)
+			result.NearDupSkipped++
+			continue
 		}
 
 		action, targetID, err := s.decideAction(ctx, &facts[i], works[i].candidates)
@@ -155,7 +164,7 @@ var activeFilter = &vego.MetadataFilter{
 // before the findCandidates call) must still execute to avoid a semaphore leak.
 var testReconcileSearchPanicHook func()
 
-func (s *MemoryStore) findCandidates(ctx context.Context, fact *ExtractedFact, vec []float32) ([]*candidateMapping, error) {
+func (s *MemoryStore) findCandidates(ctx context.Context, fact *ExtractedFact, vec []float32) ([]*candidateMapping, float64, error) {
 	if testReconcileSearchPanicHook != nil {
 		testReconcileSearchPanicHook()
 	}
@@ -164,19 +173,28 @@ func (s *MemoryStore) findCandidates(ctx context.Context, fact *ExtractedFact, v
 		var err error
 		vec, err = s.embed(ctx, fact.Content)
 		if err != nil {
-			return nil, fmt.Errorf("embed: %w", err)
+			return nil, 0, fmt.Errorf("embed: %w", err)
 		}
 	}
 
 	vecResults, err := s.coll.SearchWithFilterContext(ctx, vec, s.config.SearchLimit, activeFilter, vego.WithOverFetch(s.config.SearchOverFetch))
 	if err != nil {
-		return nil, fmt.Errorf("vector search: %w", err)
+		return nil, 0, fmt.Errorf("vector search: %w", err)
+	}
+
+	// Track the highest raw vector similarity for near-duplicate suppression.
+	topSim := 0.0
+	for _, r := range vecResults {
+		sim := distanceToSimilarity(r.Distance, s.config.DistanceFunc)
+		if sim > topSim {
+			topSim = sim
+		}
 	}
 
 	// 2. Keyword search.
 	keywordResults, err := s.inverted.SearchContext(ctx, fact.Content, s.config.SearchLimit)
 	if err != nil {
-		return nil, fmt.Errorf("keyword search: %w", err)
+		return nil, 0, fmt.Errorf("keyword search: %w", err)
 	}
 
 	// 3. Merge & deduplicate.
@@ -214,7 +232,7 @@ func (s *MemoryStore) findCandidates(ctx context.Context, fact *ExtractedFact, v
 		addResult(sid.ID)
 	}
 
-	return candidates, nil
+	return candidates, topSim, nil
 }
 
 // ----------------------------------------------------------------------

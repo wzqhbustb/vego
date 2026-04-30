@@ -85,6 +85,9 @@ func TestDefaultConfig(t *testing.T) {
 	if c.VectorSimilarityWeight != 0 {
 		t.Errorf("VectorSimilarityWeight: want 0, got %f", c.VectorSimilarityWeight)
 	}
+	if c.NearDupThreshold != 0 {
+		t.Errorf("NearDupThreshold: want 0, got %f", c.NearDupThreshold)
+	}
 }
 
 func TestNewConfigWithOptions(t *testing.T) {
@@ -106,6 +109,7 @@ func TestNewConfigWithOptions(t *testing.T) {
 		WithMaxBulkSize(10),
 		WithDualChannelBonus(0.3),
 		WithVectorSimilarityWeight(0.4),
+		WithNearDupThreshold(0.85),
 	)
 	if err != nil {
 		t.Fatalf("NewConfig error: %v", err)
@@ -192,6 +196,9 @@ func TestNewConfigWithOptions(t *testing.T) {
 	}
 	if c.VectorSimilarityWeight != 0.4 {
 		t.Errorf("VectorSimilarityWeight: want 0.4, got %f", c.VectorSimilarityWeight)
+	}
+	if c.NearDupThreshold != 0.85 {
+		t.Errorf("NearDupThreshold: want 0.85, got %f", c.NearDupThreshold)
 	}
 }
 
@@ -489,6 +496,16 @@ func TestConfigValidationExtended(t *testing.T) {
 			name:    "vector similarity weight too high",
 			opts:    []Option{WithVectorSimilarityWeight(5.1)},
 			wantErr: "vector similarity weight must be in [0,5], got 5.100000",
+		},
+		{
+			name:    "negative near dup threshold",
+			opts:    []Option{WithNearDupThreshold(-0.1)},
+			wantErr: "near dup threshold must be in [0,1], got -0.100000",
+		},
+		{
+			name:    "near dup threshold too high",
+			opts:    []Option{WithNearDupThreshold(1.1)},
+			wantErr: "near dup threshold must be in [0,1], got 1.100000",
 		},
 	}
 
