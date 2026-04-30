@@ -212,6 +212,12 @@ func (s *MemoryStore) Close() error {
 
 // Store creates a new memory.
 func (s *MemoryStore) Store(ctx context.Context, content string, tags []string) (*Memory, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("context must not be nil")
+	}
+	if err := validateInput(content, tags, s.config); err != nil {
+		return nil, err
+	}
 	vec, err := s.embed(ctx, content)
 	if err != nil {
 		return nil, fmt.Errorf("embed: %w", err)
@@ -246,6 +252,12 @@ func (s *MemoryStore) Store(ctx context.Context, content string, tags []string) 
 
 // Get retrieves a memory by ID.
 func (s *MemoryStore) Get(ctx context.Context, id string) (*Memory, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("context must not be nil")
+	}
+	if id == "" {
+		return nil, fmt.Errorf("id must not be empty")
+	}
 	doc, err := s.coll.GetContext(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("get: %w", err)
@@ -268,6 +280,12 @@ func (s *MemoryStore) getWithoutVector(ctx context.Context, id string) (*Memory,
 // The old memory is archived (state=archived, superseded_by=newID)
 // and a new memory with a fresh ID is created.
 func (s *MemoryStore) Update(ctx context.Context, id, content string, tags []string) (*Memory, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("context must not be nil")
+	}
+	if id == "" {
+		return nil, fmt.Errorf("id must not be empty")
+	}
 	return s.update(ctx, id, content, tags, nil)
 }
 
@@ -288,6 +306,10 @@ func (s *MemoryStore) update(ctx context.Context, id, content string, tags []str
 
 	if oldMem.State != StateActive {
 		return nil, fmt.Errorf("cannot update memory %s: state is %s", id, oldMem.State)
+	}
+
+	if err := validateInput(content, tags, s.config); err != nil {
+		return nil, err
 	}
 
 	// Embed new content.
@@ -330,6 +352,12 @@ func (s *MemoryStore) update(ctx context.Context, id, content string, tags []str
 // Delete soft-deletes a memory: its state becomes "deleted" but the record
 // remains queryable by ID.
 func (s *MemoryStore) Delete(ctx context.Context, id string) error {
+	if ctx == nil {
+		return fmt.Errorf("context must not be nil")
+	}
+	if id == "" {
+		return fmt.Errorf("id must not be empty")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -365,8 +393,91 @@ func (s *MemoryStore) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+// Pause transitions an active memory to the paused state.
+// Paused memories are excluded from search results but remain queryable by ID.
+func (s *MemoryStore) Pause(ctx context.Context, id string) error {
+	if ctx == nil {
+		return fmt.Errorf("context must not be nil")
+	}
+	if id == "" {
+		return fmt.Errorf("id must not be empty")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	doc, err := s.coll.GetContext(ctx, id)
+	if err != nil {
+		return fmt.Errorf("get: %w", err)
+	}
+
+	mem, err := docToMemory(doc)
+	if err != nil {
+		return fmt.Errorf("decode: %w", err)
+	}
+
+	if mem.State != StateActive {
+		return fmt.Errorf("cannot pause memory %s: state is %s", id, mem.State)
+	}
+
+	mem.State = StatePaused
+	mem.UpdatedAt = time.Now()
+
+	updatedDoc, err := memoryToDoc(mem, doc.Vector)
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+
+	if err := s.coll.UpdateContext(ctx, updatedDoc); err != nil {
+		return fmt.Errorf("update state: %w", err)
+	}
+
+	s.inverted.Remove(id)
+	return nil
+}
+
+// Resume transitions a paused memory back to active.
+func (s *MemoryStore) Resume(ctx context.Context, id string) error {
+	if ctx == nil {
+		return fmt.Errorf("context must not be nil")
+	}
+	if id == "" {
+		return fmt.Errorf("id must not be empty")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	doc, err := s.coll.GetContext(ctx, id)
+	if err != nil {
+		return fmt.Errorf("get: %w", err)
+	}
+
+	mem, err := docToMemory(doc)
+	if err != nil {
+		return fmt.Errorf("decode: %w", err)
+	}
+
+	if mem.State != StatePaused {
+		return fmt.Errorf("cannot resume memory %s: state is %s", id, mem.State)
+	}
+
+	mem.State = StateActive
+	mem.UpdatedAt = time.Now()
+
+	updatedDoc, err := memoryToDoc(mem, doc.Vector)
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+
+	if err := s.coll.UpdateContext(ctx, updatedDoc); err != nil {
+		return fmt.Errorf("update state: %w", err)
+	}
+
+	s.inverted.Add(id, mem.Content)
+	return nil
+}
+
 // ----------------------------------------------------------------------
-// Search
+// Search / List / Stats
 // ----------------------------------------------------------------------
 
 // SearchOption customizes Search behavior.
@@ -404,12 +515,22 @@ func WithFilter(f MemoryFilter) SearchOption {
 // By default it runs the full 10-stage pipeline (vector + BM25 + RRF + boosts).
 // Pass EnableHybrid(false) to fall back to pure vector search.
 func (s *MemoryStore) Search(ctx context.Context, query string, opts ...SearchOption) ([]Memory, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("context must not be nil")
+	}
 	sc := &searchConfig{
 		hybrid:   true,
 		minScore: -1, // sentinel: -1 means not set; [0,1] are valid
 	}
 	for _, opt := range opts {
 		opt(sc)
+	}
+
+	if sc.limit < 0 {
+		return nil, fmt.Errorf("search limit must be >= 0, got %d", sc.limit)
+	}
+	if sc.minScore >= 0 && sc.minScore > 1 {
+		return nil, fmt.Errorf("search minScore must be in [0,1], got %f", sc.minScore)
 	}
 
 	// Build MemoryFilter from option overrides.
@@ -438,6 +559,9 @@ func (s *MemoryStore) Search(ctx context.Context, query string, opts ...SearchOp
 
 // pureVectorSearch is the fallback path when hybrid search is disabled.
 func (s *MemoryStore) pureVectorSearch(ctx context.Context, query string, filter MemoryFilter) ([]Memory, error) {
+	if query == "" {
+		return nil, nil
+	}
 	now := time.Now()
 	normalizedQuery := NormalizeTemporalRecallQuery(query, now)
 	vec, err := s.embed(ctx, normalizedQuery)
@@ -502,6 +626,108 @@ func (s *MemoryStore) pureVectorSearch(ctx context.Context, query string, filter
 	return results, nil
 }
 
+// List returns memories matching the given filter, ordered by UpdatedAt descending.
+// It performs a full collection scan; embedding APIs are not called.
+// Pagination is supported via filter.Offset and filter.Limit.
+func (s *MemoryStore) List(ctx context.Context, filter MemoryFilter) ([]Memory, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("context must not be nil")
+	}
+	var results []Memory
+
+	err := s.coll.ForEachContext(ctx, func(doc *vego.Document) bool {
+		select {
+		case <-ctx.Done():
+			return false
+		default:
+		}
+
+		mem, err := docToMemory(doc)
+		if err != nil {
+			slog.Warn("skip corrupt document during list", "id", doc.ID, "err", err)
+			return true
+		}
+
+		if matchesFilter(*mem, filter) {
+			results = append(results, *mem)
+		}
+		return true
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list: %w", err)
+	}
+
+	// Sort by UpdatedAt descending (newest first).
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].UpdatedAt.After(results[j].UpdatedAt)
+	})
+
+	// Apply pagination.
+	if filter.Offset > 0 {
+		if filter.Offset >= len(results) {
+			return []Memory{}, nil
+		}
+		results = results[filter.Offset:]
+	}
+
+	limit := filter.Limit
+	if !filter.LimitSet && limit <= 0 {
+		limit = s.config.SearchLimit
+	}
+	if limit == 0 {
+		return []Memory{}, nil
+	}
+	if limit > 0 && limit < len(results) {
+		results = results[:limit]
+	}
+
+	return results, nil
+}
+
+// Stats returns aggregate statistics about the memory store.
+func (s *MemoryStore) Stats(ctx context.Context) (*MemoryStats, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("context must not be nil")
+	}
+	stats := &MemoryStats{
+		ByType: make(map[string]int),
+		Vego:   s.coll.Stats(),
+	}
+
+	err := s.coll.ForEachContext(ctx, func(doc *vego.Document) bool {
+		select {
+		case <-ctx.Done():
+			return false
+		default:
+		}
+
+		mem, err := docToMemory(doc)
+		if err != nil {
+			slog.Warn("skip corrupt document during stats", "id", doc.ID, "err", err)
+			return true
+		}
+
+		stats.Total++
+		switch mem.State {
+		case StateActive:
+			stats.Active++
+		case StatePaused:
+			stats.Paused++
+		case StateArchived:
+			stats.Archived++
+		case StateDeleted:
+			stats.Deleted++
+		}
+		stats.ByType[string(mem.MemoryType)]++
+		return true
+	})
+	if err != nil {
+		return nil, fmt.Errorf("stats: %w", err)
+	}
+
+	return stats, nil
+}
+
 // ----------------------------------------------------------------------
 // Batch / Bootstrap
 // ----------------------------------------------------------------------
@@ -515,8 +741,19 @@ type StoreItem struct {
 // StoreBatch stores multiple memories in one batch.
 // Embedding calls run concurrently (up to 4 in parallel) to reduce latency.
 func (s *MemoryStore) StoreBatch(ctx context.Context, items []StoreItem) ([]Memory, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("context must not be nil")
+	}
 	if len(items) == 0 {
 		return nil, nil
+	}
+	if err := validateBulkSize(len(items), s.config); err != nil {
+		return nil, err
+	}
+	for i, item := range items {
+		if err := validateInput(item.Content, item.Tags, s.config); err != nil {
+			return nil, fmt.Errorf("item %d: %w", i, err)
+		}
 	}
 
 	// Phase 1: embed all items concurrently with bounded parallelism.
@@ -608,14 +845,23 @@ func (s *MemoryStore) StoreBatch(ctx context.Context, items []StoreItem) ([]Memo
 // If a memory has a non-empty Vector field, it is used directly;
 // otherwise the embedder is invoked.
 func (s *MemoryStore) Bootstrap(ctx context.Context, memories []*Memory) error {
+	if ctx == nil {
+		return fmt.Errorf("context must not be nil")
+	}
 	if len(memories) == 0 {
 		return nil
+	}
+	if err := validateBulkSize(len(memories), s.config); err != nil {
+		return err
 	}
 
 	docs := make([]*vego.Document, len(memories))
 	for i, mem := range memories {
 		if mem == nil {
 			return fmt.Errorf("memory %d is nil", i)
+		}
+		if err := validateInput(mem.Content, mem.Tags, s.config); err != nil {
+			return fmt.Errorf("memory %d: %w", i, err)
 		}
 		// Apply defaults for fields not set by the caller (consistent with
 		// Store / StoreBatch which default MemoryType to TypeInsight).
@@ -699,6 +945,25 @@ func (s *MemoryStore) embedBatch(ctx context.Context, texts []string) ([][]float
 		return nil, fmt.Errorf("embedder not configured")
 	}
 	return s.embedder.EmbedBatch(ctx, texts)
+}
+
+// validateInput checks content length and tag count against config limits.
+func validateInput(content string, tags []string, cfg *Config) error {
+	if len(content) > cfg.MaxContentLen {
+		return fmt.Errorf("content length %d exceeds max %d", len(content), cfg.MaxContentLen)
+	}
+	if len(tags) > cfg.MaxTags {
+		return fmt.Errorf("tag count %d exceeds max %d", len(tags), cfg.MaxTags)
+	}
+	return nil
+}
+
+// validateBulkSize checks the batch size against config limit.
+func validateBulkSize(n int, cfg *Config) error {
+	if n > cfg.MaxBulkSize {
+		return fmt.Errorf("batch size %d exceeds max %d", n, cfg.MaxBulkSize)
+	}
+	return nil
 }
 
 // rebuildIndexes rebuilds the inverted index and ContentHashIndex from

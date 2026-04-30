@@ -70,6 +70,15 @@ func TestDefaultConfig(t *testing.T) {
 	if c.RecencyBoostMonth != 1.02 {
 		t.Errorf("RecencyBoostMonth: want 1.02, got %f", c.RecencyBoostMonth)
 	}
+	if c.MaxContentLen != 50_000 {
+		t.Errorf("MaxContentLen: want 50000, got %d", c.MaxContentLen)
+	}
+	if c.MaxTags != 20 {
+		t.Errorf("MaxTags: want 20, got %d", c.MaxTags)
+	}
+	if c.MaxBulkSize != 100 {
+		t.Errorf("MaxBulkSize: want 100, got %d", c.MaxBulkSize)
+	}
 }
 
 func TestNewConfigWithOptions(t *testing.T) {
@@ -86,6 +95,9 @@ func TestNewConfigWithOptions(t *testing.T) {
 		WithRecencyBoost(1.1, 1.03),
 		WithGapStop(0.3),
 		WithIngestParams(100, 500000),
+		WithMaxContentLen(1000),
+		WithMaxTags(5),
+		WithMaxBulkSize(10),
 	)
 	if err != nil {
 		t.Fatalf("NewConfig error: %v", err)
@@ -157,6 +169,15 @@ func TestNewConfigWithOptions(t *testing.T) {
 	}
 	if c.MaxConversationRunes != 500000 {
 		t.Errorf("MaxConversationRunes: want 500000, got %d", c.MaxConversationRunes)
+	}
+	if c.MaxContentLen != 1000 {
+		t.Errorf("MaxContentLen: want 1000, got %d", c.MaxContentLen)
+	}
+	if c.MaxTags != 5 {
+		t.Errorf("MaxTags: want 5, got %d", c.MaxTags)
+	}
+	if c.MaxBulkSize != 10 {
+		t.Errorf("MaxBulkSize: want 10, got %d", c.MaxBulkSize)
 	}
 }
 
@@ -419,6 +440,21 @@ func TestConfigValidationExtended(t *testing.T) {
 			name:    "negative recency boost month",
 			opts:    []Option{WithRecencyBoost(1.0, -0.1)},
 			wantErr: "recency boost month must be >= 0, got -0.100000",
+		},
+		{
+			name:    "zero max content len",
+			opts:    []Option{WithMaxContentLen(0)},
+			wantErr: "max content len must be > 0, got 0",
+		},
+		{
+			name:    "zero max tags",
+			opts:    []Option{WithMaxTags(0)},
+			wantErr: "max tags must be > 0, got 0",
+		},
+		{
+			name:    "zero max bulk size",
+			opts:    []Option{WithMaxBulkSize(0)},
+			wantErr: "max bulk size must be > 0, got 0",
 		},
 	}
 

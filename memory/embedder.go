@@ -71,6 +71,12 @@ func (e *Embedder) CloseIdleConnections() {
 
 // Embed generates an embedding vector for the given text.
 func (e *Embedder) Embed(ctx context.Context, text string) ([]float32, error) {
+	if e == nil {
+		return nil, fmt.Errorf("embedder is nil")
+	}
+	if ctx == nil {
+		return nil, fmt.Errorf("context must not be nil")
+	}
 	start := time.Now()
 	vec, err := e.embed(ctx, text)
 	if err != nil {
@@ -90,12 +96,21 @@ func (e *Embedder) Embed(ctx context.Context, text string) ([]float32, error) {
 
 // Dims returns the expected vector dimension.
 func (e *Embedder) Dims() int {
+	if e == nil {
+		return 0
+	}
 	return e.dims
 }
 
 // EmbedBatch generates embedding vectors for multiple texts in a single API call.
 // Returns a slice of vectors in the same order as the input texts.
 func (e *Embedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	if e == nil {
+		return nil, fmt.Errorf("embedder is nil")
+	}
+	if ctx == nil {
+		return nil, fmt.Errorf("context must not be nil")
+	}
 	if len(texts) == 0 {
 		return nil, nil
 	}

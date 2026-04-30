@@ -199,6 +199,17 @@ func docToMemory(doc *vego.Document) (*Memory, error) {
 	return &m, nil
 }
 
+// MemoryStats holds aggregate statistics about the memory store.
+type MemoryStats struct {
+	Total    int            // Total documents in the collection
+	Active   int            // StateActive count
+	Paused   int            // StatePaused count
+	Archived int            // StateArchived count
+	Deleted  int            // StateDeleted count
+	ByType   map[string]int // Distribution by MemoryType
+	Vego     vego.CollectionStats // Underlying Vego collection stats
+}
+
 // copyMap returns a copy of a metadata map, or nil if src is nil.
 // Known pointer types (e.g. *TemporalMetadata) are deep-copied so that
 // the returned map does not share mutable references with the source.

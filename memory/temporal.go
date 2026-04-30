@@ -118,6 +118,7 @@ const (
 	unitMonth
 	unitYear
 	unitSeason
+	unitWeekday
 )
 
 type relativePattern struct {
@@ -174,6 +175,32 @@ var (
 		{re: regexp.MustCompile(`(?i)\btoday\b`), offset: 0, unit: unitDay, display: "today"},
 	}
 
+	// Chinese weekday patterns (e.g. 上周一, 本周三, 下周天).
+	// Ordered by length descending to avoid partial matches.
+	cnWeekdayPatterns = []relativePattern{
+		{re: regexp.MustCompile(`大上周[一二三四五六日天]`), offset: -2, unit: unitWeekday, display: "大上周X"},
+		{re: regexp.MustCompile(`上上周[一二三四五六日天]`), offset: -2, unit: unitWeekday, display: "上上周X"},
+		{re: regexp.MustCompile(`大下周[一二三四五六日天]`), offset: 2, unit: unitWeekday, display: "大下周X"},
+		{re: regexp.MustCompile(`下下周[一二三四五六日天]`), offset: 2, unit: unitWeekday, display: "下下周X"},
+		{re: regexp.MustCompile(`上周[一二三四五六日天]`), offset: -1, unit: unitWeekday, display: "上周X"},
+		{re: regexp.MustCompile(`本周[一二三四五六日天]`), offset: 0, unit: unitWeekday, display: "本周X"},
+		{re: regexp.MustCompile(`下周[一二三四五六日天]`), offset: 1, unit: unitWeekday, display: "下周X"},
+	}
+
+	// English weekday patterns (e.g. last Monday, this Friday, next Sunday).
+	enWeekdayPatterns = []relativePattern{
+		{re: regexp.MustCompile(`(?i)\blast\s+(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b`), offset: -1, unit: unitWeekday, display: "last X"},
+		{re: regexp.MustCompile(`(?i)\bthis\s+(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b`), offset: 0, unit: unitWeekday, display: "this X"},
+		{re: regexp.MustCompile(`(?i)\bnext\s+(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b`), offset: 1, unit: unitWeekday, display: "next X"},
+	}
+
+	// English named-season patterns (e.g. last summer, this winter, next spring).
+	enNamedSeasonPatterns = []relativePattern{
+		{re: regexp.MustCompile(`(?i)\blast\s+(summer|winter|spring|fall|autumn)\b`), offset: -1, unit: unitSeason, display: "last X"},
+		{re: regexp.MustCompile(`(?i)\bthis\s+(summer|winter|spring|fall|autumn)\b`), offset: 0, unit: unitSeason, display: "this X"},
+		{re: regexp.MustCompile(`(?i)\bnext\s+(summer|winter|spring|fall|autumn)\b`), offset: 1, unit: unitSeason, display: "next X"},
+	}
+
 	// Absolute date patterns (detect but do not replace).
 	isoDateRE = regexp.MustCompile(`\b(\d{4})-(\d{1,2})-(\d{1,2})\b`)
 	cnDateRE1 = regexp.MustCompile(`(\d{4})年(\d{1,2})月(\d{1,2})日`)
@@ -217,19 +244,40 @@ func validCNBoundary(content string, start, end int) bool {
 	return true
 }
 
+// match holds a single temporal expression match within content.
+type temporalMatch struct {
+	start, end int
+	iso        string
+	meta       *TemporalMetadata
+}
+
 // resolveInContent scans content for temporal expressions and replaces them
 // with absolute ISO dates. All matching patterns are replaced (not just the
 // first). Returns the resolved content and metadata for the first match (nil
 // if no temporal expressions found).
 func resolveInContent(content string, anchor time.Time, anchorSrc string) (string, *TemporalMetadata) {
-	type match struct {
-		start, end int
-		iso        string
-		meta       *TemporalMetadata
-	}
-	var matches []match
+	var matches []temporalMatch
 
-	// 1. Scan Chinese patterns with boundary check.
+	// 1. Scan Chinese weekday patterns first (more specific than plain 上周/本周/下周).
+	for i := range cnWeekdayPatterns {
+		p := &cnWeekdayPatterns[i]
+		locs := p.re.FindAllStringIndex(content, -1)
+		for _, loc := range locs {
+			if !validCNBoundary(content, loc[0], loc[1]) {
+				continue
+			}
+			wd := parseCNWeekday(content[loc[0]:loc[1]])
+			t := resolveWeekday(anchor, p.offset, wd)
+			matches = append(matches, temporalMatch{
+				start: loc[0],
+				end:   loc[1],
+				iso:   t.Format("2006-01-02"),
+				meta:  buildWeekdayMeta(p, anchor, anchorSrc, wd),
+			})
+		}
+	}
+
+	// 2. Scan Chinese base patterns (e.g. 昨天, 上周, 本月).
 	for i := range cnPatterns {
 		p := &cnPatterns[i]
 		locs := p.re.FindAllStringIndex(content, -1)
@@ -238,7 +286,7 @@ func resolveInContent(content string, anchor time.Time, anchorSrc string) (strin
 				continue
 			}
 			t := resolveAbsolute(anchor, p.offset, p.unit)
-			matches = append(matches, match{
+			matches = append(matches, temporalMatch{
 				start: loc[0],
 				end:   loc[1],
 				iso:   t.Format("2006-01-02"),
@@ -247,13 +295,45 @@ func resolveInContent(content string, anchor time.Time, anchorSrc string) (strin
 		}
 	}
 
-	// 2. Scan English patterns.
+	// 3. Scan English weekday patterns first (more specific than plain last/next week).
+	for i := range enWeekdayPatterns {
+		p := &enWeekdayPatterns[i]
+		locs := p.re.FindAllStringIndex(content, -1)
+		for _, loc := range locs {
+			wd := parseENWeekday(content[loc[0]:loc[1]])
+			t := resolveWeekday(anchor, p.offset, wd)
+			matches = append(matches, temporalMatch{
+				start: loc[0],
+				end:   loc[1],
+				iso:   t.Format("2006-01-02"),
+				meta:  buildWeekdayMeta(p, anchor, anchorSrc, wd),
+			})
+		}
+	}
+
+	// 4. Scan English named-season patterns (more specific than plain season).
+	for i := range enNamedSeasonPatterns {
+		p := &enNamedSeasonPatterns[i]
+		locs := p.re.FindAllStringIndex(content, -1)
+		for _, loc := range locs {
+			seasonName := parseSeasonName(content[loc[0]:loc[1]])
+			start, end := resolveSeasonNamed(anchor, seasonName, p.offset)
+			matches = append(matches, temporalMatch{
+				start: loc[0],
+				end:   loc[1],
+				iso:   start.Format("2006-01-02"),
+				meta:  buildSeasonMeta(p, anchor, anchorSrc, seasonName, start, end),
+			})
+		}
+	}
+
+	// 5. Scan English base patterns.
 	for i := range enPatterns {
 		p := &enPatterns[i]
 		locs := p.re.FindAllStringIndex(content, -1)
 		for _, loc := range locs {
 			t := resolveAbsolute(anchor, p.offset, p.unit)
-			matches = append(matches, match{
+			matches = append(matches, temporalMatch{
 				start: loc[0],
 				end:   loc[1],
 				iso:   t.Format("2006-01-02"),
@@ -262,14 +342,27 @@ func resolveInContent(content string, anchor time.Time, anchorSrc string) (strin
 		}
 	}
 
+	// 2.7. Scan local-anchor-relative patterns (e.g. "2025年4月13日的后一天").
+	localMatches := scanLocalAnchorRelative(content, anchor, anchorSrc)
+	matches = append(matches, localMatches...)
+
+	// 2.8. Scan anchor-period patterns (e.g. "the week before 2026-04-14").
+	periodMatches := scanAnchorPeriod(content, anchor, anchorSrc)
+	matches = append(matches, periodMatches...)
+
 	// 3. Replace all relative matches.
 	if len(matches) > 0 {
 		sort.Slice(matches, func(i, j int) bool {
-			return matches[i].start < matches[j].start
+			if matches[i].start != matches[j].start {
+				return matches[i].start < matches[j].start
+			}
+			// Same start: prefer longer match so that dedup keeps the more
+			// specific pattern (e.g. "上周五" over "上周").
+			return matches[i].end > matches[j].end
 		})
 
 		// Remove overlaps: keep earlier match, skip later overlapping ones.
-		var deduped []match
+		var deduped []temporalMatch
 		lastEnd := -1
 		for _, m := range matches {
 			if m.start < lastEnd {
@@ -367,6 +460,238 @@ func buildMeta(p *relativePattern, anchor time.Time, anchorSrc string) *Temporal
 	return meta
 }
 
+// buildWeekdayMeta constructs TemporalMetadata for a weekday pattern.
+func buildWeekdayMeta(p *relativePattern, anchor time.Time, anchorSrc string, wd time.Weekday) *TemporalMetadata {
+	resolved := resolveWeekday(anchor, p.offset, wd)
+	iso := resolved.Format("2006-01-02")
+	kind := "deictic_relative"
+	if anchorSrc == "header" {
+		kind = "header_anchor_relative"
+	}
+	meta := &TemporalMetadata{
+		Kind:          kind,
+		AnchorSource:  anchorSrc,
+		Granularity:   "day",
+		ResolvedStart: iso,
+		ResolvedEnd:   iso,
+		Display:       p.display,
+	}
+	return meta
+}
+
+// buildSeasonMeta constructs TemporalMetadata for a named-season pattern.
+func buildSeasonMeta(p *relativePattern, anchor time.Time, anchorSrc string, seasonName string, start, end time.Time) *TemporalMetadata {
+	kind := "deictic_relative"
+	if anchorSrc == "header" {
+		kind = "header_anchor_relative"
+	}
+	return &TemporalMetadata{
+		Kind:          kind,
+		AnchorSource:  anchorSrc,
+		Granularity:   "season",
+		ResolvedStart: start.Format("2006-01-02"),
+		ResolvedEnd:   end.Format("2006-01-02"),
+		Display:       p.display,
+	}
+}
+
+// scanLocalAnchorRelative scans for text-internal-anchor relative expressions
+// such as "2025年4月13日的后一天" or "April 14, 2025 the next day".
+func scanLocalAnchorRelative(content string, anchor time.Time, anchorSrc string) []temporalMatch {
+	var matches []temporalMatch
+
+	// Chinese: YYYY年M月D日的(后|前)(一|两|几)?(天|周|星期|个月|年)
+	cnLocalAnchorRE := regexp.MustCompile(`(\d{4})年(\d{1,2})月(\d{1,2})日\s*的(后|前)([一二两三四五六七八九十\d]+)?(天|周|星期|个月|年)`)
+	for _, m := range cnLocalAnchorRE.FindAllStringSubmatchIndex(content, -1) {
+		y, _ := strconv.Atoi(content[m[2]:m[3]])
+		mo, _ := strconv.Atoi(content[m[4]:m[5]])
+		d, _ := strconv.Atoi(content[m[6]:m[7]])
+		direction := content[m[8]:m[9]]
+		quantityStr := ""
+		if m[10] >= 0 {
+			quantityStr = content[m[10]:m[11]]
+		}
+		unitStr := content[m[12]:m[13]]
+
+		t, ok := validDate(y, mo, d)
+		if !ok {
+			continue
+		}
+
+		qty := parseCNQuantity(quantityStr)
+		if qty <= 0 {
+			qty = 1
+		}
+		if direction == "前" {
+			qty = -qty
+		}
+
+		var resolved time.Time
+		switch unitStr {
+		case "天":
+			resolved = t.AddDate(0, 0, qty)
+		case "周", "星期":
+			resolved = t.AddDate(0, 0, qty*7)
+		case "个月":
+			resolved = t.AddDate(0, qty, 0)
+		case "年":
+			resolved = t.AddDate(qty, 0, 0)
+		}
+
+		meta := &TemporalMetadata{
+			Kind:          "local_anchor_relative",
+			AnchorSource:  "local",
+			Granularity:   "day",
+			ResolvedStart: resolved.Format("2006-01-02"),
+			ResolvedEnd:   resolved.Format("2006-01-02"),
+			Display:       content[m[0]:m[1]],
+		}
+		matches = append(matches, temporalMatch{
+			start: m[0],
+			end:   m[1],
+			iso:   resolved.Format("2006-01-02"),
+			meta:  meta,
+		})
+	}
+
+	// English: ISO date + "the (next|previous) day/week/month/year"
+	enLocalAnchorRE := regexp.MustCompile(`(?i)(\d{4})-(\d{1,2})-(\d{1,2})\s+the\s+(next|previous)\s+(day|week|month|year)`)
+	for _, m := range enLocalAnchorRE.FindAllStringSubmatchIndex(content, -1) {
+		y, _ := strconv.Atoi(content[m[2]:m[3]])
+		mo, _ := strconv.Atoi(content[m[4]:m[5]])
+		d, _ := strconv.Atoi(content[m[6]:m[7]])
+		direction := strings.ToLower(content[m[8]:m[9]])
+		unitStr := strings.ToLower(content[m[10]:m[11]])
+
+		t, ok := validDate(y, mo, d)
+		if !ok {
+			continue
+		}
+
+		qty := 1
+		if direction == "previous" {
+			qty = -1
+		}
+
+		var resolved time.Time
+		switch unitStr {
+		case "day":
+			resolved = t.AddDate(0, 0, qty)
+		case "week":
+			resolved = t.AddDate(0, 0, qty*7)
+		case "month":
+			resolved = t.AddDate(0, qty, 0)
+		case "year":
+			resolved = t.AddDate(qty, 0, 0)
+		}
+
+		meta := &TemporalMetadata{
+			Kind:          "local_anchor_relative",
+			AnchorSource:  "local",
+			Granularity:   "day",
+			ResolvedStart: resolved.Format("2006-01-02"),
+			ResolvedEnd:   resolved.Format("2006-01-02"),
+			Display:       content[m[0]:m[1]],
+		}
+		matches = append(matches, temporalMatch{
+			start: m[0],
+			end:   m[1],
+			iso:   resolved.Format("2006-01-02"),
+			meta:  meta,
+		})
+	}
+
+	return matches
+}
+
+// scanAnchorPeriod scans for anchor-period expressions such as
+// "the week before 2026-04-14" or "the month after 2025-12-01".
+func scanAnchorPeriod(content string, anchor time.Time, anchorSrc string) []temporalMatch {
+	var matches []temporalMatch
+
+	re := regexp.MustCompile(`(?i)\bthe\s+(day|week|month|year)\s+(before|after)\s+(\d{4})-(\d{1,2})-(\d{1,2})\b`)
+	for _, m := range re.FindAllStringSubmatchIndex(content, -1) {
+		unitStr := strings.ToLower(content[m[2]:m[3]])
+		direction := strings.ToLower(content[m[4]:m[5]])
+		y, _ := strconv.Atoi(content[m[6]:m[7]])
+		mo, _ := strconv.Atoi(content[m[8]:m[9]])
+		d, _ := strconv.Atoi(content[m[10]:m[11]])
+
+		t, ok := validDate(y, mo, d)
+		if !ok {
+			continue
+		}
+
+		qty := 1
+		if direction == "before" {
+			qty = -1
+		}
+
+		var resolved time.Time
+		switch unitStr {
+		case "day":
+			resolved = t.AddDate(0, 0, qty)
+		case "week":
+			resolved = t.AddDate(0, 0, qty*7)
+		case "month":
+			resolved = t.AddDate(0, qty, 0)
+		case "year":
+			resolved = t.AddDate(qty, 0, 0)
+		}
+
+		meta := &TemporalMetadata{
+			Kind:          "local_anchor_relative",
+			AnchorSource:  "local",
+			Granularity:   "day",
+			ResolvedStart: resolved.Format("2006-01-02"),
+			ResolvedEnd:   resolved.Format("2006-01-02"),
+			Display:       content[m[0]:m[1]],
+		}
+		matches = append(matches, temporalMatch{
+			start: m[0],
+			end:   m[1],
+			iso:   resolved.Format("2006-01-02"),
+			meta:  meta,
+		})
+	}
+
+	return matches
+}
+
+// parseCNQuantity parses a simple Chinese quantity string (e.g. "一" → 1, "两" → 2).
+// It falls back to strconv.Atoi for numeric strings.  Returns 0 if unrecognised.
+func parseCNQuantity(s string) int {
+	s = strings.TrimSpace(s)
+	switch s {
+	case "一", "1":
+		return 1
+	case "两", "二", "2":
+		return 2
+	case "三", "3":
+		return 3
+	case "四", "4":
+		return 4
+	case "五", "5":
+		return 5
+	case "六", "6":
+		return 6
+	case "七", "7":
+		return 7
+	case "八", "8":
+		return 8
+	case "九", "9":
+		return 9
+	case "十", "10":
+		return 10
+	case "几":
+		return 1 // fallback for "几天"
+	}
+	if n, err := strconv.Atoi(s); err == nil {
+		return n
+	}
+	return 0
+}
+
 func parseAbsoluteMeta(yearStr, monthStr, dayStr, display string) *TemporalMetadata {
 	y, _ := strconv.Atoi(yearStr)
 	mo, _ := strconv.Atoi(monthStr)
@@ -408,6 +733,113 @@ func parseEnglishDate(monthName, dayStr, yearStr string) (y, mo, d int, ok bool)
 }
 
 // ----------------------------------------------------------------------
+// Weekday / Season helpers
+// ----------------------------------------------------------------------
+
+// parseCNWeekday extracts the target weekday from a Chinese weekday pattern
+// match (e.g. "上周一" → time.Monday).  It handles 日/天 as Sunday.
+func parseCNWeekday(s string) time.Weekday {
+	// The last rune is the weekday character.
+	runes := []rune(s)
+	if len(runes) == 0 {
+		return time.Sunday
+	}
+	switch runes[len(runes)-1] {
+	case '一':
+		return time.Monday
+	case '二':
+		return time.Tuesday
+	case '三':
+		return time.Wednesday
+	case '四':
+		return time.Thursday
+	case '五':
+		return time.Friday
+	case '六':
+		return time.Saturday
+	case '日', '天':
+		return time.Sunday
+	}
+	return time.Sunday
+}
+
+// parseENWeekday extracts the target weekday from an English weekday pattern
+// match (e.g. "last Monday" → time.Monday).
+func parseENWeekday(s string) time.Weekday {
+	s = strings.ToLower(s)
+	switch {
+	case strings.Contains(s, "monday"):
+		return time.Monday
+	case strings.Contains(s, "tuesday"):
+		return time.Tuesday
+	case strings.Contains(s, "wednesday"):
+		return time.Wednesday
+	case strings.Contains(s, "thursday"):
+		return time.Thursday
+	case strings.Contains(s, "friday"):
+		return time.Friday
+	case strings.Contains(s, "saturday"):
+		return time.Saturday
+	case strings.Contains(s, "sunday"):
+		return time.Sunday
+	}
+	return time.Sunday
+}
+
+// resolveWeekday returns the target weekday in the weekOffset week relative to
+// anchor's week.  weekOffset: -1=last week, 0=this week, 1=next week.
+func resolveWeekday(anchor time.Time, weekOffset int, targetWeekday time.Weekday) time.Time {
+	// Days since Monday for the anchor.
+	daysSinceMonday := (int(anchor.Weekday()) - 1 + 7) % 7
+	thisMonday := anchor.AddDate(0, 0, -daysSinceMonday)
+	targetMonday := thisMonday.AddDate(0, 0, weekOffset*7)
+	daysFromMonday := (int(targetWeekday) - 1 + 7) % 7
+	return targetMonday.AddDate(0, 0, daysFromMonday)
+}
+
+// seasonMap maps English season names to their start month/day and end month/day.
+var seasonMap = map[string]struct {
+	startMonth time.Month
+	startDay   int
+	endMonth   time.Month
+	endDay     int
+}{
+	"summer":  {time.June, 1, time.August, 31},
+	"winter":  {time.December, 1, time.February, 28},
+	"spring":  {time.March, 1, time.May, 31},
+	"fall":    {time.September, 1, time.November, 30},
+	"autumn":  {time.September, 1, time.November, 30},
+}
+
+// parseSeasonName extracts the season name from a matched English season
+// pattern (e.g. "last summer" → "summer").
+func parseSeasonName(s string) string {
+	s = strings.ToLower(s)
+	for name := range seasonMap {
+		if strings.Contains(s, name) {
+			return name
+		}
+	}
+	return ""
+}
+
+// resolveSeasonNamed returns the start and end dates for a named season
+// with a year offset relative to anchor.  Simplified: offset is applied
+// directly to anchor's year.
+func resolveSeasonNamed(anchor time.Time, seasonName string, yearOffset int) (start, end time.Time) {
+	info := seasonMap[strings.ToLower(seasonName)]
+	year := anchor.Year() + yearOffset
+	start = time.Date(year, info.startMonth, info.startDay, 0, 0, 0, 0, time.UTC)
+	if info.endMonth < info.startMonth {
+		// Winter spans two years.
+		end = time.Date(year+1, info.endMonth, info.endDay, 0, 0, 0, 0, time.UTC)
+	} else {
+		end = time.Date(year, info.endMonth, info.endDay, 0, 0, 0, 0, time.UTC)
+	}
+	return start, end
+}
+
+// ----------------------------------------------------------------------
 // Date arithmetic
 // ----------------------------------------------------------------------
 
@@ -430,7 +862,7 @@ func resolveAbsolute(anchor time.Time, offset int, unit timeUnit) time.Time {
 
 func granularityEnd(start time.Time, unit timeUnit) time.Time {
 	switch unit {
-	case unitWeek:
+	case unitWeek, unitWeekday:
 		return start.AddDate(0, 0, 6)
 	case unitMonth:
 		return start.AddDate(0, 1, -1)
@@ -447,7 +879,7 @@ func granularityString(u timeUnit) string {
 	switch u {
 	case unitDay:
 		return "day"
-	case unitWeek:
+	case unitWeek, unitWeekday:
 		return "week"
 	case unitMonth:
 		return "month"

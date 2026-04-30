@@ -182,6 +182,9 @@ func (idx *InvertedIndex) Search(query string, limit int) []ScoredID {
 // If the context is cancelled during scoring, a partial result set is not
 // returned; instead ctx.Err() is reported.
 func (idx *InvertedIndex) SearchContext(ctx context.Context, query string, limit int) ([]ScoredID, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("context must not be nil")
+	}
 	if limit == 0 {
 		return []ScoredID{}, nil
 	}

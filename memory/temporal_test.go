@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -740,4 +741,256 @@ func FuzzHumanRelative(f *testing.F) {
 		result := humanRelative(tm, now)
 		_ = result
 	})
+}
+
+
+// ----------------------------------------------------------------------
+// Weekday patterns
+// ----------------------------------------------------------------------
+
+func TestResolveCNWeekday(t *testing.T) {
+	now := time.Date(2026, 4, 29, 0, 0, 0, 0, time.UTC) // Wednesday
+
+	tests := []struct {
+		query    string
+		wantISO  string
+		wantMeta bool
+	}{
+		// 上周X: 2026-04-20 ~ 2026-04-26
+		{"上周五开会", "2026-04-24", true},
+		{"上周一开会", "2026-04-20", true},
+		{"上周天休息", "2026-04-26", true},
+		{"上周日休息", "2026-04-26", true},
+		// 本周X: 2026-04-27 ~ 2026-05-03
+		{"本周三有会", "2026-04-29", true},
+		{"本周一开工", "2026-04-27", true},
+		{"本周天放假", "2026-05-03", true},
+		// 下周X: 2026-05-04 ~ 2026-05-10
+		{"下周一开会", "2026-05-04", true},
+		{"下周三聚餐", "2026-05-06", true},
+		{"下周天休息", "2026-05-10", true},
+		// 上上周
+		{"上上周一", "2026-04-13", true},
+		// 下下周
+		{"下下周一", "2026-05-11", true},
+		// 大上周
+		{"大上周一", "2026-04-13", true},
+		// 大下周
+		{"大下周一", "2026-05-11", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			resolved, meta := resolveInContent(tt.query, now, "now")
+			if !tt.wantMeta {
+				if meta != nil {
+					t.Fatalf("expected no meta, got %+v", meta)
+				}
+				return
+			}
+			if meta == nil {
+				t.Fatalf("expected meta, got nil")
+			}
+			if meta.ResolvedStart != tt.wantISO {
+				t.Errorf("ResolvedStart: want %s, got %s", tt.wantISO, meta.ResolvedStart)
+			}
+			if !strings.Contains(resolved, tt.wantISO) {
+				t.Errorf("resolved content should contain %s, got %s", tt.wantISO, resolved)
+			}
+		})
+	}
+}
+
+func TestResolveENWeekday(t *testing.T) {
+	now := time.Date(2026, 4, 29, 0, 0, 0, 0, time.UTC) // Wednesday
+
+	tests := []struct {
+		query   string
+		wantISO string
+	}{
+		{"last Monday", "2026-04-20"},
+		{"last Friday", "2026-04-24"},
+		{"last Sunday", "2026-04-26"},
+		{"this Monday", "2026-04-27"},
+		{"this Friday", "2026-05-01"},
+		{"this Sunday", "2026-05-03"},
+		{"next Monday", "2026-05-04"},
+		{"next Friday", "2026-05-08"},
+		{"next Sunday", "2026-05-10"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			resolved, meta := resolveInContent(tt.query, now, "now")
+			if meta == nil {
+				t.Fatalf("expected meta, got nil")
+			}
+			if meta.ResolvedStart != tt.wantISO {
+				t.Errorf("ResolvedStart: want %s, got %s", tt.wantISO, meta.ResolvedStart)
+			}
+			if !strings.Contains(resolved, tt.wantISO) {
+				t.Errorf("resolved content should contain %s, got %s", tt.wantISO, resolved)
+			}
+		})
+	}
+}
+
+// ----------------------------------------------------------------------
+// Named season patterns
+// ----------------------------------------------------------------------
+
+func TestResolveENNamedSeason(t *testing.T) {
+	now := time.Date(2026, 4, 29, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		query      string
+		wantStart  string
+		wantEnd    string
+		wantSeason string
+	}{
+		{"last summer", "2025-06-01", "2025-08-31", "summer"},
+		{"this summer", "2026-06-01", "2026-08-31", "summer"},
+		{"next summer", "2027-06-01", "2027-08-31", "summer"},
+		{"last winter", "2025-12-01", "2026-02-28", "winter"},
+		{"this winter", "2026-12-01", "2027-02-28", "winter"},
+		{"next winter", "2027-12-01", "2028-02-28", "winter"},
+		{"last spring", "2025-03-01", "2025-05-31", "spring"},
+		{"this spring", "2026-03-01", "2026-05-31", "spring"},
+		{"next spring", "2027-03-01", "2027-05-31", "spring"},
+		{"last fall", "2025-09-01", "2025-11-30", "fall"},
+		{"this autumn", "2026-09-01", "2026-11-30", "autumn"},
+		{"next autumn", "2027-09-01", "2027-11-30", "autumn"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			resolved, meta := resolveInContent(tt.query, now, "now")
+			if meta == nil {
+				t.Fatalf("expected meta, got nil")
+			}
+			if meta.ResolvedStart != tt.wantStart {
+				t.Errorf("ResolvedStart: want %s, got %s", tt.wantStart, meta.ResolvedStart)
+			}
+			if meta.ResolvedEnd != tt.wantEnd {
+				t.Errorf("ResolvedEnd: want %s, got %s", tt.wantEnd, meta.ResolvedEnd)
+			}
+			if meta.Granularity != "season" {
+				t.Errorf("Granularity: want season, got %s", meta.Granularity)
+			}
+			if !strings.Contains(resolved, tt.wantStart) {
+				t.Errorf("resolved content should contain %s, got %s", tt.wantStart, resolved)
+			}
+		})
+	}
+}
+
+// ----------------------------------------------------------------------
+// Local anchor relative patterns
+// ----------------------------------------------------------------------
+
+func TestResolveLocalAnchorRelativeCN(t *testing.T) {
+	now := time.Date(2026, 4, 29, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		query   string
+		wantISO string
+		wantKind string
+	}{
+		{"2025年4月13日的后一天", "2025-04-14", "local_anchor_relative"},
+		{"2025年4月13日的前一天", "2025-04-12", "local_anchor_relative"},
+		{"2025年4月13日的后一周", "2025-04-20", "local_anchor_relative"},
+		{"2025年4月13日的前一周", "2025-04-06", "local_anchor_relative"},
+		{"2025年4月13日的后一个月", "2025-05-13", "local_anchor_relative"},
+		{"2025年4月13日的前一个月", "2025-03-13", "local_anchor_relative"},
+		{"2025年4月13日的后一年", "2026-04-13", "local_anchor_relative"},
+		{"2025年4月13日的前一年", "2024-04-13", "local_anchor_relative"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			resolved, meta := resolveInContent(tt.query, now, "now")
+			if meta == nil {
+				t.Fatalf("expected meta, got nil")
+			}
+			if meta.Kind != tt.wantKind {
+				t.Errorf("Kind: want %s, got %s", tt.wantKind, meta.Kind)
+			}
+			if meta.ResolvedStart != tt.wantISO {
+				t.Errorf("ResolvedStart: want %s, got %s", tt.wantISO, meta.ResolvedStart)
+			}
+			if !strings.Contains(resolved, tt.wantISO) {
+				t.Errorf("resolved content should contain %s, got %s", tt.wantISO, resolved)
+			}
+		})
+	}
+}
+
+func TestResolveLocalAnchorRelativeEN(t *testing.T) {
+	now := time.Date(2026, 4, 29, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		query   string
+		wantISO string
+	}{
+		{"2025-04-13 the next day", "2025-04-14"},
+		{"2025-04-13 the previous day", "2025-04-12"},
+		{"2025-04-13 the next week", "2025-04-20"},
+		{"2025-04-13 the previous week", "2025-04-06"},
+		{"2025-04-13 the next month", "2025-05-13"},
+		{"2025-04-13 the previous month", "2025-03-13"},
+		{"2025-04-13 the next year", "2026-04-13"},
+		{"2025-04-13 the previous year", "2024-04-13"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			resolved, meta := resolveInContent(tt.query, now, "now")
+			if meta == nil {
+				t.Fatalf("expected meta, got nil")
+			}
+			if meta.ResolvedStart != tt.wantISO {
+				t.Errorf("ResolvedStart: want %s, got %s", tt.wantISO, meta.ResolvedStart)
+			}
+			if !strings.Contains(resolved, tt.wantISO) {
+				t.Errorf("resolved content should contain %s, got %s", tt.wantISO, resolved)
+			}
+		})
+	}
+}
+
+// ----------------------------------------------------------------------
+// Anchor period patterns
+// ----------------------------------------------------------------------
+
+func TestResolveAnchorPeriod(t *testing.T) {
+	now := time.Date(2026, 4, 29, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		query   string
+		wantISO string
+	}{
+		{"the day before 2026-04-14", "2026-04-13"},
+		{"the day after 2026-04-14", "2026-04-15"},
+		{"the week before 2026-04-14", "2026-04-07"},
+		{"the week after 2026-04-14", "2026-04-21"},
+		{"the month before 2026-04-14", "2026-03-14"},
+		{"the month after 2026-04-14", "2026-05-14"},
+		{"the year before 2026-04-14", "2025-04-14"},
+		{"the year after 2026-04-14", "2027-04-14"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			resolved, meta := resolveInContent(tt.query, now, "now")
+			if meta == nil {
+				t.Fatalf("expected meta, got nil")
+			}
+			if meta.ResolvedStart != tt.wantISO {
+				t.Errorf("ResolvedStart: want %s, got %s", tt.wantISO, meta.ResolvedStart)
+			}
+			if !strings.Contains(resolved, tt.wantISO) {
+				t.Errorf("resolved content should contain %s, got %s", tt.wantISO, resolved)
+			}
+		})
+	}
 }

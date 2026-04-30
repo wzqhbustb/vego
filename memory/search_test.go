@@ -366,15 +366,14 @@ func TestSearchMinScore(t *testing.T) {
 		t.Fatalf("store: %v", err)
 	}
 
-	// Pure vector search with very high MinScore should filter everything
-	// because mock embedder produces identical vectors (similarity = 1.0 for cosine,
-	// but 1.01 > max possible).
-	results, err := s.Search(ctx, "hello", EnableHybrid(false), MinScore(1.01))
+	// MinScore=1.0: mock embedder produces identical vectors (cosine similarity = 1.0),
+	// which is the maximum possible. Results should be returned.
+	results, err := s.Search(ctx, "hello", EnableHybrid(false), MinScore(1.0))
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
-	if len(results) != 0 {
-		t.Errorf("minScore 1.01 should filter everything in pure vector, got %d", len(results))
+	if len(results) == 0 {
+		t.Errorf("minScore 1.0 should not filter results with max similarity")
 	}
 }
 

@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1416,5 +1417,530 @@ func TestMemoryStoreOpenDistanceFuncs(t *testing.T) {
 			}
 			s.Close()
 		})
+	}
+}
+
+// ----------------------------------------------------------------------
+// Pause / Resume
+// ----------------------------------------------------------------------
+
+func TestPauseAndResume(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+	mem, err := s.Store(ctx, "pause me", []string{"tag1"})
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+
+	// Pause should succeed.
+	if err := s.Pause(ctx, mem.ID); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+
+	// Get should still return the memory.
+	got, err := s.Get(ctx, mem.ID)
+	if err != nil {
+		t.Fatalf("get after pause: %v", err)
+	}
+	if got.State != StatePaused {
+		t.Errorf("state: want paused, got %s", got.State)
+	}
+
+	// Search should exclude paused memories.
+	results, err := s.Search(ctx, "pause")
+	if err != nil {
+		t.Fatalf("search after pause: %v", err)
+	}
+	for _, m := range results {
+		if m.ID == mem.ID {
+			t.Error("paused memory should not appear in search results")
+		}
+	}
+
+	// Resume should succeed.
+	if err := s.Resume(ctx, mem.ID); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+
+	got, err = s.Get(ctx, mem.ID)
+	if err != nil {
+		t.Fatalf("get after resume: %v", err)
+	}
+	if got.State != StateActive {
+		t.Errorf("state: want active, got %s", got.State)
+	}
+
+	// Search should now include the memory.
+	results, err = s.Search(ctx, "pause")
+	if err != nil {
+		t.Fatalf("search after resume: %v", err)
+	}
+	found := false
+	for _, m := range results {
+		if m.ID == mem.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("resumed memory should appear in search results")
+	}
+}
+
+func TestPauseNotActive(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+	mem, err := s.Store(ctx, "test", nil)
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+
+	// Delete first.
+	if err := s.Delete(ctx, mem.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	// Pause deleted memory should fail.
+	if err := s.Pause(ctx, mem.ID); err == nil {
+		t.Error("expected error pausing deleted memory")
+	}
+}
+
+func TestResumeNotPaused(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+	mem, err := s.Store(ctx, "test", nil)
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+
+	// Resume active memory should fail.
+	if err := s.Resume(ctx, mem.ID); err == nil {
+		t.Error("expected error resuming active memory")
+	}
+}
+
+func TestPauseResumeNonExistent(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+	if err := s.Pause(ctx, "nonexistent"); err == nil {
+		t.Error("expected error pausing non-existent memory")
+	}
+	if err := s.Resume(ctx, "nonexistent"); err == nil {
+		t.Error("expected error resuming non-existent memory")
+	}
+}
+
+// ----------------------------------------------------------------------
+// List
+// ----------------------------------------------------------------------
+
+func TestListAll(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+	m1, _ := s.Store(ctx, "alpha", []string{"tag-a"})
+	m2, _ := s.Store(ctx, "beta", []string{"tag-b"})
+
+	results, err := s.List(ctx, MemoryFilter{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(results) != 2 {
+		t.Errorf("want 2, got %d", len(results))
+	}
+
+	// Verify descending UpdatedAt order.
+	if results[0].UpdatedAt.Before(results[1].UpdatedAt) {
+		t.Error("list should be sorted by UpdatedAt descending")
+	}
+
+	// Verify IDs are present.
+	ids := map[string]bool{}
+	for _, m := range results {
+		ids[m.ID] = true
+	}
+	if !ids[m1.ID] || !ids[m2.ID] {
+		t.Error("list missing expected IDs")
+	}
+}
+
+func TestListByState(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+	m1, _ := s.Store(ctx, "active mem", nil)
+	m2, _ := s.Store(ctx, "to delete", nil)
+	_ = s.Delete(ctx, m2.ID)
+
+	// List only active.
+	results, err := s.List(ctx, MemoryFilter{State: "active"})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(results) != 1 || results[0].ID != m1.ID {
+		t.Errorf("want active memory %s, got %+v", m1.ID, results)
+	}
+
+	// List only deleted.
+	results, err = s.List(ctx, MemoryFilter{State: "deleted"})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(results) != 1 || results[0].ID != m2.ID {
+		t.Errorf("want deleted memory %s, got %+v", m2.ID, results)
+	}
+}
+
+func TestListByTags(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+	m1, _ := s.Store(ctx, "alpha", []string{"go", "rust"})
+	_, _ = s.Store(ctx, "beta", []string{"python"})
+
+	results, err := s.List(ctx, MemoryFilter{Tags: []string{"go"}})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(results) != 1 || results[0].ID != m1.ID {
+		t.Errorf("want 1 result with tag 'go', got %d", len(results))
+	}
+}
+
+func TestListPagination(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+	for i := 0; i < 5; i++ {
+		_, _ = s.Store(ctx, fmt.Sprintf("mem-%d", i), nil)
+	}
+
+	// Offset 2, limit 2.
+	results, err := s.List(ctx, MemoryFilter{Offset: 2, Limit: 2})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(results) != 2 {
+		t.Errorf("want 2, got %d", len(results))
+	}
+
+	// Offset beyond total.
+	results, err = s.List(ctx, MemoryFilter{Offset: 10})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("want 0, got %d", len(results))
+	}
+}
+
+func TestListLimitSetExplicitZero(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		_, _ = s.Store(ctx, fmt.Sprintf("mem-%d", i), nil)
+	}
+
+	// Explicit Limit:0 with LimitSet:true should return 0 results.
+	results, err := s.List(ctx, MemoryFilter{Limit: 0, LimitSet: true})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("LimitSet:true Limit:0 should return 0 results, got %d", len(results))
+	}
+
+	// Without LimitSet, Limit:0 should fall back to config default.
+	results, err = s.List(ctx, MemoryFilter{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(results) != 3 {
+		t.Errorf("default limit should return all 3, got %d", len(results))
+	}
+}
+
+func TestListEmptyStore(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	results, err := s.List(context.Background(), MemoryFilter{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("want 0, got %d", len(results))
+	}
+}
+
+// ----------------------------------------------------------------------
+// Stats
+// ----------------------------------------------------------------------
+
+func TestStatsEmpty(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	stats, err := s.Stats(context.Background())
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.Total != 0 {
+		t.Errorf("total: want 0, got %d", stats.Total)
+	}
+	if stats.Active != 0 {
+		t.Errorf("active: want 0, got %d", stats.Active)
+	}
+}
+
+func TestStatsAfterOperations(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+
+	// Store 3 active memories.
+	m1, _ := s.Store(ctx, "alpha", nil)
+	m2, _ := s.Store(ctx, "beta", nil)
+	m3, _ := s.Store(ctx, "gamma", nil)
+
+	// Update m1 (old becomes archived, new is active).
+	newM1, _ := s.Update(ctx, m1.ID, "alpha updated", nil)
+
+	// Delete m2.
+	_ = s.Delete(ctx, m2.ID)
+
+	// Pause the new m1.
+	_ = s.Pause(ctx, newM1.ID)
+
+	stats, err := s.Stats(ctx)
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+
+	// Total: old m1 (archived) + new m1 (paused) + m2 (deleted) + m3 (active) = 4
+	if stats.Total != 4 {
+		t.Errorf("total: want 4, got %d", stats.Total)
+	}
+	if stats.Active != 1 {
+		t.Errorf("active: want 1 (%s), got %d", m3.ID, stats.Active)
+	}
+	if stats.Paused != 1 {
+		t.Errorf("paused: want 1 (%s), got %d", newM1.ID, stats.Paused)
+	}
+	if stats.Archived != 1 {
+		t.Errorf("archived: want 1 (%s), got %d", m1.ID, stats.Archived)
+	}
+	if stats.Deleted != 1 {
+		t.Errorf("deleted: want 1 (%s), got %d", m2.ID, stats.Deleted)
+	}
+	if stats.ByType["insight"] != 4 {
+		t.Errorf("byType insight: want 4, got %d", stats.ByType["insight"])
+	}
+}
+
+// ----------------------------------------------------------------------
+// Input validation
+// ----------------------------------------------------------------------
+
+func TestMemoryStoreStoreValidation(t *testing.T) {
+	s := newTestStore(t, WithMaxContentLen(10), WithMaxTags(2))
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+
+	_, err := s.Store(ctx, "this is way too long", nil)
+	if err == nil {
+		t.Fatal("expected error for content too long")
+	}
+	if !strings.Contains(err.Error(), "content length") {
+		t.Errorf("error should mention content length, got: %v", err)
+	}
+
+	_, err = s.Store(ctx, "short", []string{"a", "b", "c"})
+	if err == nil {
+		t.Fatal("expected error for too many tags")
+	}
+	if !strings.Contains(err.Error(), "tag count") {
+		t.Errorf("error should mention tag count, got: %v", err)
+	}
+
+	// Valid input should succeed
+	mem, err := s.Store(ctx, "short", []string{"a", "b"})
+	if err != nil {
+		t.Fatalf("valid store failed: %v", err)
+	}
+	if mem.ID == "" {
+		t.Error("valid memory should have an ID")
+	}
+}
+
+func TestMemoryStoreUpdateValidation(t *testing.T) {
+	s := newTestStore(t, WithMaxContentLen(10), WithMaxTags(2))
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+	old, err := s.Store(ctx, "old", nil)
+	if err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+
+	_, err = s.Update(ctx, old.ID, "way too long content", nil)
+	if err == nil {
+		t.Fatal("expected error for content too long")
+	}
+	if !strings.Contains(err.Error(), "content length") {
+		t.Errorf("error should mention content length, got: %v", err)
+	}
+
+	_, err = s.Update(ctx, old.ID, "ok", []string{"1", "2", "3"})
+	if err == nil {
+		t.Fatal("expected error for too many tags")
+	}
+	if !strings.Contains(err.Error(), "tag count") {
+		t.Errorf("error should mention tag count, got: %v", err)
+	}
+}
+
+func TestMemoryStoreStoreBatchValidation(t *testing.T) {
+	s := newTestStore(t, WithMaxContentLen(10), WithMaxTags(2), WithMaxBulkSize(2))
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+
+	// Batch too large
+	items := []StoreItem{
+		{Content: "a", Tags: nil},
+		{Content: "b", Tags: nil},
+		{Content: "c", Tags: nil},
+	}
+	_, err := s.StoreBatch(ctx, items)
+	if err == nil {
+		t.Fatal("expected error for batch too large")
+	}
+	if !strings.Contains(err.Error(), "batch size") {
+		t.Errorf("error should mention batch size, got: %v", err)
+	}
+
+	// Item content too long
+	items = []StoreItem{
+		{Content: "this is way too long", Tags: nil},
+	}
+	_, err = s.StoreBatch(ctx, items)
+	if err == nil {
+		t.Fatal("expected error for item content too long")
+	}
+	if !strings.Contains(err.Error(), "item 0") || !strings.Contains(err.Error(), "content length") {
+		t.Errorf("error should mention item index and content length, got: %v", err)
+	}
+
+	// Item too many tags
+	items = []StoreItem{
+		{Content: "ok", Tags: []string{"a", "b", "c"}},
+	}
+	_, err = s.StoreBatch(ctx, items)
+	if err == nil {
+		t.Fatal("expected error for item too many tags")
+	}
+	if !strings.Contains(err.Error(), "item 0") || !strings.Contains(err.Error(), "tag count") {
+		t.Errorf("error should mention item index and tag count, got: %v", err)
+	}
+
+	// Valid batch should succeed
+	items = []StoreItem{
+		{Content: "a", Tags: []string{"x"}},
+		{Content: "b", Tags: []string{"y", "z"}},
+	}
+	mems, err := s.StoreBatch(ctx, items)
+	if err != nil {
+		t.Fatalf("valid batch failed: %v", err)
+	}
+	if len(mems) != 2 {
+		t.Errorf("want 2 memories, got %d", len(mems))
+	}
+}
+
+func TestMemoryStoreBootstrapValidation(t *testing.T) {
+	s := newTestStore(t, WithMaxContentLen(10), WithMaxTags(2), WithMaxBulkSize(2))
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+
+	// Batch too large
+	memories := []*Memory{
+		{ID: "b1", Content: "a", State: StateActive, Version: 1, CreatedAt: time.Now(), UpdatedAt: time.Now()},
+		{ID: "b2", Content: "b", State: StateActive, Version: 1, CreatedAt: time.Now(), UpdatedAt: time.Now()},
+		{ID: "b3", Content: "c", State: StateActive, Version: 1, CreatedAt: time.Now(), UpdatedAt: time.Now()},
+	}
+	err := s.Bootstrap(ctx, memories)
+	if err == nil {
+		t.Fatal("expected error for bootstrap batch too large")
+	}
+	if !strings.Contains(err.Error(), "batch size") {
+		t.Errorf("error should mention batch size, got: %v", err)
+	}
+
+	// Content too long
+	memories = []*Memory{
+		{ID: "b1", Content: "way too long content", State: StateActive, Version: 1, CreatedAt: time.Now(), UpdatedAt: time.Now()},
+	}
+	err = s.Bootstrap(ctx, memories)
+	if err == nil {
+		t.Fatal("expected error for bootstrap content too long")
+	}
+	if !strings.Contains(err.Error(), "memory 0") || !strings.Contains(err.Error(), "content length") {
+		t.Errorf("error should mention memory index and content length, got: %v", err)
+	}
+
+	// Too many tags
+	memories = []*Memory{
+		{ID: "b1", Content: "ok", Tags: []string{"a", "b", "c"}, State: StateActive, Version: 1, CreatedAt: time.Now(), UpdatedAt: time.Now()},
+	}
+	err = s.Bootstrap(ctx, memories)
+	if err == nil {
+		t.Fatal("expected error for bootstrap too many tags")
+	}
+	if !strings.Contains(err.Error(), "memory 0") || !strings.Contains(err.Error(), "tag count") {
+		t.Errorf("error should mention memory index and tag count, got: %v", err)
+	}
+
+	// Valid bootstrap should succeed
+	memories = []*Memory{
+		{ID: "b1", Content: "a", Tags: []string{"x"}, State: StateActive, Version: 1, CreatedAt: time.Now(), UpdatedAt: time.Now()},
+	}
+	err = s.Bootstrap(ctx, memories)
+	if err != nil {
+		t.Fatalf("valid bootstrap failed: %v", err)
 	}
 }

@@ -43,6 +43,11 @@ type Config struct {
 	MaxFacts             int // 默认 50
 	MaxConversationRunes int // 默认 1_000_000
 
+	// Input validation
+	MaxContentLen int // 默认 50_000
+	MaxTags       int // 默认 20
+	MaxBulkSize   int // 默认 100
+
 	// Distance function for similarity conversion.
 	DistanceFunc string // "cosine" | "l2" | "ip"，默认 "cosine"
 }
@@ -74,6 +79,9 @@ func DefaultConfig() *Config {
 		GapStopRatio:         0.5,
 		MaxFacts:             50,
 		MaxConversationRunes: 1_000_000,
+		MaxContentLen:        50_000,
+		MaxTags:              20,
+		MaxBulkSize:          100,
 		DistanceFunc:         "cosine",
 	}
 }
@@ -152,6 +160,15 @@ func (c *Config) validate() error {
 	}
 	if c.MaxConversationRunes <= 0 {
 		return fmt.Errorf("max conversation runes must be > 0, got %d", c.MaxConversationRunes)
+	}
+	if c.MaxContentLen <= 0 {
+		return fmt.Errorf("max content len must be > 0, got %d", c.MaxContentLen)
+	}
+	if c.MaxTags <= 0 {
+		return fmt.Errorf("max tags must be > 0, got %d", c.MaxTags)
+	}
+	if c.MaxBulkSize <= 0 {
+		return fmt.Errorf("max bulk size must be > 0, got %d", c.MaxBulkSize)
 	}
 	if c.RecencyBoostWeek < 0 {
 		return fmt.Errorf("recency boost week must be >= 0, got %f", c.RecencyBoostWeek)
@@ -321,4 +338,19 @@ func WithIngestParams(maxFacts, maxConversationRunes int) Option {
 		c.MaxFacts = maxFacts
 		c.MaxConversationRunes = maxConversationRunes
 	}
+}
+
+// WithMaxContentLen sets the maximum allowed content length (bytes).
+func WithMaxContentLen(n int) Option {
+	return func(c *Config) { c.MaxContentLen = n }
+}
+
+// WithMaxTags sets the maximum number of tags per memory.
+func WithMaxTags(n int) Option {
+	return func(c *Config) { c.MaxTags = n }
+}
+
+// WithMaxBulkSize sets the maximum number of items in a batch operation.
+func WithMaxBulkSize(n int) Option {
+	return func(c *Config) { c.MaxBulkSize = n }
 }

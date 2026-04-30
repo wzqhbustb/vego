@@ -25,6 +25,9 @@ import (
 // remains sequential so that each fact sees the cumulative effect of prior
 // actions.
 func (s *MemoryStore) Reconcile(ctx context.Context, agentID string, facts []ExtractedFact) (*IngestResult, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("context must not be nil")
+	}
 	if len(facts) == 0 {
 		return &IngestResult{}, nil
 	}

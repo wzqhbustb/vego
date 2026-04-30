@@ -71,6 +71,12 @@ func (c *LLMClient) CloseIdleConnections() {
 // and returns the assistant's content. It forces JSON output via
 // response_format and falls back on HTTP 400 (Ollama/vLLM compatibility).
 func (c *LLMClient) CompleteJSON(ctx context.Context, system, user string) (string, error) {
+	if c == nil {
+		return "", fmt.Errorf("llm client is nil")
+	}
+	if ctx == nil {
+		return "", fmt.Errorf("context must not be nil")
+	}
 	start := time.Now()
 	content, promptTokens, completionTokens, err := c.complete(ctx, system, user, true)
 	if err != nil {

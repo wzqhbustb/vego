@@ -19,6 +19,9 @@ var migrations = make(map[int]Migration)
 // RegisterMigration registers a migration from a specific schema version.
 // Not safe for concurrent use: call during init() or single-goroutine setup.
 func RegisterMigration(fromVersion int, m Migration) {
+	if m == nil {
+		panic(fmt.Sprintf("RegisterMigration: migration function for version %d is nil", fromVersion))
+	}
 	migrations[fromVersion] = m
 }
 

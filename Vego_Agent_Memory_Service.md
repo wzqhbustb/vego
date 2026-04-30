@@ -488,6 +488,14 @@ func (s *MemoryStore) Delete(ctx context.Context, id string) error
 // 搜索召回
 func (s *MemoryStore) Search(ctx context.Context, query string, opts ...SearchOption) ([]Memory, error)
 
+// 状态管理
+func (s *MemoryStore) Pause(ctx context.Context, id string) error
+func (s *MemoryStore) Resume(ctx context.Context, id string) error
+
+// 浏览与统计
+func (s *MemoryStore) List(ctx context.Context, filter MemoryFilter) ([]Memory, error)
+func (s *MemoryStore) Stats(ctx context.Context) (*MemoryStats, error)
+
 // 批量操作
 func (s *MemoryStore) StoreBatch(ctx context.Context, items []StoreItem) ([]Memory, error)
 func (s *MemoryStore) Bootstrap(ctx context.Context, limit int) ([]Memory, error)
@@ -506,6 +514,20 @@ mem9 的所有删除都是软删除——记录保留在数据库中，仅将 st
 Vego 的 `DeleteContext` 是 DeletionVector 软删除，但删除后 `Get` 也会失败。
 因此本设计中 `Delete` 使用 `UpdateContext` 修改 state 字段来模拟 mem9 的软删除行为。
 `SearchWithFilter` 会自动排除 `_state != "active"` 的文档。
+
+**Pause / Resume**：
+- `Pause` 将 active 记忆改为 `paused` 状态，同时从倒排索引移除（搜索不可见），但仍可通过 `Get` 查询
+- `Resume` 将 paused 记忆恢复为 `active`，并重新加入倒排索引
+- 只有状态严格匹配时才允许操作（Pause 要求 active，Resume 要求 paused）
+
+**List**：
+- 纯遍历接口，不调用 Embedding API
+- 遍历全量 Document，经 `matchesFilter` 过滤后按 `UpdatedAt` 降序返回
+- 支持 `MemoryFilter` 的全部过滤字段（State/Tags/MemoryType/AgentID/SessionID）和分页（Offset/Limit）
+
+**Stats**：
+- 封装 `s.coll.Stats()` 获取 Vego 层指标（Count/IndexNodes/OrphanNodes/DeletionRate）
+- 遍历全量 Document 统计 memory 层状态分布（active/paused/archived/deleted）和各类型数量
 
 ---
 

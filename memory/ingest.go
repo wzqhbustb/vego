@@ -29,6 +29,9 @@ import (
 //
 // Returns IngestResult and any error.
 func (s *MemoryStore) Ingest(ctx context.Context, req IngestRequest) (*IngestResult, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("context must not be nil")
+	}
 	messages := req.Messages
 	if s.config.MaxConversationRunes > 0 {
 		messages = truncateMessages(messages, s.config.MaxConversationRunes)
@@ -98,6 +101,9 @@ func truncateMessages(messages []Message, maxRunes int) []Message {
 // ModeRaw bypasses LLM and returns each message as a fact directly.
 // After extraction, relative temporal expressions are normalized to absolute dates.
 func (s *MemoryStore) ExtractFacts(ctx context.Context, messages []Message, mode IngestMode) ([]ExtractedFact, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("context must not be nil")
+	}
 	if len(messages) == 0 {
 		return nil, nil
 	}
@@ -209,6 +215,9 @@ func buildFactExtractionUserPrompt(messages []Message) string {
 // StoreRawMessages stores raw conversation messages with deduplication.
 // It returns the number of newly stored messages.
 func (s *MemoryStore) StoreRawMessages(ctx context.Context, sessionID string, messages []Message) (int, error) {
+	if ctx == nil {
+		return 0, fmt.Errorf("context must not be nil")
+	}
 	if sessionID == "" {
 		return 0, fmt.Errorf("sessionID must not be empty")
 	}
