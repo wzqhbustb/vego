@@ -15,10 +15,12 @@ import (
 
 // EmbedConfig holds the configuration for the embedding client.
 type EmbedConfig struct {
-	APIKey  string
-	BaseURL string
-	Model   string
-	Dims    int
+	APIKey       string
+	BaseURL      string
+	Model        string
+	Dims         int
+	RoundTripper http.RoundTripper
+	Logger       *slog.Logger
 }
 
 // Embedder is an OpenAI-compatible HTTP client for text embeddings.
@@ -28,6 +30,7 @@ type Embedder struct {
 	model   string
 	dims    int
 	http    *http.Client
+	logger  *slog.Logger
 }
 
 // NewEmbedder creates a new embedding client from the given configuration.
@@ -50,13 +53,19 @@ func NewEmbedder(cfg EmbedConfig) *Embedder {
 		dims = 1536
 	}
 
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &Embedder{
 		apiKey:  cfg.APIKey,
 		baseURL: strings.TrimSuffix(baseURL, "/"),
 		model:   model,
 		dims:    dims,
+		logger:  logger,
 		http: &http.Client{
-			Timeout: 120 * time.Second,
+			Timeout:   120 * time.Second,
+			Transport: cfg.RoundTripper,
 		},
 	}
 }
@@ -80,14 +89,14 @@ func (e *Embedder) Embed(ctx context.Context, text string) ([]float32, error) {
 	start := time.Now()
 	vec, err := e.embed(ctx, text)
 	if err != nil {
-		slog.Error("embed request failed",
+		e.logger.Error("embed request failed",
 			"model", e.model,
 			"duration_ms", time.Since(start).Milliseconds(),
 			"error", err,
 		)
 		return nil, err
 	}
-	slog.Info("embed request completed",
+	e.logger.Info("embed request completed",
 		"model", e.model,
 		"duration_ms", time.Since(start).Milliseconds(),
 	)
@@ -117,7 +126,7 @@ func (e *Embedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32,
 	start := time.Now()
 	vecs, err := e.embedBatch(ctx, texts)
 	if err != nil {
-		slog.Error("embed batch request failed",
+		e.logger.Error("embed batch request failed",
 			"model", e.model,
 			"batch_size", len(texts),
 			"duration_ms", time.Since(start).Milliseconds(),
@@ -125,7 +134,7 @@ func (e *Embedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32,
 		)
 		return nil, err
 	}
-	slog.Info("embed batch request completed",
+	e.logger.Info("embed batch request completed",
 		"model", e.model,
 		"batch_size", len(texts),
 		"duration_ms", time.Since(start).Milliseconds(),

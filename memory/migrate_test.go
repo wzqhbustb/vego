@@ -26,7 +26,7 @@ func TestMigrateMemory_NoOp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("docToMemory: %v", err)
 	}
-	migrated, err := migrateMemory(doc, m)
+	migrated, err := migrateMemory(doc, m, nil)
 	if err != nil {
 		t.Fatalf("migrateMemory: %v", err)
 	}
@@ -37,10 +37,12 @@ func TestMigrateMemory_NoOp(t *testing.T) {
 
 func TestMigrateMemory_MissingVersion(t *testing.T) {
 	// Register a migration that adds a tag.
-	RegisterMigration(0, func(m *Memory) error {
+	if err := RegisterMigration(0, func(m *Memory) error {
 		m.Tags = append(m.Tags, "migrated-v1")
 		return nil
-	})
+	}); err != nil {
+		t.Fatalf("RegisterMigration: %v", err)
+	}
 	t.Cleanup(func() { delete(migrations, 0) })
 
 	doc := &vego.Document{
@@ -54,7 +56,7 @@ func TestMigrateMemory_MissingVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("docToMemory: %v", err)
 	}
-	migrated, err := migrateMemory(doc, m)
+	migrated, err := migrateMemory(doc, m, nil)
 	if err != nil {
 		t.Fatalf("migrateMemory: %v", err)
 	}
@@ -90,7 +92,7 @@ func TestMigrateMemory_NoRegisteredMigration_BackwardCompat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("docToMemory: %v", err)
 	}
-	migrated, err := migrateMemory(doc, m)
+	migrated, err := migrateMemory(doc, m, nil)
 	if err != nil {
 		t.Fatalf("migrateMemory should succeed for v0 without registered migration (backward compat): %v", err)
 	}
@@ -104,9 +106,11 @@ func TestMigrateMemory_NoRegisteredMigration_BackwardCompat(t *testing.T) {
 }
 
 func TestMigrateMemory_MigrationError(t *testing.T) {
-	RegisterMigration(0, func(m *Memory) error {
+	if err := RegisterMigration(0, func(m *Memory) error {
 		return errTestMigrationFailed
-	})
+	}); err != nil {
+		t.Fatalf("RegisterMigration: %v", err)
+	}
 	t.Cleanup(func() { delete(migrations, 0) })
 
 	doc := &vego.Document{
@@ -119,9 +123,16 @@ func TestMigrateMemory_MigrationError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("docToMemory: %v", err)
 	}
-	_, err = migrateMemory(doc, m)
+	_, err = migrateMemory(doc, m, nil)
 	if err == nil {
 		t.Fatal("expected migration error to propagate")
+	}
+}
+
+func TestRegisterMigration_NilReturnsError(t *testing.T) {
+	err := RegisterMigration(99, nil)
+	if err == nil {
+		t.Fatal("expected error for nil migration function")
 	}
 }
 
@@ -155,10 +166,12 @@ func TestGetSchemaVersion(t *testing.T) {
 // ----------------------------------------------------------------------
 
 func TestRebuildWithMigration(t *testing.T) {
-	RegisterMigration(0, func(m *Memory) error {
+	if err := RegisterMigration(0, func(m *Memory) error {
 		m.Tags = append(m.Tags, "migrated-v1")
 		return nil
-	})
+	}); err != nil {
+		t.Fatalf("RegisterMigration: %v", err)
+	}
 	t.Cleanup(func() { delete(migrations, 0) })
 
 	s := newTestStore(t)

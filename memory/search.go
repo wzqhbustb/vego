@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sort"
 	"sync"
 	"time"
@@ -91,7 +90,7 @@ func (s *MemoryStore) hybridSearch(ctx context.Context, query string, filter Mem
 		}
 		// Log and continue with keyword-only results so a transient
 		// HNSW issue does not turn into a silent partial-failure.
-		slog.WarnContext(ctx, "vector search failed, continuing with keyword-only results", "err", err)
+		s.logger.WarnContext(ctx, "vector search failed, continuing with keyword-only results", "err", err)
 		vecResults = nil
 	}
 
@@ -120,13 +119,13 @@ func (s *MemoryStore) hybridSearch(ctx context.Context, query string, filter Mem
 		}
 		m, err := s.getWithoutVector(ctx, si.ID)
 		if err != nil {
-			slog.Warn("skip vanished keyword result", "id", si.ID, "err", err)
+			s.logger.Warn("skip vanished keyword result", "id", si.ID, "err", err)
 			continue
 		}
 		// Defensive: inverted index should only contain active memories, but a
 		// narrow race window exists between inverted.Search and s.Get.
 		if m.State != StateActive {
-			slog.Warn("skip non-active keyword result", "id", si.ID, "state", m.State)
+			s.logger.Warn("skip non-active keyword result", "id", si.ID, "state", m.State)
 			continue
 		}
 		m.Score = si.Score
@@ -216,7 +215,7 @@ func (s *MemoryStore) vectorSearch(ctx context.Context, queryVec []float32, limi
 	for _, r := range results {
 		m, err := docToMemory(r.Document)
 		if err != nil {
-			slog.Warn("skip corrupt document in vector search", "id", r.Document.ID, "err", err)
+			s.logger.Warn("skip corrupt document in vector search", "id", r.Document.ID, "err", err)
 			continue
 		}
 		sim := distanceToSimilarity(r.Distance, s.config.DistanceFunc)
@@ -315,7 +314,7 @@ func (s *MemoryStore) applySecondHop(ctx context.Context, scores map[string]floa
 
 	hopResults, err := s.secondHopSearch(ctx, seeds, limit)
 	if err != nil {
-		slog.WarnContext(ctx, "second-hop search failed", "err", err)
+		s.logger.WarnContext(ctx, "second-hop search failed", "err", err)
 		return scores
 	}
 

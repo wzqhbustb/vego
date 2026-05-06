@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -55,7 +54,7 @@ func (s *MemoryStore) Reconcile(ctx context.Context, agentID string, facts []Ext
 	}
 	factVecs, embedErr := s.embedBatch(ctx, texts)
 	if embedErr != nil {
-		slog.WarnContext(ctx, "batch embed failed, falling back to per-fact embed", "error", embedErr)
+		s.logger.WarnContext(ctx, "batch embed failed, falling back to per-fact embed", "error", embedErr)
 		factVecs = make([][]float32, len(facts)) // all nil → findCandidates will embed individually
 	}
 
@@ -82,7 +81,7 @@ func (s *MemoryStore) Reconcile(ctx context.Context, agentID string, facts []Ext
 			defer searchWg.Done()
 			defer func() {
 				if r := recover(); r != nil {
-					slog.Error("search goroutine panic", "idx", idx, "fact", facts[idx].Content, "recover", r)
+					s.logger.Error("search goroutine panic", "idx", idx, "fact", facts[idx].Content, "recover", r)
 					works[idx].err = fmt.Errorf("panic in search goroutine: %v", r)
 				}
 			}()
@@ -105,26 +104,26 @@ func (s *MemoryStore) Reconcile(ctx context.Context, agentID string, facts []Ext
 		}
 
 		if works[i].err != nil {
-			slog.WarnContext(ctx, "candidate search failed", "error", works[i].err)
+			s.logger.WarnContext(ctx, "candidate search failed", "error", works[i].err)
 			works[i].candidates = nil // fallback: treat as no candidates → ADD
 		}
 
 		// Near-duplicate suppression: if the top candidate is extremely similar,
 		// skip LLM decision and treat as NOOP to save LLM call cost.
 		if s.config.NearDupThreshold > 0 && works[i].topSim >= s.config.NearDupThreshold {
-			slog.InfoContext(ctx, "near-duplicate suppressed", "fact", facts[i].Content, "top_sim", works[i].topSim, "threshold", s.config.NearDupThreshold)
+			s.logger.InfoContext(ctx, "near-duplicate suppressed", "fact", facts[i].Content, "top_sim", works[i].topSim, "threshold", s.config.NearDupThreshold)
 			result.NearDupSkipped++
 			continue
 		}
 
 		action, targetID, err := s.decideAction(ctx, &facts[i], works[i].candidates)
 		if err != nil {
-			slog.WarnContext(ctx, "action decision failed", "error", err)
+			s.logger.WarnContext(ctx, "action decision failed", "error", err)
 			action, targetID = "ADD", "" // fallback
 		}
 
 		if err := s.executeAction(ctx, agentID, &facts[i], action, targetID, result); err != nil {
-			slog.WarnContext(ctx, "action execution failed", "action", action, "error", err)
+			s.logger.WarnContext(ctx, "action execution failed", "action", action, "error", err)
 			result.Skipped++
 		}
 	}
@@ -209,7 +208,7 @@ func (s *MemoryStore) findCandidates(ctx context.Context, fact *ExtractedFact, v
 		seen[id] = struct{}{}
 		m, err := s.Get(ctx, id)
 		if err != nil {
-			slog.WarnContext(ctx, "skip vanished candidate", "id", id, "err", err)
+			s.logger.WarnContext(ctx, "skip vanished candidate", "id", id, "err", err)
 			return
 		}
 		if m.State != StateActive {
@@ -354,6 +353,9 @@ func buildReconcileUserPrompt(fact *ExtractedFact, candidates []*candidateMappin
 func (s *MemoryStore) executeAction(ctx context.Context, agentID string, fact *ExtractedFact, action, targetID string, result *IngestResult) error {
 	switch action {
 	case "ADD":
+		if err := validateInput(fact.Content, fact.Tags, s.config); err != nil {
+			return fmt.Errorf("validate ADD fact: %w", err)
+		}
 		mem := &Memory{
 			ID:         vego.DocumentID(),
 			Content:    fact.Content,

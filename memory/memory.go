@@ -127,6 +127,7 @@ type MemoryStore struct {
 	inverted         *InvertedIndex
 	contentHashIndex *ContentHashIndex
 	config           *Config
+	logger           *slog.Logger
 	mu               sync.Mutex          // guards all write operations (Store/Update/Delete/Bootstrap/StoreBatch)
 	llmSem           *semaphore.Weighted // limits concurrent LLM calls in Reconcile (weight=1 = serialized)
 }
@@ -173,6 +174,11 @@ func Open(path string, opts ...Option) (*MemoryStore, error) {
 		return nil, fmt.Errorf("get collection: %w", err)
 	}
 
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	s := &MemoryStore{
 		db:               db,
 		coll:             coll,
@@ -181,8 +187,12 @@ func Open(path string, opts ...Option) (*MemoryStore, error) {
 		inverted:         NewInvertedIndex(),
 		contentHashIndex: NewContentHashIndex(),
 		config:           cfg,
+		logger:           logger,
 		llmSem:           semaphore.NewWeighted(1),
 	}
+
+	// Apply BM25 tuning parameters.
+	s.inverted.WithBM25Params(cfg.BM25K1, cfg.BM25B)
 
 	if err := s.rebuildIndexes(); err != nil {
 		_ = s.Close()
@@ -644,7 +654,7 @@ func (s *MemoryStore) List(ctx context.Context, filter MemoryFilter) ([]Memory, 
 
 		mem, err := docToMemory(doc)
 		if err != nil {
-			slog.Warn("skip corrupt document during list", "id", doc.ID, "err", err)
+			s.logger.Warn("skip corrupt document during list", "id", doc.ID, "err", err)
 			return true
 		}
 
@@ -725,7 +735,7 @@ func (s *MemoryStore) ListBySessionIDs(ctx context.Context, sessionIDs []string,
 
 		mem, err := docToMemory(doc)
 		if err != nil {
-			slog.Warn("skip corrupt document during ListBySessionIDs", "id", doc.ID, "err", err)
+			s.logger.Warn("skip corrupt document during ListBySessionIDs", "id", doc.ID, "err", err)
 			return true
 		}
 		if mem.State != StateActive {
@@ -773,7 +783,7 @@ func (s *MemoryStore) Stats(ctx context.Context) (*MemoryStats, error) {
 
 		mem, err := docToMemory(doc)
 		if err != nil {
-			slog.Warn("skip corrupt document during stats", "id", doc.ID, "err", err)
+			s.logger.Warn("skip corrupt document during stats", "id", doc.ID, "err", err)
 			return true
 		}
 
@@ -796,6 +806,74 @@ func (s *MemoryStore) Stats(ctx context.Context) (*MemoryStats, error) {
 	}
 
 	return stats, nil
+}
+
+// Compact physically removes soft-deleted and archived memories from the
+// underlying storage, reclaiming disk space and reducing index size.
+//
+// This operation rewrites the entire collection (HNSW index, column storage,
+// deletion vector). It blocks all reads and writes during execution.
+// For large stores, call during maintenance windows or low-activity periods.
+//
+// After Compact, deleted/archived memories are no longer accessible by Get;
+// only active and paused memories survive.
+func (s *MemoryStore) Compact(ctx context.Context) error {
+	if ctx == nil {
+		return fmt.Errorf("context must not be nil")
+	}
+
+	// Phase 1: Mark all non-active memories for Vego-level deletion.
+	// Vego's Compact only removes rows marked via DeleteContext (DV-based),
+	// so we must first mark archived/deleted/paused memories in the DV.
+	//
+	// Paused memories are NOT compacted — they should survive.
+	var toRemove []string
+	err := s.coll.ForEachContext(ctx, func(doc *vego.Document) bool {
+		select {
+		case <-ctx.Done():
+			return false
+		default:
+		}
+
+		mem, err := docToMemory(doc)
+		if err != nil {
+			s.logger.Warn("skip corrupt document during compact scan", "id", doc.ID, "err", err)
+			return true
+		}
+		if mem.State == StateDeleted || mem.State == StateArchived {
+			toRemove = append(toRemove, doc.ID)
+		}
+		return true
+	})
+	if err != nil {
+		return fmt.Errorf("compact scan: %w", err)
+	}
+
+	if len(toRemove) == 0 {
+		return nil // nothing to compact
+	}
+
+	// Phase 2: Mark for deletion in Vego's DV (if not already marked).
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.coll.DeleteBatchContext(ctx, toRemove); err != nil {
+		return fmt.Errorf("compact delete batch: %w", err)
+	}
+
+	// Phase 3: Trigger Vego compaction to physically rewrite storage.
+	if err := s.coll.Compact(); err != nil {
+		return fmt.Errorf("compact: %w", err)
+	}
+
+	// Phase 4: Rebuild in-memory indexes from the compacted data.
+	s.inverted.Clear()
+	s.contentHashIndex.Clear()
+	if err := s.rebuildIndexes(); err != nil {
+		return fmt.Errorf("compact rebuild indexes: %w", err)
+	}
+
+	return nil
 }
 
 // ----------------------------------------------------------------------
@@ -1019,6 +1097,9 @@ func (s *MemoryStore) embedBatch(ctx context.Context, texts []string) ([][]float
 
 // validateInput checks content length and tag count against config limits.
 func validateInput(content string, tags []string, cfg *Config) error {
+	if content == "" {
+		return fmt.Errorf("content must not be empty")
+	}
 	if len(content) > cfg.MaxContentLen {
 		return fmt.Errorf("content length %d exceeds max %d", len(content), cfg.MaxContentLen)
 	}
@@ -1077,13 +1158,13 @@ func (s *MemoryStore) rebuildIndexes() error {
 					// Prevent a panic in docToMemory/tokenize from hanging the pipeline.
 					defer func() {
 						if r := recover(); r != nil {
-							slog.Error("worker panic during rebuild", "id", doc.ID, "recover", r)
+							s.logger.Error("worker panic during rebuild", "id", doc.ID, "recover", r)
 							resultCh <- processed{doc: doc} // sentinel: consumer skips nil memory
 						}
 					}()
 					m, err := docToMemory(doc)
 					if err != nil {
-						slog.Warn("skip corrupt document during rebuild", "id", doc.ID, "err", err)
+						s.logger.Warn("skip corrupt document during rebuild", "id", doc.ID, "err", err)
 						return
 					}
 					// Test hook: if set, panics to exercise the recover path.
@@ -1091,9 +1172,9 @@ func (s *MemoryStore) rebuildIndexes() error {
 						testWorkerPanicHook()
 					}
 					// Apply schema migration if needed.
-					migrated, err := migrateMemory(doc, m)
+					migrated, err := migrateMemory(doc, m, s.logger)
 					if err != nil {
-						slog.Warn("skip document during migration", "id", doc.ID, "err", err)
+						s.logger.Warn("skip document during migration", "id", doc.ID, "err", err)
 						return
 					}
 					var terms []string
@@ -1136,7 +1217,7 @@ func (s *MemoryStore) rebuildIndexes() error {
 	for p := range resultCh {
 		m := p.memory
 		if m == nil {
-			slog.Warn("rebuildIndexes: skipped document due to worker panic", "id", p.doc.ID)
+			s.logger.Warn("rebuildIndexes: skipped document due to worker panic", "id", p.doc.ID)
 			continue
 		}
 		if p.isOrphan {
@@ -1189,7 +1270,7 @@ func (s *MemoryStore) rebuildIndexes() error {
 	// Persist schema migrations applied during Phase 2.
 	for _, doc := range migratedDocs {
 		if err := s.coll.UpdateContext(context.Background(), doc); err != nil {
-			slog.Warn("failed to persist schema migration", "id", doc.ID, "err", err)
+			s.logger.Warn("failed to persist schema migration", "id", doc.ID, "err", err)
 		}
 	}
 
@@ -1197,19 +1278,19 @@ func (s *MemoryStore) rebuildIndexes() error {
 	for _, doc := range orphans {
 		m, err := docToMemory(doc)
 		if err != nil {
-			slog.Warn("crash recovery: skip corrupt orphan", "id", doc.ID, "err", err)
+			s.logger.Warn("crash recovery: skip corrupt orphan", "id", doc.ID, "err", err)
 			continue
 		}
-		slog.Info("crash recovery: archiving orphaned memory", "id", doc.ID)
+		s.logger.Info("crash recovery: archiving orphaned memory", "id", doc.ID)
 		m.State = StateArchived
 		m.UpdatedAt = time.Now()
 		fixedDoc, err := memoryToDoc(m, doc.Vector)
 		if err != nil {
-			slog.Warn("failed to marshal fixed memory", "id", doc.ID, "err", err)
+			s.logger.Warn("failed to marshal fixed memory", "id", doc.ID, "err", err)
 			continue
 		}
 		if err := s.coll.UpdateContext(context.Background(), fixedDoc); err != nil {
-			slog.Warn("failed to fix orphaned memory", "id", doc.ID, "err", err)
+			s.logger.Warn("failed to fix orphaned memory", "id", doc.ID, "err", err)
 		} else {
 			s.inverted.Remove(doc.ID)
 		}
@@ -1224,22 +1305,22 @@ func (s *MemoryStore) rebuildIndexes() error {
 		}
 		oldMem, err := docToMemory(oldDoc)
 		if err != nil {
-			slog.Warn("crash recovery: corrupt old memory referenced by PreviousID", "id", oldID, "err", err)
+			s.logger.Warn("crash recovery: corrupt old memory referenced by PreviousID", "id", oldID, "err", err)
 			continue
 		}
 		if oldMem.State != StateActive {
 			continue
 		}
-		slog.Info("crash recovery: archiving old memory referenced by PreviousID", "id", oldID)
+		s.logger.Info("crash recovery: archiving old memory referenced by PreviousID", "id", oldID)
 		oldMem.State = StateArchived
 		oldMem.UpdatedAt = time.Now()
 		fixedDoc, err := memoryToDoc(oldMem, oldDoc.Vector)
 		if err != nil {
-			slog.Warn("failed to marshal fixed memory", "id", oldID, "err", err)
+			s.logger.Warn("failed to marshal fixed memory", "id", oldID, "err", err)
 			continue
 		}
 		if err := s.coll.UpdateContext(context.Background(), fixedDoc); err != nil {
-			slog.Warn("failed to fix old memory referenced by PreviousID", "id", oldID, "err", err)
+			s.logger.Warn("failed to fix old memory referenced by PreviousID", "id", oldID, "err", err)
 		} else {
 			s.inverted.Remove(oldID)
 		}
@@ -1275,7 +1356,7 @@ func (s *MemoryStore) archiveAndCreate(ctx context.Context, oldID string, newMem
 	// new memory to avoid leaving an orphan.
 	oldDoc, err := s.coll.GetContext(ctx, oldID)
 	if err != nil {
-		slog.Error("archiveAndCreate: get old memory failed, rolling back new memory",
+		s.logger.Error("archiveAndCreate: get old memory failed, rolling back new memory",
 			"old_id", oldID, "new_id", newMem.ID, "err", err)
 		s.compensateInsert(newMem.ID)
 		return fmt.Errorf("archive old memory: get old: %w", err)
@@ -1283,7 +1364,7 @@ func (s *MemoryStore) archiveAndCreate(ctx context.Context, oldID string, newMem
 
 	oldMem, err := docToMemory(oldDoc)
 	if err != nil {
-		slog.Error("archiveAndCreate: corrupt old memory, rolling back new memory",
+		s.logger.Error("archiveAndCreate: corrupt old memory, rolling back new memory",
 			"old_id", oldID, "new_id", newMem.ID, "err", err)
 		s.compensateInsert(newMem.ID)
 		return fmt.Errorf("archive old memory: decode old: %w", err)
@@ -1297,7 +1378,7 @@ func (s *MemoryStore) archiveAndCreate(ctx context.Context, oldID string, newMem
 	// log a warning and return nil — the new memory remains searchable
 	// as a separate entry (equivalent to ADD).
 	if oldMem.State != StateActive {
-		slog.Warn("archiveAndCreate: old memory state changed concurrently, new memory kept as separate entry",
+		s.logger.Warn("archiveAndCreate: old memory state changed concurrently, new memory kept as separate entry",
 			"old_id", oldID, "new_id", newMem.ID, "state", oldMem.State)
 		return nil
 	}
@@ -1305,7 +1386,7 @@ func (s *MemoryStore) archiveAndCreate(ctx context.Context, oldID string, newMem
 	// checked, but a concurrent pin operation may have changed the type.
 	// Keep the new memory as a separate ADD rather than rolling back.
 	if oldMem.MemoryType == TypePinned {
-		slog.Warn("archiveAndCreate: target became pinned concurrently, new memory kept as separate entry",
+		s.logger.Warn("archiveAndCreate: target became pinned concurrently, new memory kept as separate entry",
 			"old_id", oldID, "new_id", newMem.ID)
 		return nil
 	}
@@ -1316,14 +1397,14 @@ func (s *MemoryStore) archiveAndCreate(ctx context.Context, oldID string, newMem
 
 	archivedDoc, err := memoryToDoc(oldMem, oldDoc.Vector)
 	if err != nil {
-		slog.Error("archiveAndCreate: marshal archived memory failed, rolling back new memory",
+		s.logger.Error("archiveAndCreate: marshal archived memory failed, rolling back new memory",
 			"old_id", oldID, "new_id", newMem.ID, "err", err)
 		s.compensateInsert(newMem.ID)
 		return fmt.Errorf("archive old memory: marshal: %w", err)
 	}
 
 	if err := s.coll.UpdateContext(ctx, archivedDoc); err != nil {
-		slog.Error("archiveAndCreate: update archived memory failed, rolling back new memory",
+		s.logger.Error("archiveAndCreate: update archived memory failed, rolling back new memory",
 			"old_id", oldID, "new_id", newMem.ID, "err", err)
 		s.compensateInsert(newMem.ID)
 		return fmt.Errorf("archive old memory: update: %w", err)
@@ -1339,12 +1420,12 @@ func (s *MemoryStore) archiveAndCreate(ctx context.Context, oldID string, newMem
 func (s *MemoryStore) compensateInsert(id string) {
 	s.inverted.Remove(id)
 	if err := s.coll.DeleteContext(context.Background(), id); err != nil {
-		slog.Warn("compensateInsert: DeleteContext failed, trying soft-delete fallback",
+		s.logger.Warn("compensateInsert: DeleteContext failed, trying soft-delete fallback",
 			"id", id, "err", err)
 		// Fallback: soft-delete via UpdateContext so the orphan at least
 		// becomes invisible to search (state=deleted).
 		if err := s.softDelete(context.Background(), id); err != nil {
-			slog.Error("compensateInsert: all rollback attempts failed, orphan remains active",
+			s.logger.Error("compensateInsert: all rollback attempts failed, orphan remains active",
 				"id", id, "soft_delete_err", err)
 		}
 	}

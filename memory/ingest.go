@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -161,16 +160,16 @@ func (s *MemoryStore) extractFactsWithRetry(ctx context.Context, messages []Mess
 		if err == nil {
 			break
 		}
-		slog.WarnContext(ctx, "llm fact extraction failed, retrying", "attempt", attempt+1, "error", err)
+		s.logger.WarnContext(ctx, "llm fact extraction failed, retrying", "attempt", attempt+1, "error", err)
 	}
 	if err != nil {
-		slog.WarnContext(ctx, "llm fact extraction failed after retry, falling back to raw", "error", err)
+		s.logger.WarnContext(ctx, "llm fact extraction failed after retry, falling back to raw", "error", err)
 		return extractFactsRaw(messages), nil
 	}
 
 	facts, err := ParseJSON[[]ExtractedFact](raw)
 	if err != nil {
-		slog.WarnContext(ctx, "llm response parse failed, falling back to raw", "error", err)
+		s.logger.WarnContext(ctx, "llm response parse failed, falling back to raw", "error", err)
 		return extractFactsRaw(messages), nil
 	}
 
@@ -240,6 +239,9 @@ func (s *MemoryStore) StoreRawMessages(ctx context.Context, sessionID string, me
 	}
 	preparedList := make([]prepared, 0, len(facts))
 	for i := range facts {
+		if err := validateInput(facts[i].Content, facts[i].Tags, s.config); err != nil {
+			return 0, fmt.Errorf("message %d: %w", i, err)
+		}
 		// Use the *original* message content for dedup hash, not the
 		// temporal-normalized fact content.  This prevents cross-day
 		// dedup failure (e.g. "昨天发布" normalized to different dates).

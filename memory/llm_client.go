@@ -17,10 +17,12 @@ const maxErrorBody = 4096 // limit error response body to avoid huge error messa
 
 // LLMConfig holds the configuration for the LLM client.
 type LLMConfig struct {
-	APIKey      string
-	BaseURL     string
-	Model       string
-	Temperature float64
+	APIKey       string
+	BaseURL      string
+	Model        string
+	Temperature  float64
+	RoundTripper http.RoundTripper
+	Logger       *slog.Logger
 }
 
 // LLMClient is an OpenAI-compatible HTTP client for LLM completions.
@@ -30,6 +32,7 @@ type LLMClient struct {
 	model              string
 	temperature        float64
 	http               *http.Client
+	logger             *slog.Logger
 	formatNotSupported atomic.Bool // caches 400 response_format failure
 }
 
@@ -48,13 +51,19 @@ func NewLLMClient(cfg LLMConfig) *LLMClient {
 	if model == "" {
 		model = "gpt-4o-mini"
 	}
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &LLMClient{
 		apiKey:      cfg.APIKey,
 		baseURL:     strings.TrimSuffix(baseURL, "/"),
 		model:       model,
 		temperature: cfg.Temperature,
+		logger:      logger,
 		http: &http.Client{
-			Timeout: 120 * time.Second,
+			Timeout:   120 * time.Second,
+			Transport: cfg.RoundTripper,
 		},
 	}
 }
@@ -80,14 +89,14 @@ func (c *LLMClient) CompleteJSON(ctx context.Context, system, user string) (stri
 	start := time.Now()
 	content, promptTokens, completionTokens, err := c.complete(ctx, system, user, true)
 	if err != nil {
-		slog.Error("llm request failed",
+		c.logger.Error("llm request failed",
 			"model", c.model,
 			"duration_ms", time.Since(start).Milliseconds(),
 			"error", err,
 		)
 		return "", err
 	}
-	slog.Info("llm request completed",
+	c.logger.Info("llm request completed",
 		"model", c.model,
 		"duration_ms", time.Since(start).Milliseconds(),
 		"prompt_tokens", promptTokens,
@@ -148,7 +157,7 @@ func (c *LLMClient) complete(ctx context.Context, system, user string, withForma
 			strings.Contains(bodyStr, "json_object") ||
 			strings.Contains(bodyStr, "json_schema") {
 			c.formatNotSupported.Store(true)
-			slog.Warn("llm server does not support response_format, disabling JSON mode",
+			c.logger.Warn("llm server does not support response_format, disabling JSON mode",
 				"model", c.model,
 			)
 			return c.complete(ctx, system, user, false)

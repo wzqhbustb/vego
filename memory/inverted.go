@@ -101,6 +101,9 @@ type RebuildEntry struct {
 	Terms []string
 }
 
+// RebuildBatch inserts multiple documents in a single locked operation.
+// It is optimized for rebuildIndexes where the index is known to be empty
+// (no existing entries to remove). Callers must ensure id uniqueness.
 func (idx *InvertedIndex) RebuildBatch(entries []RebuildEntry) error {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()

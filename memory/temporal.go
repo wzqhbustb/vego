@@ -206,6 +206,11 @@ var (
 	cnDateRE1 = regexp.MustCompile(`(\d{4})年(\d{1,2})月(\d{1,2})日`)
 	cnDateRE2 = regexp.MustCompile(`(\d{1,2})月(\d{1,2})日`)
 	enDateRE  = regexp.MustCompile(`\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b`)
+
+	// Local-anchor-relative patterns (used in scanLocalAnchorRelative / scanAnchorPeriod).
+	cnLocalAnchorRE = regexp.MustCompile(`(\d{4})年(\d{1,2})月(\d{1,2})日\s*的(后|前)([一二两三四五六七八九十\d]+)?(天|周|星期|个月|年)`)
+	enLocalAnchorRE = regexp.MustCompile(`(?i)(\d{4})-(\d{1,2})-(\d{1,2})\s+the\s+(next|previous)\s+(day|week|month|year)`)
+	anchorPeriodRE  = regexp.MustCompile(`(?i)\bthe\s+(day|week|month|year)\s+(before|after)\s+(\d{4})-(\d{1,2})-(\d{1,2})\b`)
 )
 
 // validCNBoundary checks that a Chinese pattern match is not a substring
@@ -501,7 +506,6 @@ func scanLocalAnchorRelative(content string, anchor time.Time, anchorSrc string)
 	var matches []temporalMatch
 
 	// Chinese: YYYY年M月D日的(后|前)(一|两|几)?(天|周|星期|个月|年)
-	cnLocalAnchorRE := regexp.MustCompile(`(\d{4})年(\d{1,2})月(\d{1,2})日\s*的(后|前)([一二两三四五六七八九十\d]+)?(天|周|星期|个月|年)`)
 	for _, m := range cnLocalAnchorRE.FindAllStringSubmatchIndex(content, -1) {
 		y, _ := strconv.Atoi(content[m[2]:m[3]])
 		mo, _ := strconv.Atoi(content[m[4]:m[5]])
@@ -555,7 +559,6 @@ func scanLocalAnchorRelative(content string, anchor time.Time, anchorSrc string)
 	}
 
 	// English: ISO date + "the (next|previous) day/week/month/year"
-	enLocalAnchorRE := regexp.MustCompile(`(?i)(\d{4})-(\d{1,2})-(\d{1,2})\s+the\s+(next|previous)\s+(day|week|month|year)`)
 	for _, m := range enLocalAnchorRE.FindAllStringSubmatchIndex(content, -1) {
 		y, _ := strconv.Atoi(content[m[2]:m[3]])
 		mo, _ := strconv.Atoi(content[m[4]:m[5]])
@@ -609,8 +612,7 @@ func scanLocalAnchorRelative(content string, anchor time.Time, anchorSrc string)
 func scanAnchorPeriod(content string, anchor time.Time, anchorSrc string) []temporalMatch {
 	var matches []temporalMatch
 
-	re := regexp.MustCompile(`(?i)\bthe\s+(day|week|month|year)\s+(before|after)\s+(\d{4})-(\d{1,2})-(\d{1,2})\b`)
-	for _, m := range re.FindAllStringSubmatchIndex(content, -1) {
+	for _, m := range anchorPeriodRE.FindAllStringSubmatchIndex(content, -1) {
 		unitStr := strings.ToLower(content[m[2]:m[3]])
 		direction := strings.ToLower(content[m[4]:m[5]])
 		y, _ := strconv.Atoi(content[m[6]:m[7]])

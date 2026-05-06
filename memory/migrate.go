@@ -18,11 +18,13 @@ var migrations = make(map[int]Migration)
 
 // RegisterMigration registers a migration from a specific schema version.
 // Not safe for concurrent use: call during init() or single-goroutine setup.
-func RegisterMigration(fromVersion int, m Migration) {
+// Returns an error if m is nil.
+func RegisterMigration(fromVersion int, m Migration) error {
 	if m == nil {
-		panic(fmt.Sprintf("RegisterMigration: migration function for version %d is nil", fromVersion))
+		return fmt.Errorf("RegisterMigration: migration function for version %d is nil", fromVersion)
 	}
 	migrations[fromVersion] = m
+	return nil
 }
 
 // getSchemaVersion reads the _schema_ver from document metadata.
@@ -49,7 +51,10 @@ func getSchemaVersion(doc *vego.Document) int {
 // Backward compatibility: if the document has no schema version (fromVer == 0)
 // and no migration is registered for version 0, the document is assumed to be
 // compatible with the current schema and is simply stamped with CurrentSchemaVersion.
-func migrateMemory(doc *vego.Document, m *Memory) (bool, error) {
+func migrateMemory(doc *vego.Document, m *Memory, logger *slog.Logger) (bool, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	fromVer := getSchemaVersion(doc)
 	if fromVer >= CurrentSchemaVersion {
 		return false, nil
@@ -79,6 +84,6 @@ func migrateMemory(doc *vego.Document, m *Memory) (bool, error) {
 	doc.Metadata[metaKeyState] = string(m.State)
 	doc.Metadata[metaKeyType] = string(m.MemoryType)
 
-	slog.Info("migrated memory schema", "id", doc.ID, "from", fromVer, "to", CurrentSchemaVersion)
+	logger.Info("migrated memory schema", "id", doc.ID, "from", fromVer, "to", CurrentSchemaVersion)
 	return true, nil
 }

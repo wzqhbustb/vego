@@ -2106,3 +2106,115 @@ func TestMemoryStoreBootstrapValidation(t *testing.T) {
 		t.Fatalf("valid bootstrap failed: %v", err)
 	}
 }
+
+// ----------------------------------------------------------------------
+// Compact
+// ----------------------------------------------------------------------
+
+func TestMemoryStoreCompact(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+
+	// Store three memories.
+	mem1, err := s.Store(ctx, "memory one", []string{"a"})
+	if err != nil {
+		t.Fatalf("Store 1: %v", err)
+	}
+	mem2, err := s.Store(ctx, "memory two", []string{"b"})
+	if err != nil {
+		t.Fatalf("Store 2: %v", err)
+	}
+	mem3, err := s.Store(ctx, "memory three", []string{"c"})
+	if err != nil {
+		t.Fatalf("Store 3: %v", err)
+	}
+
+	// Delete mem1, archive mem2 via Update.
+	if err := s.Delete(ctx, mem1.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	_, err = s.Update(ctx, mem2.ID, "memory two updated", []string{"b"})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	// Before compact: stats should show deleted + archived.
+	stats, err := s.Stats(ctx)
+	if err != nil {
+		t.Fatalf("Stats before compact: %v", err)
+	}
+	if stats.Deleted != 1 {
+		t.Errorf("expected 1 deleted, got %d", stats.Deleted)
+	}
+	if stats.Archived != 1 {
+		t.Errorf("expected 1 archived, got %d", stats.Archived)
+	}
+
+	// Compact.
+	if err := s.Compact(ctx); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+
+	// After compact: only active memories should remain.
+	stats, err = s.Stats(ctx)
+	if err != nil {
+		t.Fatalf("Stats after compact: %v", err)
+	}
+	if stats.Deleted != 0 {
+		t.Errorf("expected 0 deleted after compact, got %d", stats.Deleted)
+	}
+	if stats.Archived != 0 {
+		t.Errorf("expected 0 archived after compact, got %d", stats.Archived)
+	}
+	if stats.Active != 2 {
+		t.Errorf("expected 2 active after compact, got %d", stats.Active)
+	}
+
+	// Verify surviving memory is still searchable.
+	got, err := s.Get(ctx, mem3.ID)
+	if err != nil {
+		t.Fatalf("Get surviving: %v", err)
+	}
+	if got.Content != "memory three" {
+		t.Errorf("content mismatch: got %q", got.Content)
+	}
+}
+
+func TestMemoryStoreCompactNilContext(t *testing.T) {
+	s := newTestStore(t)
+	t.Cleanup(func() { s.Close() })
+
+	err := s.Compact(nil)
+	if err == nil || !strings.Contains(err.Error(), "context must not be nil") {
+		t.Errorf("expected nil context error, got: %v", err)
+	}
+}
+
+func TestMemoryStoreCompactEmpty(t *testing.T) {
+	s := newTestStore(t)
+	t.Cleanup(func() { s.Close() })
+
+	// Compact on empty store should be a no-op.
+	if err := s.Compact(context.Background()); err != nil {
+		t.Fatalf("Compact empty: %v", err)
+	}
+}
+
+// ----------------------------------------------------------------------
+// Empty content validation
+// ----------------------------------------------------------------------
+
+func TestMemoryStoreEmptyContent(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+	_, err := s.Store(ctx, "", []string{"tag"})
+	if err == nil || !strings.Contains(err.Error(), "content must not be empty") {
+		t.Errorf("expected empty content error, got: %v", err)
+	}
+}
