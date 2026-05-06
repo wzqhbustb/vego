@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.23+-blue.svg)](https://golang.org/dl/)
 
-**Vego** is a lightweight vector search engine for AI agents and embedded applications, written in pure Go with zero CGO dependencies.
+**Vego** is a lightweight vector search engine for AI agents and embedded applications, written in pure Go with zero CGO dependencies. It includes a built-in **Agent Memory Service** for persistent, semantically-searchable long-term memory.
 
 ---
 
@@ -15,6 +15,7 @@
 - [📚 Examples](./examples/) - Runnable code examples
 - [📖 API Docs](#api-documentation) - Collection API & configuration
 - [🔧 Collection API](#collection-api-high-level) - Document-oriented interface
+- [🧠 Agent Memory Service](#-agent-memory-service) - Persistent AI agent memory
 - [💾 Storage Engine](./STORAGE.md) - Deep dive into storage layer
 - [📊 Performance](#performance-benchmarks) - Benchmarks & comparisons
 - [⚠️ Known Limitations](#known-limitations) - Current constraints
@@ -64,6 +65,7 @@
 
 ### 1. AI Agent Local Memory
 Provide long-term memory capabilities for AI agents without external databases.
+See the [Agent Memory Service](#-agent-memory-service) section for a turnkey solution.
 
 ### 2. Edge Device Embedded Search
 Ideal for IoT, mobile, and edge computing scenarios:
@@ -82,6 +84,167 @@ Provide knowledge base retrieval capabilities for local LLMs:
 - Local RAG combined with Ollama/Llama.cpp
 - Intelligent Q&A for private documents
 - Semantic search for code repositories
+
+---
+
+## 🧠 Agent Memory Service
+
+The `memory` package provides a **production-ready, embedded memory service for AI agents** — built on top of Vego's vector engine. It gives your agent persistent, semantically-searchable long-term memory with zero external dependencies.
+
+### Key Features
+
+| Feature | Description |
+|---------|-------------|
+| **Hybrid Search** | 10-stage pipeline: HNSW vector search + BM25 keyword search + RRF fusion |
+| **Smart Ingestion** | LLM-based fact extraction with automatic deduplication and reconciliation |
+| **Temporal Awareness** | Resolves relative time expressions ("yesterday", "last week") to absolute dates |
+| **Memory Lifecycle** | Active → Paused → Archived → Deleted, with archive-and-create versioning |
+| **Second-Hop Recall** | Associative expansion discovers related memories beyond the direct query |
+| **Score Tuning** | Pinned boost, recency boost, gap-stop, dual-channel bonus — all configurable |
+| **Enterprise Ready** | Custom `http.RoundTripper`, structured logging via `slog`, thread-safe |
+
+### Quick Start
+
+```go
+import "github.com/wzqhbustb/vego/memory"
+
+// Open a memory store (creates DB on disk)
+store, err := memory.Open("./agent_memory",
+    memory.WithLLM(apiKey, "", "gpt-4o-mini", 0.1),
+    memory.WithEmbedding(apiKey, "", "text-embedding-3-small", 1536),
+)
+if err != nil { log.Fatal(err) }
+defer store.Close()
+
+ctx := context.Background()
+
+// Store a memory
+mem, _ := store.Store(ctx, "User prefers dark mode", []string{"preference", "ui"})
+
+// Hybrid search (vector + BM25 + RRF)
+results, _ := store.Search(ctx, "What are the user's UI preferences?",
+    memory.Limit(5),
+    memory.MinScore(0.3),
+)
+
+// Update (archive-and-create, preserves history chain)
+updated, _ := store.Update(ctx, mem.ID, "User prefers light mode now", []string{"preference", "ui"})
+
+// Ingest conversations (LLM extracts facts automatically)
+res, err := store.Ingest(ctx, memory.IngestRequest{
+    AgentID:  "my-agent",
+    Mode:     memory.ModeNormal,
+    Messages: []memory.Message{
+        {Role: "user", Content: "I'm working on a Go project called Vego"},
+        {Role: "assistant", Content: "Got it! I'll remember that."},
+    },
+})
+if err != nil {
+    log.Printf("ingest: %v", err)
+}
+fmt.Printf("ingested: added=%d updated=%d\n", res.Added, res.Updated)
+
+// Compact to reclaim space from deleted/archived memories
+if err := store.Compact(ctx); err != nil {
+    log.Printf("compact: %v", err)
+}
+```
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────┐
+│                   MemoryStore                        │
+├──────────┬──────────────┬───────────┬───────────────┤
+│ LLM      │  Embedder    │ Inverted  │ ContentHash   │
+│ Client   │  Client      │ Index     │ Index         │
+│ (fact    │  (text→vec)  │ (BM25)    │ (dedup)       │
+│ extract) │              │           │               │
+├──────────┴──────────────┴───────────┴───────────────┤
+│              Vego Collection (HNSW + Storage)        │
+└─────────────────────────────────────────────────────┘
+```
+
+### Search Pipeline (10 stages)
+
+1. Temporal query normalization
+2. Vector search (HNSW nearest neighbors)
+3. Keyword search (BM25 with mixed Chinese-English tokenization)
+4. RRF score fusion
+5. Dual-channel bonus (results hit by both channels)
+6. Vector similarity weighting
+7. Second-hop expansion (associative recall)
+8. Pinned memory boost
+9. Recency boost (week/month multipliers)
+10. Gap-stop truncation (removes trailing low-relevance results)
+
+### Configuration
+
+All parameters have sensible defaults and can be tuned via functional options:
+
+```go
+store, _ := memory.Open(path,
+    // LLM & Embedding (required for full functionality)
+    memory.WithLLM(apiKey, baseURL, model, 0.1),
+    memory.WithEmbedding(apiKey, baseURL, model, 1536),
+
+    // Search tuning
+    memory.WithSearchLimit(10),          // max results
+    memory.WithSearchParams(0.3),        // min similarity score
+    memory.WithGapStop(0.5),             // gap-stop ratio (0=disabled)
+    memory.WithRRFK(60.0),              // RRF fusion parameter
+    memory.WithSecondHop(0.02, 0.3, 3), // gate, weight, topN
+    memory.WithPinnedBoost(1.5),         // pinned memory multiplier
+    memory.WithRecencyBoost(1.05, 1.02), // week, month multipliers
+    memory.WithBM25Params(1.2, 0.75),   // k1, b
+
+    // Input validation
+    memory.WithMaxContentLen(50000),     // max bytes per memory
+    memory.WithMaxTags(20),             // max tags per memory
+    memory.WithMaxBulkSize(100),        // max batch size
+
+    // Enterprise
+    memory.WithLogger(nil),              // use slog.Default()
+    memory.WithHTTPRoundTripper(nil),    // use http.DefaultTransport
+    memory.WithFactExtractionPrompt(""), // use built-in English prompt
+)
+```
+
+### Error Handling
+
+Errors are categorized for easy retry logic:
+
+| Category | Retryable | Examples |
+|----------|-----------|----------|
+| **Validation** | ❌ | Empty content, content too long, invalid state transition |
+| **Infrastructure** | ✅ | Embedding API timeout, LLM rate limit, disk I/O |
+| **Data corruption** | ❌ | Corrupt JSON in storage, missing metadata fields |
+
+All errors are wrapped with `%w` — use `errors.Is` / `errors.As` for inspection.
+
+### Full API
+
+| Method | Description |
+|--------|-------------|
+| `Open(path, ...Option)` | Open or create a memory store |
+| `Close()` | Close the store and release resources |
+| `Store(ctx, content, tags)` | Create a new memory |
+| `Get(ctx, id)` | Retrieve a memory by ID (any state) |
+| `Update(ctx, id, content, tags)` | Archive-and-create with history chain |
+| `Delete(ctx, id)` | Soft-delete (still readable by Get) |
+| `Pause(ctx, id)` / `Resume(ctx, id)` | Exclude from / re-include in search |
+| `Search(ctx, query, ...SearchOption)` | Hybrid search with scoring pipeline |
+| `List(ctx, filter)` | List memories with filtering and pagination |
+| `ListBySessionIDs(ctx, ids, limit)` | Batch query memories by session IDs |
+| `Ingest(ctx, IngestRequest)` | LLM fact extraction + reconciliation |
+| `StoreBatch(ctx, items)` | Batch insert with concurrent embedding |
+| `Bootstrap(ctx, memories)` | Import pre-built memories (with optional vectors) |
+| `Compact(ctx)` | Physically remove deleted/archived memories |
+| `Stats(ctx)` | Aggregate statistics |
+
+> 📖 See [`go doc github.com/wzqhbustb/vego/memory`](https://pkg.go.dev/github.com/wzqhbustb/vego/memory) for complete documentation.
+> 
+> 📂 See [`examples/memory_basic/`](./examples/memory_basic/) for a runnable example.
 
 ---
 
@@ -1081,6 +1244,7 @@ Vego is actively evolving. For the detailed development roadmap including:
 | Metadata filtering | ✅ Available | v0.1 |
 | Lance-compatible columnar storage | ✅ Available | v0.1 |
 | ZSTD, BitPacking, RLE encoding | ✅ Available | v0.1 |
+| **Agent Memory Service** | ✅ **Available** | **v0.3** |
 | Quantization support (PQ/SQ) | 🚧 Planned | v0.5 |
 | Distributed index | 📋 Backlog | v1.0 |
 

@@ -65,6 +65,10 @@ type Config struct {
 	// BM25
 	BM25K1 float64 // Default 1.2
 	BM25B  float64 // Default 0.75
+
+	// Prompts (optional overrides)
+	FactExtractionPrompt string // Custom system prompt for fact extraction; empty uses built-in English default
+	ReconcilePrompt      string // Custom system prompt for reconcile decisions; empty uses built-in English default
 }
 
 // Option is a functional option for Config.
@@ -423,6 +427,20 @@ func WithVectorSimilarityWeight(weight float64) Option {
 // the LLM. Use 0 to disable. Range: [0,1].
 func WithNearDupThreshold(threshold float64) Option {
 	return func(c *Config) { c.NearDupThreshold = threshold }
+}
+
+// WithFactExtractionPrompt sets a custom system prompt for LLM fact extraction.
+// Use this to localize prompts or tune extraction behavior for your domain.
+// If empty, a built-in English prompt is used.
+func WithFactExtractionPrompt(prompt string) Option {
+	return func(c *Config) { c.FactExtractionPrompt = prompt }
+}
+
+// WithReconcilePrompt sets a custom system prompt for reconcile decisions.
+// Use this to localize prompts or tune merge/replace logic for your domain.
+// If empty, a built-in English prompt is used.
+func WithReconcilePrompt(prompt string) Option {
+	return func(c *Config) { c.ReconcilePrompt = prompt }
 }
 
 // WithLogger sets the structured logger for the MemoryStore.

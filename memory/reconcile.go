@@ -252,9 +252,8 @@ func (s *MemoryStore) decideAction(ctx context.Context, fact *ExtractedFact, can
 		}
 		return "ADD", "", nil
 	}
-
-	systemPrompt := buildReconcileSystemPrompt()
-	userPrompt := buildReconcileUserPrompt(fact, candidates)
+	systemPrompt := s.reconcileSystemPrompt()
+	userPrompt := s.buildReconcileUserPrompt(fact, candidates)
 
 	// Serialize LLM calls to avoid API rate limits in concurrent Reconcile.
 	// Currently Phase 2 is sequential, but this semaphore provides defense-
@@ -303,42 +302,47 @@ func (s *MemoryStore) decideAction(ctx context.Context, fact *ExtractedFact, can
 	return action, targetMemoryID, nil
 }
 
-func buildReconcileSystemPrompt() string {
-	return "你是一个记忆管理助手。给定一条新事实和若干候选记忆，决定操作类型：" +
-		"ADD（新增独立记忆）、UPDATE（用新事实完全替换旧记忆）、DELETE（删除错误记忆）、NOOP（无操作）。\n\n" +
-		"关键规则（按优先级排序）：\n" +
-		"1. UPDATE 意味着完全替换旧记忆的内容，旧记忆会被归档但内容不可再搜索。" +
-		"如果新事实是旧记忆的补充或扩展（例如旧记忆说\"喜欢咖啡\"，新事实说\"也喜欢茶\"），" +
-		"必须输出 ADD 而非 UPDATE，避免信息丢失。\n" +
-		"2. 候选记忆与新事实内容几乎相同，仅细节有更新 → UPDATE。\n" +
-		"3. 候选记忆与新事实直接矛盾（如偏好改变、状态迁移、事实更正）→ UPDATE。" +
-		"保留历史链可追溯，不要 DELETE。\n" +
-		"4. DELETE 仅用于完全错误且无用的信息（如事实提取错误、用户明确否定\"我从来没说过这个\"）。" +
-		"信息过时或偏好改变不应 DELETE。Pinned 记忆不可 DELETE。\n" +
-		"5. 候选记忆与新事实完全无关 → ADD。\n\n" +
-		"请返回 JSON: {\"action\": \"ADD|UPDATE|DELETE|NOOP\", \"target_id\": 1, \"reason\": \"...\"}"
+// reconcileSystemPrompt returns the system prompt for reconcile decisions.
+// Uses the custom prompt from config if set, otherwise the built-in English default.
+func (s *MemoryStore) reconcileSystemPrompt() string {
+	if s.config.ReconcilePrompt != "" {
+		return s.config.ReconcilePrompt
+	}
+	return "You are a memory management assistant. Given a new fact and candidate memories, decide the action: " +
+		"ADD (new independent memory), UPDATE (completely replace old memory), DELETE (remove incorrect memory), NOOP (no action).\n\n" +
+		"Key rules (in priority order):\n" +
+		"1. UPDATE means completely replacing the old memory's content. The old memory will be archived and no longer searchable. " +
+		"If the new fact is a supplement or extension of the old memory (e.g., old says \"likes coffee\", new says \"also likes tea\"), " +
+		"you MUST output ADD instead of UPDATE to avoid information loss.\n" +
+		"2. If the candidate memory and new fact are almost identical with only minor detail updates -> UPDATE.\n" +
+		"3. If the candidate memory directly contradicts the new fact (preference change, status migration, fact correction) -> UPDATE. " +
+		"Keep the historical chain traceable; do NOT DELETE.\n" +
+		"4. DELETE is ONLY for completely wrong and useless information (e.g., extraction error, user explicitly denies \"I never said that\"). " +
+		"Outdated information or preference changes should NOT be DELETED. Pinned memories cannot be DELETED.\n" +
+		"5. If the candidate memory is completely unrelated to the new fact -> ADD.\n\n" +
+		"Return JSON: {\"action\": \"ADD|UPDATE|DELETE|NOOP\", \"target_id\": 1, \"reason\": \"...\"}"
 }
 
-func buildReconcileUserPrompt(fact *ExtractedFact, candidates []*candidateMapping) string {
+func (s *MemoryStore) buildReconcileUserPrompt(fact *ExtractedFact, candidates []*candidateMapping) string {
 	var b strings.Builder
-	b.WriteString("新事实: ")
+	b.WriteString("New fact: ")
 	b.WriteString(fact.Content)
 	if len(fact.Tags) > 0 {
-		b.WriteString("\n标签: ")
+		b.WriteString("\nTags: ")
 		b.WriteString(strings.Join(fact.Tags, ", "))
 	}
-	b.WriteString("\n\n候选记忆:\n")
+	b.WriteString("\n\nCandidate memories:\n")
 	for _, c := range candidates {
 		b.WriteString("[")
 		b.WriteString(strconv.Itoa(c.intID))
 		b.WriteString("] ")
 		b.WriteString(c.memory.Content)
 		if c.memory.MemoryType != "" {
-			b.WriteString(" \n类型: ")
+			b.WriteString("\nType: ")
 			b.WriteString(string(c.memory.MemoryType))
 		}
 		if len(c.memory.Tags) > 0 {
-			b.WriteString(" 标签: ")
+			b.WriteString(" Tags: ")
 			b.WriteString(strings.Join(c.memory.Tags, ", "))
 		}
 		b.WriteString("\n")

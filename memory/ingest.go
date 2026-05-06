@@ -150,7 +150,7 @@ func (s *MemoryStore) extractFactsLLM(ctx context.Context, messages []Message) (
 // extractFactsWithRetry calls the LLM to extract facts from messages.
 // It retries once on failure, then falls back to raw mode if both attempts fail.
 func (s *MemoryStore) extractFactsWithRetry(ctx context.Context, messages []Message) ([]ExtractedFact, error) {
-	systemPrompt := buildFactExtractionPrompt()
+	systemPrompt := s.factExtractionPrompt()
 	userPrompt := buildFactExtractionUserPrompt(messages)
 
 	var raw string
@@ -176,23 +176,27 @@ func (s *MemoryStore) extractFactsWithRetry(ctx context.Context, messages []Mess
 	return facts, nil
 }
 
-// buildFactExtractionPrompt returns the system prompt for fact extraction.
-func buildFactExtractionPrompt() string {
-	return "你是一个记忆提取助手。从对话中提取简洁、自包含的事实。\n\n" +
-		"规则：\n" +
-		"1. 输出数组中每个 item 对应一条事实。\n" +
-		"2. 将同一主题的事实合并为一条更全面的描述。\n" +
-		"3. 丢弃问候、寒暄和纯粹社交客套。\n" +
-		"4. 显式保留时间锚点（日期、时间、截止日期）。\n" +
-		"5. 每条事实必须自包含，无需原始对话即可理解。\n" +
-		"6. 搜索意图标记 query_intent: true（例如“查找”、“搜索”、“查询”）。\n" +
-		"7. 使用内容原始语言描述事实。\n" +
-		"8. 包含相关标签以分类事实（例如 preference、project、contact）。\n" +
-		"9. 不提取已经是常识的事实。\n" +
-		"10. 如果一条消息包含多个不同事实，拆分为多个 item。\n" +
-		"11. 保持事实简洁（理想情况下 1-2 句话）。\n" +
-		"12. 保持事实准确性，不推断或编造信息。\n\n" +
-		"输出 JSON: [{\"content\":\"...\",\"tags\":[\"...\"],\"query_intent\":false}]"
+// factExtractionPrompt returns the system prompt for fact extraction.
+// Uses the custom prompt from config if set, otherwise the built-in English default.
+func (s *MemoryStore) factExtractionPrompt() string {
+	if s.config.FactExtractionPrompt != "" {
+		return s.config.FactExtractionPrompt
+	}
+	return "You are a memory extraction assistant. Extract concise, self-contained facts from conversations.\n\n" +
+		"Rules:\n" +
+		"1. Each item in the output array corresponds to one fact.\n" +
+		"2. Merge facts about the same topic into a single comprehensive description.\n" +
+		"3. Discard greetings, small talk, and purely social pleasantries.\n" +
+		"4. Explicitly preserve temporal anchors (dates, times, deadlines).\n" +
+		"5. Each fact must be self-contained and understandable without the original conversation.\n" +
+		"6. Mark search intents with query_intent: true (e.g., \"find\", \"search\", \"look up\", \"query\").\n" +
+		"7. Describe facts in the original language of the content.\n" +
+		"8. Include relevant tags to categorize facts (e.g., preference, project, contact).\n" +
+		"9. Do not extract facts that are common knowledge.\n" +
+		"10. If a message contains multiple distinct facts, split them into multiple items.\n" +
+		"11. Keep facts concise (ideally 1-2 sentences).\n" +
+		"12. Maintain factual accuracy; do not infer or fabricate information.\n\n" +
+		"Output JSON: [{\"content\":\"...\",\"tags\":[\"...\"],\"query_intent\":false}]"
 }
 
 // buildFactExtractionUserPrompt builds the user prompt from messages.

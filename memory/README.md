@@ -1,3 +1,5 @@
+> ⚠️ **Beta**: API 可能在 v1.0 前微调。当前版本适合早期试用和内部集成。
+
 # Vego Agent Memory Service
 
 面向 AI Agent 的持久化记忆层，提供向量搜索 + 关键词搜索 + 时间感知召回 + 智能摄取/调和的全套记忆管理能力。
@@ -16,6 +18,8 @@
 - [搜索调优指南](#搜索调优指南)
 - [记忆状态机](#记忆状态机)
 - [记忆类型](#记忆类型)
+- [线程安全](#线程安全)
+- [Schema 迁移](#schema-迁移)
 - [错误处理](#错误处理)
 
 ---
@@ -130,6 +134,17 @@ s, err := memory.Open("./data",
     memory.WithMaxContentLen(50000),
     memory.WithMaxTags(20),
     memory.WithMaxBulkSize(100),
+
+    // 可观测性与企业部署
+    memory.WithLogger(myLogger),                 // 自定义 slog.Logger
+    memory.WithHTTPRoundTripper(myTransport),    // 自定义 TLS/代理
+
+    // 提示词定制（默认英文）
+    memory.WithFactExtractionPrompt(myPrompt),   // 自定义事实提取系统提示词
+    memory.WithReconcilePrompt(myPrompt),        // 自定义协调决策系统提示词
+
+    // BM25 调参（高级）
+    memory.WithBM25Params(1.2, 0.75),            // k1, b
 )
 ```
 
@@ -157,6 +172,10 @@ s, err := memory.Open("./data",
 | `MaxContentLen` | 50000 | 单条内容最大字节 |
 | `MaxTags` | 20 | 单条最大标签数 |
 | `MaxBulkSize` | 100 | 批量操作最大数量 |
+| `BM25K1` | 1.2 | BM25 词频饱和参数 |
+| `BM25B` | 0.75 | BM25 长度归一化参数 |
+| `FactExtractionPrompt` | (内置英文) | 自定义事实提取提示词 |
+| `ReconcilePrompt` | (内置英文) | 自定义协调决策提示词 |
 
 ---
 
@@ -197,7 +216,7 @@ results, err := s.Search(ctx, "查询文本",
     memory.MinScore(0.5),          // 最小相似度
     memory.WithFilter(memory.MemoryFilter{
         Tags:       []string{"preference"},
-        MemoryType: "insight",
+        MemoryType: string(memory.TypeInsight),
         AgentID:    "agent-1",
         SessionID:  "session-1",
     }),
@@ -262,8 +281,8 @@ results, err := s.ListBySessionIDs(ctx,
 // 通用列表查询
 mems, err := s.List(ctx, memory.MemoryFilter{
     Tags:       []string{"preference"},
-    State:      "active",
-    MemoryType: "insight",
+    State:      string(memory.StateActive),
+    MemoryType: string(memory.TypeInsight),
     Limit:      20,
     Offset:     0,
 })
@@ -271,6 +290,10 @@ mems, err := s.List(ctx, memory.MemoryFilter{
 // 统计
 stats, err := s.Stats(ctx)
 // stats.Total / Active / Paused / Archived / Deleted / ByType / Vego
+
+// 物理压缩（删除 archived/deleted，回收磁盘空间）
+// 阻塞性操作：持有写锁，会阻塞所有读写。建议维护窗口执行。
+err := s.Compact(ctx)
 ```
 
 ---
@@ -413,9 +436,9 @@ Create → active ──Pause──→ paused
 |------|---------|---------|---------|
 | `insight` | LLM 自动提取 / 用户手动 Store | 1.0x | LLM 可 UPDATE/DELETE |
 | `session` | ModeRaw 直接存储 | 1.0x | 无 |
-| `pinned` | 用户手动 Store（需显式设置类型） | **1.5x** | LLM 不可 DELETE；UPDATE 降级为 ADD |
+| `pinned` | 通过 Bootstrap 导入（需显式设置类型） | **1.5x** | LLM 不可 DELETE；UPDATE 降级为 ADD |
 
-> 手动创建 pinned 记忆：
+> 创建 pinned 记忆（Store 不支持指定 MemoryType，需通过 Bootstrap）：
 > ```go
 > mem := &memory.Memory{Content: "重要规则", MemoryType: memory.TypePinned, State: memory.StateActive}
 > s.Bootstrap(ctx, []*memory.Memory{mem})
@@ -457,3 +480,29 @@ defer s.Close()
 `Close()` 会：
 1. 关闭底层 Vego 数据库
 2. 释放 LLM 和 Embedding 客户端的 idle HTTP 连接
+
+---
+
+## 线程安全
+
+`MemoryStore` 可安全用于并发场景：
+
+- **读操作**（`Get` / `Search` / `List` / `Stats`）：lock-free，依赖 Vego 内部读写协调
+- **写操作**（`Store` / `Update` / `Delete` / `Pause` / `Resume` / `Bootstrap` / `StoreBatch` / `Compact`）：内部通过 `sync.Mutex` 串行化
+- `Compact` 会阻塞所有并发读写，大规模数据建议在低峰期执行
+
+---
+
+## Schema 迁移
+
+`memory` 包内置版本控制（当前 `CurrentSchemaVersion = 1`）。打开存储时会自动检测旧版本数据并迁移：
+
+```go
+// 注册自定义迁移（从版本 0 升级到 1）
+memory.RegisterMigration(0, func(m *memory.Memory) error {
+    m.Tags = append(m.Tags, "migrated-v1")
+    return nil
+})
+```
+
+> `RegisterMigration` 非并发安全，应在 `init()` 或单 goroutine 设置时调用。
