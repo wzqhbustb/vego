@@ -147,6 +147,321 @@ func TestCollectionGet(t *testing.T) {
 	})
 }
 
+// TestCollectionForEach tests the ForEach method
+func TestCollectionForEach(t *testing.T) {
+	coll, cleanup := setupTestCollection(t)
+	defer cleanup()
+
+	// Insert 3 test documents into shared collection
+	docs := []*Document{
+		createTestDocument("foreach_1", 64, map[string]interface{}{"idx": 1}),
+		createTestDocument("foreach_2", 64, map[string]interface{}{"idx": 2}),
+		createTestDocument("foreach_3", 64, map[string]interface{}{"idx": 3}),
+	}
+	for _, doc := range docs {
+		if err := coll.Insert(doc); err != nil {
+			t.Fatalf("Failed to insert document: %v", err)
+		}
+	}
+
+	t.Run("Iterate all documents", func(t *testing.T) {
+		var count int
+		var ids []string
+		err := coll.ForEach(func(doc *Document) bool {
+			count++
+			ids = append(ids, doc.ID)
+			return true
+		})
+		if err != nil {
+			t.Fatalf("ForEach failed: %v", err)
+		}
+		if count != 3 {
+			t.Errorf("Expected 3 documents, got %d", count)
+		}
+		if len(ids) != 3 {
+			t.Errorf("Expected 3 IDs, got %d", len(ids))
+		}
+	})
+
+	t.Run("Early stop", func(t *testing.T) {
+		var count int
+		err := coll.ForEach(func(doc *Document) bool {
+			count++
+			return false // stop after first
+		})
+		if err != nil {
+			t.Fatalf("ForEach failed: %v", err)
+		}
+		if count != 1 {
+			t.Errorf("Expected 1 document after early stop, got %d", count)
+		}
+	})
+
+	t.Run("Buffer deduplicates with disk", func(t *testing.T) {
+		// Use independent collection to avoid state pollution
+		tmpDir := t.TempDir()
+		cfg := &Config{Dimension: 64, M: 16, EfConstruction: 200}
+		c, err := NewCollection("dedup", tmpDir, cfg)
+		if err != nil {
+			t.Fatalf("Failed to create collection: %v", err)
+		}
+		defer c.Close()
+
+		// Insert v1 and flush to disk
+		docV1 := createTestDocument("dedup_doc", 64, map[string]interface{}{"version": 1})
+		if err := c.Insert(docV1); err != nil {
+			t.Fatalf("Failed to insert v1: %v", err)
+		}
+		if err := c.Save(); err != nil {
+			t.Fatalf("Failed to save: %v", err)
+		}
+
+		// Update to v2 — new version stays in writeBuffer, old version on disk
+		docV2 := createTestDocument("dedup_doc", 64, map[string]interface{}{"version": 2})
+		if err := c.Update(docV2); err != nil {
+			t.Fatalf("Failed to update to v2: %v", err)
+		}
+
+		var count int
+		var versions []int
+		err = c.ForEach(func(doc *Document) bool {
+			count++
+			if v, ok := doc.Metadata["version"].(int); ok {
+				versions = append(versions, v)
+			}
+			return true
+		})
+		if err != nil {
+			t.Fatalf("ForEach failed: %v", err)
+		}
+		if count != 1 {
+			t.Errorf("Expected 1 document (deduplicated), got %d", count)
+		}
+		if len(versions) != 1 || versions[0] != 2 {
+			t.Errorf("Expected version 2 (from buffer), got %v", versions)
+		}
+	})
+
+	t.Run("Context cancellation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel() // Cancel immediately
+
+		err := coll.ForEachContext(ctx, func(doc *Document) bool {
+			return true
+		})
+		if err != context.Canceled {
+			t.Errorf("Expected context.Canceled, got %v", err)
+		}
+	})
+
+	t.Run("Context cancellation during iteration", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cfg := &Config{Dimension: 64, M: 16, EfConstruction: 200}
+		c, err := NewCollection("cancel_iter", tmpDir, cfg)
+		if err != nil {
+			t.Fatalf("Failed to create collection: %v", err)
+		}
+		defer c.Close()
+
+		for i := 0; i < 5; i++ {
+			doc := createTestDocument(fmt.Sprintf("cancel_%d", i), 64, nil)
+			if err := c.Insert(doc); err != nil {
+				t.Fatalf("Failed to insert: %v", err)
+			}
+		}
+		if err := c.Save(); err != nil {
+			t.Fatalf("Failed to save: %v", err)
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		var count int
+		err = c.ForEachContext(ctx, func(doc *Document) bool {
+			count++
+			if count == 2 {
+				cancel() // cancel after processing 2 docs
+			}
+			return true
+		})
+		if err != context.Canceled {
+			t.Errorf("Expected context.Canceled, got %v (count=%d)", err, count)
+		}
+		if count < 2 {
+			t.Errorf("Expected at least 2 docs processed before cancel, got %d", count)
+		}
+	})
+
+	t.Run("Deleted documents are excluded", func(t *testing.T) {
+		// Use independent collection to avoid state pollution
+		tmpDir := t.TempDir()
+		cfg := &Config{Dimension: 64, M: 16, EfConstruction: 200}
+		c, err := NewCollection("del", tmpDir, cfg)
+		if err != nil {
+			t.Fatalf("Failed to create collection: %v", err)
+		}
+		defer c.Close()
+
+		for i := 1; i <= 3; i++ {
+			doc := createTestDocument(fmt.Sprintf("del_%d", i), 64, nil)
+			if err := c.Insert(doc); err != nil {
+				t.Fatalf("Failed to insert: %v", err)
+			}
+		}
+
+		if err := c.Delete("del_2"); err != nil {
+			t.Fatalf("Failed to delete document: %v", err)
+		}
+
+		var ids []string
+		err = c.ForEach(func(doc *Document) bool {
+			ids = append(ids, doc.ID)
+			return true
+		})
+		if err != nil {
+			t.Fatalf("ForEach failed: %v", err)
+		}
+		for _, id := range ids {
+			if id == "del_2" {
+				t.Error("Deleted document del_2 should not appear in ForEach")
+			}
+		}
+		if len(ids) != 2 {
+			t.Errorf("Expected 2 documents after delete, got %d", len(ids))
+		}
+	})
+
+	t.Run("Empty collection", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cfg := &Config{Dimension: 64, M: 16, EfConstruction: 200}
+		c, err := NewCollection("empty", tmpDir, cfg)
+		if err != nil {
+			t.Fatalf("Failed to create collection: %v", err)
+		}
+		defer c.Close()
+
+		var count int
+		err = c.ForEach(func(doc *Document) bool {
+			count++
+			return true
+		})
+		if err != nil {
+			t.Fatalf("ForEach on empty collection failed: %v", err)
+		}
+		if count != 0 {
+			t.Errorf("Expected 0 documents in empty collection, got %d", count)
+		}
+	})
+
+	t.Run("Persisted documents only", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cfg := &Config{Dimension: 64, M: 16, EfConstruction: 200}
+		c, err := NewCollection("persisted", tmpDir, cfg)
+		if err != nil {
+			t.Fatalf("Failed to create collection: %v", err)
+		}
+		defer c.Close()
+
+		for i := 1; i <= 3; i++ {
+			doc := createTestDocument(fmt.Sprintf("persisted_%d", i), 64, map[string]interface{}{"idx": i})
+			if err := c.Insert(doc); err != nil {
+				t.Fatalf("Failed to insert: %v", err)
+			}
+		}
+		if err := c.Save(); err != nil {
+			t.Fatalf("Failed to save: %v", err)
+		}
+
+		var count int
+		var ids []string
+		err = c.ForEach(func(doc *Document) bool {
+			count++
+			ids = append(ids, doc.ID)
+			return true
+		})
+		if err != nil {
+			t.Fatalf("ForEach failed: %v", err)
+		}
+		if count != 3 {
+			t.Errorf("Expected 3 persisted documents, got %d", count)
+		}
+		if len(ids) != 3 {
+			t.Errorf("Expected 3 IDs, got %d", len(ids))
+		}
+	})
+
+	t.Run("Concurrent read during write", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cfg := &Config{Dimension: 64, M: 16, EfConstruction: 200, AutoCompact: false}
+		c, err := NewCollection("concurrent", tmpDir, cfg)
+		if err != nil {
+			t.Fatalf("Failed to create collection: %v", err)
+		}
+		defer c.Close()
+
+		writerDone := make(chan struct{})
+		go func() {
+			defer close(writerDone)
+			for i := 0; i < 100; i++ {
+				doc := createTestDocument(fmt.Sprintf("concurrent_%d", i), 64, nil)
+				if err := c.Insert(doc); err != nil {
+					return
+				}
+				if i%10 == 0 && i > 0 {
+					_ = c.Delete(fmt.Sprintf("concurrent_%d", i-10))
+				}
+			}
+		}()
+
+		readerDone := make(chan struct{})
+		go func() {
+			defer close(readerDone)
+			for i := 0; i < 50; i++ {
+				_ = c.ForEach(func(doc *Document) bool {
+					return true
+				})
+			}
+		}()
+
+		select {
+		case <-writerDone:
+		case <-time.After(10 * time.Second):
+			t.Fatal("Writer goroutine deadlock or timeout")
+		}
+
+		select {
+		case <-readerDone:
+		case <-time.After(10 * time.Second):
+			t.Fatal("Reader goroutine deadlock or timeout")
+		}
+	})
+
+	t.Run("Closed storage", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cfg := &Config{Dimension: 64, M: 16, EfConstruction: 200}
+		c, err := NewCollection("closed", tmpDir, cfg)
+		if err != nil {
+			t.Fatalf("Failed to create collection: %v", err)
+		}
+		// Insert and save a document so Close() doesn't fail on empty HNSW
+		doc := createTestDocument("closed_doc", 64, nil)
+		if err := c.Insert(doc); err != nil {
+			t.Fatalf("Failed to insert: %v", err)
+		}
+		if err := c.Save(); err != nil {
+			t.Fatalf("Failed to save: %v", err)
+		}
+		if err := c.Close(); err != nil {
+			t.Fatalf("Failed to close collection: %v", err)
+		}
+
+		err = c.ForEach(func(doc *Document) bool {
+			return true
+		})
+		if err == nil {
+			t.Error("Expected error for closed storage, got nil")
+		}
+	})
+}
+
 // TestCollectionDelete tests the Delete and DeleteContext methods
 func TestCollectionDelete(t *testing.T) {
 	coll, cleanup := setupTestCollection(t)
@@ -559,3 +874,124 @@ func TestCollectionSaveAndClose(t *testing.T) {
 }
 
 
+
+// TestCollectionSearchWithFilterContextHighFilterRate verifies that
+// SearchWithFilterContext handles high filter-dropout rates correctly
+// using a single HNSW search + metadata pre-filtering.
+func TestCollectionSearchWithFilterContextHighFilterRate(t *testing.T) {
+	coll, cleanup := setupTestCollection(t)
+	defer cleanup()
+
+	// Insert 20 documents: 5 active, 15 archived (75% archive rate)
+	for i := 0; i < 20; i++ {
+		state := "archived"
+		if i < 5 {
+			state = "active"
+		}
+		doc := createTestDocument(fmt.Sprintf("filter_doc_%d", i), 64, map[string]interface{}{
+			"state": state,
+			"index": i,
+		})
+		for j := range doc.Vector {
+			doc.Vector[j] = float32(j+i) * 0.01
+		}
+		if err := coll.Insert(doc); err != nil {
+			t.Fatalf("Failed to insert document: %v", err)
+		}
+	}
+
+	filter := &MetadataFilter{
+		Field:    "state",
+		Operator: "eq",
+		Value:    "active",
+	}
+
+	query := make([]float32, 64)
+	for i := range query {
+		query[i] = float32(i) * 0.01
+	}
+
+	t.Run("Returns only active documents", func(t *testing.T) {
+		results, err := coll.SearchWithFilterContext(context.Background(), query, 5, filter)
+		if err != nil {
+			t.Fatalf("SearchWithFilterContext failed: %v", err)
+		}
+
+		if len(results) == 0 {
+			t.Fatal("Expected results, got none")
+		}
+
+		for _, r := range results {
+			if r.Document == nil {
+				t.Error("Result has nil document")
+				continue
+			}
+			state, _ := r.Document.Metadata["state"].(string)
+			if state != "active" {
+				t.Errorf("Expected active document, got state=%q", state)
+			}
+		}
+	})
+
+	t.Run("OverFetch returns more results", func(t *testing.T) {
+		// With default over-fetch=10, k=3 => HNSW searches 30 candidates.
+		// With 75% archive, ~7-8 should be active, but we cap at k=3.
+		results, err := coll.SearchWithFilterContext(context.Background(), query, 3, filter, WithOverFetch(10))
+		if err != nil {
+			t.Fatalf("SearchWithFilterContext failed: %v", err)
+		}
+		if len(results) != 3 {
+			t.Errorf("Expected 3 results, got %d", len(results))
+		}
+	})
+
+	t.Run("Small over-fetch may not fill k", func(t *testing.T) {
+		// With over-fetch=1, k=5 => HNSW searches 5 candidates.
+		// With 75% archive, expected ~1 active. Fallback to k*20 may help.
+		results, err := coll.SearchWithFilterContext(context.Background(), query, 5, filter, WithOverFetch(1))
+		if err != nil {
+			t.Fatalf("SearchWithFilterContext failed: %v", err)
+		}
+		// Should still return some results via the fallback mechanism.
+		if len(results) == 0 {
+			t.Error("Expected at least some results via fallback, got none")
+		}
+	})
+}
+
+// TestDocumentStorageGetMetadataOnly verifies the pure-memory metadata lookup.
+func TestDocumentStorageGetMetadataOnly(t *testing.T) {
+	coll, cleanup := setupTestCollection(t)
+	defer cleanup()
+
+	doc := createTestDocument("meta_only_doc", 64, map[string]interface{}{
+		"state": "active",
+		"tags":  []string{"a", "b"},
+	})
+	if err := coll.Insert(doc); err != nil {
+		t.Fatalf("Insert failed: %v", err)
+	}
+
+	// Flush to ensure metadata is in the store, not just buffer
+	if err := coll.Save(); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	meta, ok := coll.storage.GetMetadataOnly("meta_only_doc")
+	if !ok {
+		t.Fatal("GetMetadataOnly returned false")
+	}
+	if meta == nil {
+		t.Fatal("GetMetadataOnly returned nil map")
+	}
+	state, ok := meta["state"].(string)
+	if !ok || state != "active" {
+		t.Errorf("Expected state=active, got %v", meta["state"])
+	}
+
+	// Non-existent document
+	_, ok = coll.storage.GetMetadataOnly("non_existent")
+	if ok {
+		t.Error("Expected false for non-existent document")
+	}
+}

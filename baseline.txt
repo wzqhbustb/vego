@@ -1,0 +1,763 @@
+========================================
+Index Benchmark: 10K vectors D128
+========================================
+Adaptive Config for 100K D128:
+  M: 16 (expected: 16)
+  EfConstruction: 520 (expected: ~520)
+
+================================================================================
+BENCHMARK RESULTS
+================================================================================
+
+Configuration:
+  Dataset Size:     10000 vectors
+  Dimension:        128
+  M:                16
+  EfConstruction:   200
+  Query Ef:         100
+  Top-K:            10
+  Num Queries:      1000
+  Distance Func:    L2
+
+Build Performance:
+  Time:             20.85467s
+  Throughput:       479.51 vectors/sec
+  Memory Usage:     18.20 MB (3635.87 MB total alloc)
+
+Persistence Performance:
+  Save Time:        34.810208ms
+  Load Time:        17.048083ms
+  Storage Size:     5.79 MB
+  Compression:      0.84x
+
+Query Performance:
+  Total Time:       463.283208ms
+  Throughput:       2158.51 queries/sec
+  Avg Latency:      463.283µs
+  P50 Latency:      457.875µs
+  P95 Latency:      523.583µs
+  P99 Latency:      579.458µs
+  P99/P50 Ratio:    1.27x
+  Recall@10:        0.8250 (82.50%)
+================================================================================
+goos: darwin
+goarch: arm64
+pkg: github.com/wzqhbustb/vego/index
+cpu: Apple M3 Max
+BenchmarkHNSW_E2E_10K_D128-16    	       1	21423443291 ns/op	4169803096 B/op	21317444 allocs/op
+--- BENCH: BenchmarkHNSW_E2E_10K_D128-16
+    benchmark_test.go:454: Generating 10000 vectors of dimension 128...
+    benchmark_test.go:454: Building index with M=16, EfConstruction=200...
+    benchmark_test.go:454:   Added 1000/10000 vectors...
+    benchmark_test.go:454:   Added 2000/10000 vectors...
+    benchmark_test.go:454:   Added 3000/10000 vectors...
+    benchmark_test.go:454:   Added 4000/10000 vectors...
+    benchmark_test.go:454:   Added 5000/10000 vectors...
+    benchmark_test.go:454:   Added 6000/10000 vectors...
+    benchmark_test.go:454:   Added 7000/10000 vectors...
+    benchmark_test.go:454:   Added 8000/10000 vectors...
+	... [output truncated]
+PASS
+ok  	github.com/wzqhbustb/vego/index	47.060s
+
+========================================
+Vego Benchmark: Insert / Read / Search
+========================================
+/bin/bash: line 9: cd: vego: No such file or directory
+
+========================================
+Storage Benchmark: Column + Encoding
+========================================
+/bin/bash: line 14: cd: storage: No such file or directory
+========================================
+Index Benchmark: 10K vectors D128
+========================================
+Adaptive Config for 100K D128:
+  M: 16 (expected: 16)
+  EfConstruction: 520 (expected: ~520)
+
+================================================================================
+BENCHMARK RESULTS
+================================================================================
+
+Configuration:
+  Dataset Size:     10000 vectors
+  Dimension:        128
+  M:                16
+  EfConstruction:   200
+  Query Ef:         100
+  Top-K:            10
+  Num Queries:      1000
+  Distance Func:    L2
+
+Build Performance:
+  Time:             21.490169625s
+  Throughput:       465.33 vectors/sec
+  Memory Usage:     11.12 MB (3635.87 MB total alloc)
+
+Persistence Performance:
+  Save Time:        36.753375ms
+  Load Time:        16.450125ms
+  Storage Size:     5.79 MB
+  Compression:      0.84x
+
+Query Performance:
+  Total Time:       506.890625ms
+  Throughput:       1972.81 queries/sec
+  Avg Latency:      506.89µs
+  P50 Latency:      486.417µs
+  P95 Latency:      648.75µs
+  P99 Latency:      814.291µs
+  P99/P50 Ratio:    1.67x
+  Recall@10:        0.8250 (82.50%)
+================================================================================
+goos: darwin
+goarch: arm64
+pkg: github.com/wzqhbustb/vego/index
+cpu: Apple M3 Max
+BenchmarkHNSW_E2E_10K_D128-16    	       1	22105047041 ns/op	4169795192 B/op	21317407 allocs/op
+--- BENCH: BenchmarkHNSW_E2E_10K_D128-16
+    benchmark_test.go:454: Generating 10000 vectors of dimension 128...
+    benchmark_test.go:454: Building index with M=16, EfConstruction=200...
+    benchmark_test.go:454:   Added 1000/10000 vectors...
+    benchmark_test.go:454:   Added 2000/10000 vectors...
+    benchmark_test.go:454:   Added 3000/10000 vectors...
+    benchmark_test.go:454:   Added 4000/10000 vectors...
+    benchmark_test.go:454:   Added 5000/10000 vectors...
+    benchmark_test.go:454:   Added 6000/10000 vectors...
+    benchmark_test.go:454:   Added 7000/10000 vectors...
+    benchmark_test.go:454:   Added 8000/10000 vectors...
+	... [output truncated]
+PASS
+ok  	github.com/wzqhbustb/vego/index	47.534s
+
+========================================
+Vego Benchmark: Insert / Read / Search
+========================================
+2026/04/17 17:50:43 [Collection test] Auto-compaction enabled (threshold: 30%, interval: 1s)
+2026/04/17 17:50:43 [Collection test] Auto-compaction enabled (threshold: 30%, interval: 3600s)
+2026/04/17 17:50:44 [Collection test] Auto-compaction enabled (threshold: 30%, interval: 3600s)
+2026/04/17 17:50:44 [Collection test] Auto-compaction enabled (threshold: 100%, interval: 0s)
+2026/04/17 17:50:44 [Collection test] Auto-compaction enabled (threshold: 100%, interval: 0s)
+2026/04/17 17:51:00 [Collection test] Auto-compaction enabled (threshold: 100%, interval: 0s)
+2026/04/17 17:51:02 [Collection test] Auto-compaction enabled (threshold: 30%, interval: 1s)
+2026/04/17 17:51:42 [Collection test] Auto-compaction started: deletion rate 40.00% >= 30.00%
+2026/04/17 17:51:42 [Collection test] Auto-compaction completed in 17.510125ms
+2026/04/17 17:51:45 [Collection test] Auto-compaction enabled (threshold: 10%, interval: 5s)
+2026/04/17 17:52:25 [Collection test] Auto-compaction started: deletion rate 50.00% >= 10.00%
+2026/04/17 17:52:25 [Collection test] Auto-compaction completed in 18.876667ms
+2026/04/17 17:52:37 Warning: failed to load document doc-002: document not found
+2026/04/17 17:52:37 Warning: failed to load document doc-002: document not found
+2026/04/17 17:52:37 Warning: failed to load document doc-004: document not found
+2026/04/17 17:52:45 [Collection test] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:45 [Collection test1] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:45 [Collection test2] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:45 [Collection coll1] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:45 [Collection coll2] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:45 [Collection coll3] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:45 [Collection to_drop] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:45 [Collection coll_a] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:45 [Collection coll_b] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:45 [Collection my_collection] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:45 [Collection my_collection] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:45 [Collection users] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:45 [Collection products] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:45 [Collection orders] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:45 [Collection test] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:45 [Collection test] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:45 [Collection test] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:45 [Collection test] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:45 [Collection test] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:45 [Collection test] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:45 [Collection test] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:45 [Collection test] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:46 [Collection test] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:46 [Collection test] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:46 [Collection test] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:46 [Collection test] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:46 [Collection test] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:46 [Collection test] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:46 [Collection test] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:46 [Collection test] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:46 [Storage] Cleaned up temp file: /var/folders/yq/qptv4dwd5fs00zwp34vkg3bc0000gn/T/TestCleanupTempFiles2847491727/001/vectors.lance.tmp.1234567890
+2026/04/17 17:52:46 [Storage] Cleaned up temp file: /var/folders/yq/qptv4dwd5fs00zwp34vkg3bc0000gn/T/TestCleanupTempFiles2847491727/001/vectors.lance.tmp.1234567891
+2026/04/17 17:52:46 [Collection documents] Auto-compaction enabled (threshold: 30%, interval: 300s)
+2026/04/17 17:52:46 [Collection test] Auto-compaction enabled (threshold: 30%, interval: 300s)
+goos: darwin
+goarch: arm64
+pkg: github.com/wzqhbustb/vego/vego
+cpu: Apple M3 Max
+BenchmarkInsert-16                       	    1778	   1171440 ns/op	  421874 B/op	    1108 allocs/op
+BenchmarkInsertBatch/BatchSize_10-16     	     190	  12179145 ns/op	        10.00 docs/op	 4236138 B/op	   11411 allocs/op
+BenchmarkInsertBatch/BatchSize_50-16     	      34	  57406548 ns/op	        50.00 docs/op	21343247 B/op	   56018 allocs/op
+BenchmarkInsertBatch/BatchSize_100-16    	      22	 131676343 ns/op	       100.0 docs/op	44036592 B/op	  117452 allocs/op
+BenchmarkInsertBatch/BatchSize_500-16    	       3	 540874722 ns/op	       500.0 docs/op	217735010 B/op	  554882 allocs/op
+BenchmarkInsertDifferentDimensions/Dim_64-16         	    1836	    685679 ns/op	  418044 B/op	    1154 allocs/op
+BenchmarkInsertDifferentDimensions/Dim_128-16        	    1538	   1119957 ns/op	  431769 B/op	    1095 allocs/op
+BenchmarkInsertDifferentDimensions/Dim_256-16        	    1456	   2251239 ns/op	  449080 B/op	    1085 allocs/op
+BenchmarkInsertDifferentDimensions/Dim_512-16        	    1081	   3954597 ns/op	  508803 B/op	    1041 allocs/op
+BenchmarkInsertDifferentDimensions/Dim_768-16        	     960	   5563285 ns/op	  481997 B/op	    1010 allocs/op
+BenchmarkInsertDifferentDimensions/Dim_1024-16       	     853	   6910765 ns/op	  511913 B/op	     985 allocs/op
+BenchmarkSearch-16                                   	     126	   8972053 ns/op	36338556 B/op	   46065 allocs/op
+BenchmarkSearchK/K_1-16                              	    1117	   1071986 ns/op	 3840899 B/op	    5248 allocs/op
+BenchmarkSearchK/K_5-16                              	     242	   4578903 ns/op	18292827 B/op	   23389 allocs/op
+BenchmarkSearchK/K_10-16                             	     122	   9208524 ns/op	36359067 B/op	   46070 allocs/op
+BenchmarkSearchK/K_20-16                             	      66	  17811144 ns/op	72407552 B/op	   91442 allocs/op
+BenchmarkSearchK/K_50-16                             	      26	  44155046 ns/op	180744199 B/op	  227563 allocs/op
+BenchmarkSearchK/K_100-16                            	      13	  89351433 ns/op	361253527 B/op	  454374 allocs/op
+BenchmarkSearchWithFilter-16                         	      63	  18214378 ns/op	72458614 B/op	   91460 allocs/op
+BenchmarkSearchBatch-16                              	      34	  34285462 ns/op	359865493 B/op	  460360 allocs/op
+BenchmarkSearch1K-16                                 	     124	   9401888 ns/op	36348364 B/op	   46061 allocs/op
+--- BENCH: BenchmarkSearch1K-16
+    benchmark_test.go:264: Preparing 1000 documents...
+    benchmark_test.go:282: Prepared 1000 documents in 860.153875ms
+    benchmark_test.go:264: Preparing 1000 documents...
+    benchmark_test.go:282: Prepared 1000 documents in 857.480416ms
+    benchmark_test.go:264: Preparing 1000 documents...
+    benchmark_test.go:282: Prepared 1000 documents in 857.4765ms
+BenchmarkSearch10K-16                                	      21	  51044486 ns/op	331729421 B/op	  373425 allocs/op
+--- BENCH: BenchmarkSearch10K-16
+    benchmark_test.go:264: Preparing 10000 documents...
+    benchmark_test.go:282: Prepared 10000 documents in 15.745890292s
+    benchmark_test.go:264: Preparing 10000 documents...
+    benchmark_test.go:282: Prepared 10000 documents in 15.693217459s
+    benchmark_test.go:264: Preparing 10000 documents...
+    benchmark_test.go:282: Prepared 10000 documents in 15.78632825s
+BenchmarkSearch100K-16                               	       2	 573038666 ns/op	3604991676 B/op	 5093745 allocs/op
+--- BENCH: BenchmarkSearch100K-16
+    benchmark_test.go:264: Preparing 100000 documents...
+    benchmark_test.go:282: Prepared 100000 documents in 2m51.237932541s
+    benchmark_test.go:264: Preparing 100000 documents...
+    benchmark_test.go:282: Prepared 100000 documents in 2m50.331263416s
+BenchmarkSearchDifferentDimensions/Dim_64-16         	     163	   6867795 ns/op	20951308 B/op	   46065 allocs/op
+--- BENCH: BenchmarkSearchDifferentDimensions/Dim_64-16
+    benchmark_test.go:264: Preparing 1000 documents...
+    benchmark_test.go:282: Prepared 1000 documents in 508.784167ms
+    benchmark_test.go:264: Preparing 1000 documents...
+    benchmark_test.go:282: Prepared 1000 documents in 519.474875ms
+    benchmark_test.go:264: Preparing 1000 documents...
+    benchmark_test.go:282: Prepared 1000 documents in 504.92ms
+BenchmarkSearchDifferentDimensions/Dim_128-16        	     126	   9341048 ns/op	36345074 B/op	   46081 allocs/op
+--- BENCH: BenchmarkSearchDifferentDimensions/Dim_128-16
+    benchmark_test.go:264: Preparing 1000 documents...
+    benchmark_test.go:282: Prepared 1000 documents in 875.396333ms
+    benchmark_test.go:264: Preparing 1000 documents...
+    benchmark_test.go:282: Prepared 1000 documents in 859.859292ms
+    benchmark_test.go:264: Preparing 1000 documents...
+    benchmark_test.go:282: Prepared 1000 documents in 872.491167ms
+BenchmarkSearchDifferentDimensions/Dim_256-16        	      87	  13251875 ns/op	67192796 B/op	   46133 allocs/op
+--- BENCH: BenchmarkSearchDifferentDimensions/Dim_256-16
+    benchmark_test.go:264: Preparing 1000 documents...
+    benchmark_test.go:282: Prepared 1000 documents in 1.821690417s
+    benchmark_test.go:264: Preparing 1000 documents...
+    benchmark_test.go:282: Prepared 1000 documents in 1.808383834s
+    benchmark_test.go:264: Preparing 1000 documents...
+    benchmark_test.go:282: Prepared 1000 documents in 1.832891625s
+BenchmarkSearchDifferentDimensions/Dim_512-16        	      54	  21793227 ns/op	129303958 B/op	   46250 allocs/op
+--- BENCH: BenchmarkSearchDifferentDimensions/Dim_512-16
+    benchmark_test.go:264: Preparing 1000 documents...
+    benchmark_test.go:282: Prepared 1000 documents in 3.908732167s
+    benchmark_test.go:264: Preparing 1000 documents...
+    benchmark_test.go:282: Prepared 1000 documents in 3.81341775s
+    benchmark_test.go:264: Preparing 1000 documents...
+    benchmark_test.go:282: Prepared 1000 documents in 3.803556834s
+BenchmarkSearchDifferentDimensions/Dim_768-16        	      40	  29067230 ns/op	191264052 B/op	   46266 allocs/op
+--- BENCH: BenchmarkSearchDifferentDimensions/Dim_768-16
+    benchmark_test.go:264: Preparing 1000 documents...
+    benchmark_test.go:282: Prepared 1000 documents in 5.807812708s
+    benchmark_test.go:264: Preparing 1000 documents...
+    benchmark_test.go:282: Prepared 1000 documents in 5.895549125s
+    benchmark_test.go:264: Preparing 1000 documents...
+    benchmark_test.go:282: Prepared 1000 documents in 5.794698333s
+BenchmarkSearchDifferentDimensions/Dim_1024-16       	SIGQUIT: quit
+PC=0x18cdbd9ec m=0 sigcode=0
+
+goroutine 0 gp=0x102d32760 m=0 mp=0x102d33000 [idle]:
+runtime.pthread_cond_wait(0x102d33570, 0x102d33530)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/sys_darwin.go:547 +0x20 fp=0x16d54a9e0 sp=0x16d54a9b0 pc=0x10290fe80
+runtime.semasleep(0xffffffffffffffff)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/os_darwin.go:72 +0x84 fp=0x16d54aa40 sp=0x16d54a9e0 pc=0x1028eb364
+runtime.notesleep(0x102d33158)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/lock_sema.go:62 +0xb8 fp=0x16d54aa80 sp=0x16d54aa40 pc=0x1028c4f38
+runtime.mPark(...)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:1919
+runtime.stopm()
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:2950 +0x84 fp=0x16d54aab0 sp=0x16d54aa80 pc=0x1028f6034
+runtime.exitsyscall0(0x1400061fc00)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:4934 +0x2d8 fp=0x16d54ab00 sp=0x16d54aab0 pc=0x1028fb7e8
+runtime.mcall()
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/asm_arm64.s:193 +0x54 fp=0x16d54ab10 sp=0x16d54ab00 pc=0x10292a4b4
+
+goroutine 1 gp=0x140000021c0 m=nil [chan receive, 1 minutes]:
+runtime.gopark(0x1400020b838?, 0x1028ca244?, 0x48?, 0xb8?, 0x149bcca08?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:435 +0xc8 fp=0x1400020b800 sp=0x1400020b7e0 pc=0x102924d78
+runtime.chanrecv(0x140002f8000, 0x0, 0x1)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/chan.go:664 +0x42c fp=0x1400020b880 sp=0x1400020b800 pc=0x1028c014c
+runtime.chanrecv1(0x1400020b8d8?, 0x1028c6ef4?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/chan.go:506 +0x14 fp=0x1400020b8b0 sp=0x1400020b880 pc=0x1028bfce4
+testing.(*B).run1(0x14000166848)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/testing/benchmark.go:247 +0xa0 fp=0x1400020b9b0 sp=0x1400020b8b0 pc=0x102997160
+testing.(*B).Run(0x14000167608, {0x102ad4744?, 0x1400020bae8?}, 0x102b9c918)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/testing/benchmark.go:847 +0x3f0 fp=0x1400020bab0 sp=0x1400020b9b0 pc=0x102999620
+testing.runBenchmarks.func1(0x14000167608)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/testing/benchmark.go:708 +0x40 fp=0x1400020baf0 sp=0x1400020bab0 pc=0x102998a50
+testing.(*B).runN(0x14000167608, 0x1)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/testing/benchmark.go:219 +0x1a4 fp=0x1400020bb80 sp=0x1400020baf0 pc=0x102996f14
+testing.runBenchmarks({0x102ad20f4, 0x1e}, 0x2?, {0x102d2cd80, 0x1b, 0x7?})
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/testing/benchmark.go:717 +0x51c fp=0x1400020bc90 sp=0x1400020bb80 pc=0x1029989bc
+testing.(*M).Run(0x140001903c0)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/testing/testing.go:2158 +0x86c fp=0x1400020bec0 sp=0x1400020bc90 pc=0x1029a43ec
+main.main()
+	_testmain.go:375 +0x90 fp=0x1400020bf40 sp=0x1400020bec0 pc=0x102abbb60
+runtime.main()
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:283 +0x284 fp=0x1400020bfd0 sp=0x1400020bf40 pc=0x1028f0e74
+runtime.goexit({})
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/asm_arm64.s:1223 +0x4 fp=0x1400020bfd0 sp=0x1400020bfd0 pc=0x10292c8c4
+
+goroutine 17 gp=0x14000082380 m=nil [force gc (idle), 10 minutes]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:435 +0xc8 fp=0x1400005a790 sp=0x1400005a770 pc=0x102924d78
+runtime.goparkunlock(...)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:441
+runtime.forcegchelper()
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:348 +0xb8 fp=0x1400005a7d0 sp=0x1400005a790 pc=0x1028f11c8
+runtime.goexit({})
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/asm_arm64.s:1223 +0x4 fp=0x1400005a7d0 sp=0x1400005a7d0 pc=0x10292c8c4
+created by runtime.init.7 in goroutine 1
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:336 +0x24
+
+goroutine 18 gp=0x14000082540 m=nil [GC sweep wait]:
+runtime.gopark(0x102d32001?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:435 +0xc8 fp=0x1400005af60 sp=0x1400005af40 pc=0x102924d78
+runtime.goparkunlock(...)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:441
+runtime.bgsweep(0x14000090000)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgcsweep.go:316 +0x108 fp=0x1400005afb0 sp=0x1400005af60 pc=0x1028da4f8
+runtime.gcenable.gowrap1()
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:204 +0x28 fp=0x1400005afd0 sp=0x1400005afb0 pc=0x1028ce308
+runtime.goexit({})
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/asm_arm64.s:1223 +0x4 fp=0x1400005afd0 sp=0x1400005afd0 pc=0x10292c8c4
+created by runtime.gcenable in goroutine 1
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:204 +0x6c
+
+goroutine 19 gp=0x14000082700 m=nil [GC scavenge wait]:
+runtime.gopark(0x10000?, 0x9cf8a1?, 0x0?, 0x0?, 0x0?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:435 +0xc8 fp=0x1400005b760 sp=0x1400005b740 pc=0x102924d78
+runtime.goparkunlock(...)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:441
+runtime.(*scavengerState).park(0x102d32540)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgcscavenge.go:425 +0x5c fp=0x1400005b790 sp=0x1400005b760 pc=0x1028d7f9c
+runtime.bgscavenge(0x14000090000)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgcscavenge.go:658 +0xac fp=0x1400005b7b0 sp=0x1400005b790 pc=0x1028d853c
+runtime.gcenable.gowrap2()
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:205 +0x28 fp=0x1400005b7d0 sp=0x1400005b7b0 pc=0x1028ce2a8
+runtime.goexit({})
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/asm_arm64.s:1223 +0x4 fp=0x1400005b7d0 sp=0x1400005b7d0 pc=0x10292c8c4
+created by runtime.gcenable in goroutine 1
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:205 +0xac
+
+goroutine 33 gp=0x140001a8000 m=nil [finalizer wait, 10 minutes]:
+runtime.gopark(0x1400005e5b8?, 0x1029258c4?, 0x1?, 0xe5?, 0x10294e2d4?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:435 +0xc8 fp=0x1400005e590 sp=0x1400005e570 pc=0x102924d78
+runtime.runfinq()
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mfinal.go:196 +0x108 fp=0x1400005e7d0 sp=0x1400005e590 pc=0x1028cd308
+runtime.goexit({})
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/asm_arm64.s:1223 +0x4 fp=0x1400005e7d0 sp=0x1400005e7d0 pc=0x10292c8c4
+created by runtime.createfing in goroutine 1
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mfinal.go:166 +0x80
+
+goroutine 34 gp=0x140001a81c0 m=nil [chan receive]:
+runtime.gopark(0x14000190320?, 0x1400018e228?, 0x48?, 0x87?, 0x102a6f408?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:435 +0xc8 fp=0x140003586f0 sp=0x140003586d0 pc=0x102924d78
+runtime.chanrecv(0x140001800e0, 0x0, 0x1)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/chan.go:664 +0x42c fp=0x14000358770 sp=0x140003586f0 pc=0x1028c014c
+runtime.chanrecv1(0x0?, 0x0?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/chan.go:506 +0x14 fp=0x140003587a0 sp=0x14000358770 pc=0x1028bfce4
+runtime.unique_runtime_registerUniqueMapCleanup.func2(...)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1797
+runtime.unique_runtime_registerUniqueMapCleanup.gowrap1()
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1800 +0x3c fp=0x140003587d0 sp=0x140003587a0 pc=0x1028d152c
+runtime.goexit({})
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/asm_arm64.s:1223 +0x4 fp=0x140003587d0 sp=0x140003587d0 pc=0x10292c8c4
+created by unique.runtime_registerUniqueMapCleanup in goroutine 1
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1795 +0x78
+
+goroutine 41 gp=0x140001a88c0 m=nil [GC worker (idle)]:
+runtime.gopark(0x5aa54e546f882?, 0x1?, 0x28?, 0x8c?, 0x0?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:435 +0xc8 fp=0x14000613f10 sp=0x14000613ef0 pc=0x102924d78
+runtime.gcBgMarkWorker(0x14000181490)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1423 +0xdc fp=0x14000613fb0 sp=0x14000613f10 pc=0x1028d079c
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x28 fp=0x14000613fd0 sp=0x14000613fb0 pc=0x1028d0688
+runtime.goexit({})
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/asm_arm64.s:1223 +0x4 fp=0x14000613fd0 sp=0x14000613fd0 pc=0x10292c8c4
+created by runtime.gcBgMarkStartWorkers in goroutine 39
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x140
+
+goroutine 42 gp=0x140001a8fc0 m=nil [GC worker (idle)]:
+runtime.gopark(0x5aa54793e761a?, 0x1?, 0x38?, 0x51?, 0x0?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:435 +0xc8 fp=0x14000614f10 sp=0x14000614ef0 pc=0x102924d78
+runtime.gcBgMarkWorker(0x14000181490)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1423 +0xdc fp=0x14000614fb0 sp=0x14000614f10 pc=0x1028d079c
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x28 fp=0x14000614fd0 sp=0x14000614fb0 pc=0x1028d0688
+runtime.goexit({})
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/asm_arm64.s:1223 +0x4 fp=0x14000614fd0 sp=0x14000614fd0 pc=0x10292c8c4
+created by runtime.gcBgMarkStartWorkers in goroutine 39
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x140
+
+goroutine 43 gp=0x140001a9180 m=nil [GC worker (idle)]:
+runtime.gopark(0x5aa54fde1d6ed?, 0x3?, 0x98?, 0x3a?, 0x0?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:435 +0xc8 fp=0x1400018af10 sp=0x1400018aef0 pc=0x102924d78
+runtime.gcBgMarkWorker(0x14000181490)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1423 +0xdc fp=0x1400018afb0 sp=0x1400018af10 pc=0x1028d079c
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x28 fp=0x1400018afd0 sp=0x1400018afb0 pc=0x1028d0688
+runtime.goexit({})
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/asm_arm64.s:1223 +0x4 fp=0x1400018afd0 sp=0x1400018afd0 pc=0x10292c8c4
+created by runtime.gcBgMarkStartWorkers in goroutine 39
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x140
+
+goroutine 44 gp=0x140001a9340 m=nil [GC worker (idle)]:
+runtime.gopark(0x102d5a9c0?, 0x1?, 0x6c?, 0x6b?, 0x0?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:435 +0xc8 fp=0x14000188f10 sp=0x14000188ef0 pc=0x102924d78
+runtime.gcBgMarkWorker(0x14000181490)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1423 +0xdc fp=0x14000188fb0 sp=0x14000188f10 pc=0x1028d079c
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x28 fp=0x14000188fd0 sp=0x14000188fb0 pc=0x1028d0688
+runtime.goexit({})
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/asm_arm64.s:1223 +0x4 fp=0x14000188fd0 sp=0x14000188fd0 pc=0x10292c8c4
+created by runtime.gcBgMarkStartWorkers in goroutine 39
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x140
+
+goroutine 45 gp=0x140001a9500 m=nil [GC worker (idle)]:
+runtime.gopark(0x5aa54fde1d717?, 0x1?, 0x56?, 0xb4?, 0x0?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:435 +0xc8 fp=0x140002e0f10 sp=0x140002e0ef0 pc=0x102924d78
+runtime.gcBgMarkWorker(0x14000181490)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1423 +0xdc fp=0x140002e0fb0 sp=0x140002e0f10 pc=0x1028d079c
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x28 fp=0x140002e0fd0 sp=0x140002e0fb0 pc=0x1028d0688
+runtime.goexit({})
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/asm_arm64.s:1223 +0x4 fp=0x140002e0fd0 sp=0x140002e0fd0 pc=0x10292c8c4
+created by runtime.gcBgMarkStartWorkers in goroutine 39
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x140
+
+goroutine 46 gp=0x140001a96c0 m=nil [GC worker (idle)]:
+runtime.gopark(0x5aa54793e7985?, 0x1?, 0xa4?, 0x24?, 0x0?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:435 +0xc8 fp=0x140002e2f10 sp=0x140002e2ef0 pc=0x102924d78
+runtime.gcBgMarkWorker(0x14000181490)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1423 +0xdc fp=0x140002e2fb0 sp=0x140002e2f10 pc=0x1028d079c
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x28 fp=0x140002e2fd0 sp=0x140002e2fb0 pc=0x1028d0688
+runtime.goexit({})
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/asm_arm64.s:1223 +0x4 fp=0x140002e2fd0 sp=0x140002e2fd0 pc=0x10292c8c4
+created by runtime.gcBgMarkStartWorkers in goroutine 39
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x140
+
+goroutine 47 gp=0x140001a9880 m=nil [GC worker (idle)]:
+runtime.gopark(0x5aa5451735169?, 0x1?, 0x79?, 0x5c?, 0x0?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:435 +0xc8 fp=0x14000186f10 sp=0x14000186ef0 pc=0x102924d78
+runtime.gcBgMarkWorker(0x14000181490)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1423 +0xdc fp=0x14000186fb0 sp=0x14000186f10 pc=0x1028d079c
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x28 fp=0x14000186fd0 sp=0x14000186fb0 pc=0x1028d0688
+runtime.goexit({})
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/asm_arm64.s:1223 +0x4 fp=0x14000186fd0 sp=0x14000186fd0 pc=0x10292c8c4
+created by runtime.gcBgMarkStartWorkers in goroutine 39
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x140
+
+goroutine 48 gp=0x140001a9a40 m=nil [GC worker (idle)]:
+runtime.gopark(0x102d5a9c0?, 0x1?, 0x49?, 0x63?, 0x0?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:435 +0xc8 fp=0x14000187f10 sp=0x14000187ef0 pc=0x102924d78
+runtime.gcBgMarkWorker(0x14000181490)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1423 +0xdc fp=0x14000187fb0 sp=0x14000187f10 pc=0x1028d079c
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x28 fp=0x14000187fd0 sp=0x14000187fb0 pc=0x1028d0688
+runtime.goexit({})
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/asm_arm64.s:1223 +0x4 fp=0x14000187fd0 sp=0x14000187fd0 pc=0x10292c8c4
+created by runtime.gcBgMarkStartWorkers in goroutine 39
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x140
+
+goroutine 49 gp=0x140001a9c00 m=nil [GC worker (idle)]:
+runtime.gopark(0x102d5a9c0?, 0x3?, 0x7f?, 0x53?, 0x0?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:435 +0xc8 fp=0x140002def10 sp=0x140002deef0 pc=0x102924d78
+runtime.gcBgMarkWorker(0x14000181490)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1423 +0xdc fp=0x140002defb0 sp=0x140002def10 pc=0x1028d079c
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x28 fp=0x140002defd0 sp=0x140002defb0 pc=0x1028d0688
+runtime.goexit({})
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/asm_arm64.s:1223 +0x4 fp=0x140002defd0 sp=0x140002defd0 pc=0x10292c8c4
+created by runtime.gcBgMarkStartWorkers in goroutine 39
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x140
+
+goroutine 50 gp=0x140001a9dc0 m=nil [GC worker (idle)]:
+runtime.gopark(0x5aa54fde318b4?, 0x3?, 0xea?, 0xda?, 0x0?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:435 +0xc8 fp=0x140002e1f10 sp=0x140002e1ef0 pc=0x102924d78
+runtime.gcBgMarkWorker(0x14000181490)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1423 +0xdc fp=0x140002e1fb0 sp=0x140002e1f10 pc=0x1028d079c
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x28 fp=0x140002e1fd0 sp=0x140002e1fb0 pc=0x1028d0688
+runtime.goexit({})
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/asm_arm64.s:1223 +0x4 fp=0x140002e1fd0 sp=0x140002e1fd0 pc=0x10292c8c4
+created by runtime.gcBgMarkStartWorkers in goroutine 39
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x140
+
+goroutine 51 gp=0x14000352000 m=nil [GC worker (idle)]:
+runtime.gopark(0x102d5a9c0?, 0x3?, 0x14?, 0x51?, 0x0?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:435 +0xc8 fp=0x140002e4f10 sp=0x140002e4ef0 pc=0x102924d78
+runtime.gcBgMarkWorker(0x14000181490)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1423 +0xdc fp=0x140002e4fb0 sp=0x140002e4f10 pc=0x1028d079c
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x28 fp=0x140002e4fd0 sp=0x140002e4fb0 pc=0x1028d0688
+runtime.goexit({})
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/asm_arm64.s:1223 +0x4 fp=0x140002e4fd0 sp=0x140002e4fd0 pc=0x10292c8c4
+created by runtime.gcBgMarkStartWorkers in goroutine 39
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x140
+
+goroutine 52 gp=0x140003521c0 m=nil [GC worker (idle)]:
+runtime.gopark(0x5aa546ff6f462?, 0x140001b62a0?, 0x1b?, 0xa?, 0x0?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:435 +0xc8 fp=0x14000612f10 sp=0x14000612ef0 pc=0x102924d78
+runtime.gcBgMarkWorker(0x14000181490)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1423 +0xdc fp=0x14000612fb0 sp=0x14000612f10 pc=0x1028d079c
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x28 fp=0x14000612fd0 sp=0x14000612fb0 pc=0x1028d0688
+runtime.goexit({})
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/asm_arm64.s:1223 +0x4 fp=0x14000612fd0 sp=0x14000612fd0 pc=0x10292c8c4
+created by runtime.gcBgMarkStartWorkers in goroutine 39
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x140
+
+goroutine 53 gp=0x14000352380 m=nil [GC worker (idle)]:
+runtime.gopark(0x5aa54793e7bcd?, 0x3?, 0x47?, 0xfc?, 0x0?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:435 +0xc8 fp=0x14000611f10 sp=0x14000611ef0 pc=0x102924d78
+runtime.gcBgMarkWorker(0x14000181490)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1423 +0xdc fp=0x14000611fb0 sp=0x14000611f10 pc=0x1028d079c
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x28 fp=0x14000611fd0 sp=0x14000611fb0 pc=0x1028d0688
+runtime.goexit({})
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/asm_arm64.s:1223 +0x4 fp=0x14000611fd0 sp=0x14000611fd0 pc=0x10292c8c4
+created by runtime.gcBgMarkStartWorkers in goroutine 39
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x140
+
+goroutine 54 gp=0x14000352540 m=nil [GC worker (idle)]:
+runtime.gopark(0x102d5a9c0?, 0x1?, 0xd3?, 0x3e?, 0x0?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:435 +0xc8 fp=0x14000610f10 sp=0x14000610ef0 pc=0x102924d78
+runtime.gcBgMarkWorker(0x14000181490)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1423 +0xdc fp=0x14000610fb0 sp=0x14000610f10 pc=0x1028d079c
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x28 fp=0x14000610fd0 sp=0x14000610fb0 pc=0x1028d0688
+runtime.goexit({})
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/asm_arm64.s:1223 +0x4 fp=0x14000610fd0 sp=0x14000610fd0 pc=0x10292c8c4
+created by runtime.gcBgMarkStartWorkers in goroutine 39
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x140
+
+goroutine 55 gp=0x14000352700 m=nil [GC worker (idle)]:
+runtime.gopark(0x5aa54e546fcbe?, 0x3?, 0xe3?, 0xf0?, 0x0?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:435 +0xc8 fp=0x14000617f10 sp=0x14000617ef0 pc=0x102924d78
+runtime.gcBgMarkWorker(0x14000181490)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1423 +0xdc fp=0x14000617fb0 sp=0x14000617f10 pc=0x1028d079c
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x28 fp=0x14000617fd0 sp=0x14000617fb0 pc=0x1028d0688
+runtime.goexit({})
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/asm_arm64.s:1223 +0x4 fp=0x14000617fd0 sp=0x14000617fd0 pc=0x10292c8c4
+created by runtime.gcBgMarkStartWorkers in goroutine 39
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x140
+
+goroutine 56 gp=0x140003528c0 m=nil [GC worker (idle)]:
+runtime.gopark(0x5aa545173535d?, 0x1?, 0xc?, 0xf1?, 0x0?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:435 +0xc8 fp=0x1400018cf10 sp=0x1400018cef0 pc=0x102924d78
+runtime.gcBgMarkWorker(0x14000181490)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1423 +0xdc fp=0x1400018cfb0 sp=0x1400018cf10 pc=0x1028d079c
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x28 fp=0x1400018cfd0 sp=0x1400018cfb0 pc=0x1028d0688
+runtime.goexit({})
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/asm_arm64.s:1223 +0x4 fp=0x1400018cfd0 sp=0x1400018cfd0 pc=0x10292c8c4
+created by runtime.gcBgMarkStartWorkers in goroutine 39
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/mgc.go:1339 +0x140
+
+goroutine 293 gp=0x140001f3340 m=nil [select]:
+runtime.gopark(0x140002dff28?, 0x3?, 0x0?, 0xb8?, 0x140002dff12?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:435 +0xc8 fp=0x140002dfda0 sp=0x140002dfd80 pc=0x102924d78
+runtime.selectgo(0x140002dff28, 0x140002dff0c, 0x140001e5f48?, 0x0, 0x140001e5f18?, 0x1)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/select.go:351 +0x6c4 fp=0x140002dfed0 sp=0x140002dfda0 pc=0x102904894
+github.com/wzqhbustb/vego/vego.(*Collection).compactLoop(0x140001cc540)
+	/Users/wangyang/vego/vego/collection.go:752 +0x13c fp=0x140002dffb0 sp=0x140002dfed0 pc=0x102a7c23c
+github.com/wzqhbustb/vego/vego.NewCollection.gowrap1()
+	/Users/wangyang/vego/vego/collection.go:127 +0x28 fp=0x140002dffd0 sp=0x140002dffb0 pc=0x102a78208
+runtime.goexit({})
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/asm_arm64.s:1223 +0x4 fp=0x140002dffd0 sp=0x140002dffd0 pc=0x10292c8c4
+created by github.com/wzqhbustb/vego/vego.NewCollection in goroutine 292
+	/Users/wangyang/vego/vego/collection.go:127 +0x3bc
+
+goroutine 312 gp=0x140001f28c0 m=nil [select]:
+runtime.gopark(0x140002e3f28?, 0x3?, 0x0?, 0xb8?, 0x140002e3f12?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:435 +0xc8 fp=0x140002e3da0 sp=0x140002e3d80 pc=0x102924d78
+runtime.selectgo(0x140002e3f28, 0x140002e3f0c, 0x140001a8700?, 0x0, 0x2?, 0x1)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/select.go:351 +0x6c4 fp=0x140002e3ed0 sp=0x140002e3da0 pc=0x102904894
+github.com/wzqhbustb/vego/vego.(*Collection).compactLoop(0x140001cc0c0)
+	/Users/wangyang/vego/vego/collection.go:752 +0x13c fp=0x140002e3fb0 sp=0x140002e3ed0 pc=0x102a7c23c
+github.com/wzqhbustb/vego/vego.NewCollection.gowrap1()
+	/Users/wangyang/vego/vego/collection.go:127 +0x28 fp=0x140002e3fd0 sp=0x140002e3fb0 pc=0x102a78208
+runtime.goexit({})
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/asm_arm64.s:1223 +0x4 fp=0x140002e3fd0 sp=0x140002e3fd0 pc=0x10292c8c4
+created by github.com/wzqhbustb/vego/vego.NewCollection in goroutine 311
+	/Users/wangyang/vego/vego/collection.go:127 +0x3bc
+
+goroutine 776 gp=0x14000350540 m=nil [chan receive]:
+runtime.gopark(0x0?, 0x140001a6080?, 0xe0?, 0x80?, 0x149bccd28?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/proc.go:435 +0xc8 fp=0x1400018da80 sp=0x1400018da60 pc=0x102924d78
+runtime.chanrecv(0x14000180230, 0x0, 0x1)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/chan.go:664 +0x42c fp=0x1400018db00 sp=0x1400018da80 pc=0x1028c014c
+runtime.chanrecv1(0x14000184038?, 0x140002f80e0?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/chan.go:506 +0x14 fp=0x1400018db30 sp=0x1400018db00 pc=0x1028bfce4
+testing.(*B).doBench(0x14000167088)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/testing/benchmark.go:297 +0x78 fp=0x1400018db90 sp=0x1400018db30 pc=0x102997878
+testing.(*benchState).processBench(0x1400000c0c0, 0x102b93660?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/testing/benchmark.go:747 +0x2c8 fp=0x1400018dd30 sp=0x1400018db90 pc=0x102998d58
+testing.(*B).run(0x14000167088?)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/testing/benchmark.go:288 +0x64 fp=0x1400018dd60 sp=0x1400018dd30 pc=0x102997674
+testing.(*B).Run(0x14000166848, {0x14000472ad0?, 0x14000207ee0?}, 0x14000472b00)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/testing/benchmark.go:848 +0x3fc fp=0x1400018de60 sp=0x1400018dd60 pc=0x10299962c
+github.com/wzqhbustb/vego/vego.BenchmarkSearchDifferentDimensions(0x14000166848)
+	/Users/wangyang/vego/vego/benchmark_test.go:300 +0xd8 fp=0x1400018df00 sp=0x1400018de60 pc=0x102a892e8
+testing.(*B).runN(0x14000166848, 0x1)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/testing/benchmark.go:219 +0x1a4 fp=0x1400018df90 sp=0x1400018df00 pc=0x102996f14
+testing.(*B).run1.func1()
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/testing/benchmark.go:245 +0x4c fp=0x1400018dfd0 sp=0x1400018df90 pc=0x10299757c
+runtime.goexit({})
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/asm_arm64.s:1223 +0x4 fp=0x1400018dfd0 sp=0x1400018dfd0 pc=0x10292c8c4
+created by testing.(*B).run1 in goroutine 1
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/testing/benchmark.go:238 +0x90
+
+goroutine 802 gp=0x140000ada40 m=nil [runnable]:
+github.com/wzqhbustb/vego/index.L2Distance({0x14000572000?, 0x400?, 0x400?}, {0x140004ab000?, 0x400?, 0x400?})
+	/Users/wangyang/vego/index/distance.go:8 +0x88 fp=0x140002077e0 sp=0x140002077e0 pc=0x102a65e38
+github.com/wzqhbustb/vego/index.(*HNSWIndex).selectNeighborsHeuristic(0x1400031e080, {0x14000857000?, 0x400?, 0x400?}, {0x14000a5f200, 0xc8, 0x0?}, 0x20, {0x14000096000, 0x1d0, ...})
+	/Users/wangyang/vego/index/search.go:323 +0x448 fp=0x140002079a0 sp=0x140002077e0 pc=0x102a68ea8
+github.com/wzqhbustb/vego/index.(*HNSWIndex).insert(0x1400031e080, 0x1400531dda0)
+	/Users/wangyang/vego/index/insert.go:42 +0x44c fp=0x14000207b60 sp=0x140002079a0 pc=0x102a670fc
+github.com/wzqhbustb/vego/index.(*HNSWIndex).Add(0x1400031e080, {0x140005c6000, 0x400, 0xd?})
+	/Users/wangyang/vego/index/hnsw.go:123 +0x270 fp=0x14000207c00 sp=0x14000207b60 pc=0x102a665a0
+github.com/wzqhbustb/vego/vego.(*Collection).InsertBatchContext(0x140001cc180, {0x102ba1560, 0x102d599e0}, {0x140001ab508, 0x64, 0x64})
+	/Users/wangyang/vego/vego/collection.go:228 +0x3d0 fp=0x14000207d50 sp=0x14000207c00 pc=0x102a78c90
+github.com/wzqhbustb/vego/vego.(*Collection).InsertBatch(...)
+	/Users/wangyang/vego/vego/collection.go:190
+github.com/wzqhbustb/vego/vego.benchmarkSearchWithSize(0x14000167088, 0x3e8, 0x400)
+	/Users/wangyang/vego/vego/benchmark_test.go:277 +0x12c fp=0x14000207e60 sp=0x14000207d50 pc=0x102a88ecc
+github.com/wzqhbustb/vego/vego.BenchmarkSearchDifferentDimensions.func1(0x14000167088?)
+	/Users/wangyang/vego/vego/benchmark_test.go:301 +0x24 fp=0x14000207e90 sp=0x14000207e60 pc=0x102a89344
+testing.(*B).runN(0x14000167088, 0x20)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/testing/benchmark.go:219 +0x1a4 fp=0x14000207f20 sp=0x14000207e90 pc=0x102996f14
+testing.(*B).launch(0x14000167088)
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/testing/benchmark.go:354 +0x178 fp=0x14000207fb0 sp=0x14000207f20 pc=0x102997ab8
+testing.(*B).doBench.gowrap1()
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/testing/benchmark.go:296 +0x28 fp=0x14000207fd0 sp=0x14000207fb0 pc=0x102997908
+runtime.goexit({})
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/runtime/asm_arm64.s:1223 +0x4 fp=0x14000207fd0 sp=0x14000207fd0 pc=0x10292c8c4
+created by testing.(*B).doBench in goroutine 776
+	/Users/wangyang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.24.13.darwin-arm64/src/testing/benchmark.go:296 +0x68
+
+r0      0x104
+r1      0x0
+r2      0x2ffa00
+r3      0x0
+r4      0x0
+r5      0xa0
+r6      0x0
+r7      0x0
+r8      0x16d54a8c8
+r9      0x0
+r10     0x102d33548
+r11     0x630000006302
+r12     0x6300
+r13     0x0
+r14     0x6300
+r15     0x630000006300
+r16     0x131
+r17     0x1fefe98e0
+r18     0x0
+r19     0x102d33530
+r20     0x102d33570
+r21     0x1f4c34ce0
+r22     0x0
+r23     0x0
+r24     0x2ffa00
+r25     0x2ffa01
+r26     0x2ffb00
+r27     0x102d25000
+r28     0x102d32760
+r29     0x16d54a940
+lr      0x18cdfb55c
+sp      0x16d54a8b0
+pc      0x18cdbd9ec
+fault   0x18cdbd9ec
+*** Test killed with quit: ran too long (11m0s).
+exit status 2
+FAIL	github.com/wzqhbustb/vego/vego	660.025s
+FAIL
+
+========================================
+Storage Benchmark: Column + Encoding
+========================================
+goos: darwin
+goarch: arm64
+pkg: github.com/wzqhbustb/vego/storage/column
+cpu: Apple M3 Max
+BenchmarkE2E_EncodingComparison/Random-16     	   23781	     50105 ns/op	   82056 B/op	       6 allocs/op
+BenchmarkE2E_EncodingComparison/RLE-16        	   96183	     12699 ns/op	   82056 B/op	       6 allocs/op
+BenchmarkE2E_EncodingComparison/Dictionary-16 	   67141	     17916 ns/op	   82104 B/op	       7 allocs/op
+BenchmarkE2E_EncodingComparison/BitPacking-16 	   66393	     18277 ns/op	   83080 B/op	       7 allocs/op
+BenchmarkReader_SyncVsAsync/Sync-16           	     822	   1452994 ns/op	 1215873 B/op	   11391 allocs/op
+BenchmarkReader_SyncVsAsync/Async-16          	     922	   1422018 ns/op	 2098009 B/op	   11013 allocs/op
+BenchmarkReader_AsyncIO_Concurrency/Concurrency1-16         	     471	   2590983 ns/op	 3958658 B/op	   21550 allocs/op
+BenchmarkReader_AsyncIO_Concurrency/Concurrency2-16         	     208	   5545395 ns/op	 7362244 B/op	   43078 allocs/op
+BenchmarkReader_AsyncIO_Concurrency/Concurrency4-16         	      99	  11619277 ns/op	13833218 B/op	   86130 allocs/op
+BenchmarkReader_AsyncIO_Concurrency/Concurrency8-16         	      54	  22558967 ns/op	26193142 B/op	  172401 allocs/op
+BenchmarkReader_AsyncIO_Concurrency/Concurrency16-16        	      25	  45310463 ns/op	50245096 B/op	  345390 allocs/op
+BenchmarkReader_AsyncIO_VariableColumns/Columns1-16         	   10197	    111964 ns/op	   68421 B/op	     307 allocs/op
+BenchmarkReader_AsyncIO_VariableColumns/Columns5-16         	    4681	    266849 ns/op	  190920 B/op	    1298 allocs/op
+BenchmarkReader_AsyncIO_VariableColumns/Columns10-16        	    2912	    411678 ns/op	  338221 B/op	    2533 allocs/op
+BenchmarkReader_AsyncIO_VariableColumns/Columns20-16        	    1770	    674207 ns/op	  643700 B/op	    5000 allocs/op
+BenchmarkReader_AsyncIO_VariableColumns/Columns50-16        	     831	   1437153 ns/op	 1577856 B/op	   12405 allocs/op
+BenchmarkReader_Float32-16                                  	     258	   4532790 ns/op	12139357 B/op	   45590 allocs/op
+BenchmarkReader_Float64-16                                  	     226	   4830751 ns/op	16001218 B/op	   45600 allocs/op
+BenchmarkWriteInt32Array-16                                 	  161629	      7464 ns/op	    3488 B/op	      15 allocs/op
+BenchmarkReadInt32Array-16                                  	  220262	      5273 ns/op	    8328 B/op	       6 allocs/op
+BenchmarkWriteVectorArray-16                                	    4352	    278109 ns/op	15131706 B/op	      70 allocs/op
+BenchmarkFileRoundtrip-16                                   	     180	   6690770 ns/op	 6014669 B/op	     423 allocs/op
+PASS
+ok  	github.com/wzqhbustb/vego/storage/column	35.296s
+goos: darwin
+goarch: arm64
+pkg: github.com/wzqhbustb/vego/storage/encoding
+cpu: Apple M3 Max
+BenchmarkBitPackingEncoder_Encode-16             	   32312	     35813 ns/op	   32864 B/op	       3 allocs/op
+BenchmarkBitPackingDecoder_Decode-16             	   30609	     38747 ns/op	   82056 B/op	       6 allocs/op
+BenchmarkBSSEncoder_Encode_Float32-16            	   73234	     16327 ns/op	  112853 B/op	      11 allocs/op
+BenchmarkBSSDecoder_Decode_Float32-16            	   60970	     19849 ns/op	   82056 B/op	       6 allocs/op
+BenchmarkDictionaryEncoder_Encode-16             	   20805	     56925 ns/op	   64848 B/op	      19 allocs/op
+BenchmarkDictionaryDecoder_Decode-16             	   67366	     17851 ns/op	   82472 B/op	       7 allocs/op
+BenchmarkDictionaryEncoder_HighCardinality-16    	    3541	    333512 ns/op	  552162 B/op	      99 allocs/op
+BenchmarkEncoderFactory_SelectEncoder-16         	146850417	         8.242 ns/op	       0 B/op	       0 allocs/op
+BenchmarkEncoderFactory_Encode-16                	   21060	     57216 ns/op	   64848 B/op	      19 allocs/op
+BenchmarkRLEEncoder_Encode-16                    	  171817	      7020 ns/op	    4976 B/op	     216 allocs/op
+BenchmarkRLEDecoder_Decode-16                    	   90765	     13126 ns/op	   82056 B/op	       6 allocs/op
+BenchmarkComputeStatistics_Int32_Small-16        	  759559	      1578 ns/op	     736 B/op	       9 allocs/op
+BenchmarkComputeStatistics_Int32_Medium-16       	   74250	     16280 ns/op	     808 B/op	       9 allocs/op
+BenchmarkComputeStatistics_Int32_Large-16        	    8702	    138938 ns/op	    1624 B/op	       9 allocs/op
+BenchmarkComputeStatistics_Float32-16            	  166882	      7224 ns/op	     696 B/op	       6 allocs/op
+BenchmarkComputeMaxBitWidth32-16                 	 7383386	       165.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkComputeRunCount32-16                    	  426882	      2724 ns/op	       0 B/op	       0 allocs/op
+BenchmarkComputeCardinality32-16                 	  118915	      9678 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUniformSampleIndices-16                 	18848906	        62.11 ns/op	     512 B/op	       1 allocs/op
+BenchmarkZstdEncoder_Encode-16                   	  129015	      9181 ns/op	  130946 B/op	       4 allocs/op
+BenchmarkZstdDecoder_Decode-16                   	   55544	     21775 ns/op	  123102 B/op	       7 allocs/op
+PASS
+ok  	github.com/wzqhbustb/vego/storage/encoding	30.029s
+
+========================================
+Vego Benchmark: Insert / Search
+========================================
+BenchmarkInsert-16     	     921	   849398 ns/op	  431565 B/op	    1002 allocs/op
+BenchmarkSearch-16     	      60	  9414903 ns/op	36922989 B/op	   46214 allocs/op
+PASS
+ok  	github.com/wzqhbustb/vego/vego	128.524s

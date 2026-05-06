@@ -5,6 +5,7 @@ func (h *HNSWIndex) insert(newNode *Node) {
 	h.globalLock.RLock()
 	ep := int(h.entryPoint)
 	maxLvl := int(h.maxLevel)
+	nodes := h.nodes // snapshot for search phase
 	h.globalLock.RUnlock()
 
 	newNodeLevel := newNode.Level()
@@ -13,7 +14,7 @@ func (h *HNSWIndex) insert(newNode *Node) {
 	// Phase 1: From top layer to newNodeLevel+1, use greedy search to find entry point
 	currentNearest := ep
 	for lc := maxLvl; lc > newNodeLevel; lc-- {
-		nearest := h.searchLayer(newNode.Vector(), currentNearest, 1, lc)
+		nearest := h.searchLayer(newNode.Vector(), currentNearest, 1, lc, nodes)
 		if len(nearest) == 0 {
 			// Theoretically won't happen, but add protection
 			break
@@ -23,8 +24,14 @@ func (h *HNSWIndex) insert(newNode *Node) {
 
 	// Phase 2: From newNodeLevel to layer 0, establish connections
 	for lc := min(newNodeLevel, maxLvl); lc >= 0; lc-- {
+		// Re-snapshot nodes to see any nodes added by concurrent inserters.
+		// This ensures neighbor IDs from searchLayer are valid for vector access.
+		h.globalLock.RLock()
+		nodes = h.nodes
+		h.globalLock.RUnlock()
+
 		// Search for nearest neighbors at current layer
-		candidates := h.searchLayer(newNode.Vector(), currentNearest, h.efConstruction, lc)
+		candidates := h.searchLayer(newNode.Vector(), currentNearest, h.efConstruction, lc, nodes)
 
 		// Select M neighbors (heuristic pruning)
 		m := h.Mmax
@@ -32,17 +39,19 @@ func (h *HNSWIndex) insert(newNode *Node) {
 			m = h.Mmax0
 		}
 
-		neighbors := h.selectNeighborsHeuristic(newNode.Vector(), candidates, m)
+		neighbors := h.selectNeighborsHeuristic(newNode.Vector(), candidates, m, nodes)
 
 		// Add bidirectional connections
 		for _, neighbor := range neighbors {
 			// New node -> neighbor
 			newNode.AddConnection(lc, neighbor.ID)
 
-			// Neighbor -> new node (need RLock to protect h.nodes access)
-			h.globalLock.RLock()
-			neighborNode := h.nodes[neighbor.ID]
-			h.globalLock.RUnlock()
+			// Neighbor -> new node
+			// Bounds check against snapshot (should always be valid)
+			if neighbor.ID < 0 || neighbor.ID >= len(nodes) {
+				continue
+			}
+			neighborNode := nodes[neighbor.ID]
 			neighborNode.AddConnection(lc, newNodeID)
 
 			// If neighbor's connection count exceeds limit, pruning is needed
@@ -54,26 +63,27 @@ func (h *HNSWIndex) insert(newNode *Node) {
 			if neighborNode.ConnectionCount(lc) > maxConn {
 				// Reselect neighbors
 				neighborConnections := neighborNode.GetConnections(lc)
-				candidatesForPrune := make([]SearchResult, len(neighborConnections))
+				candidatesForPrune := make([]SearchResult, 0, len(neighborConnections))
 
-				// Pre-fetch neighborNode's vector with proper locking
+				// Read neighbor vector directly (immutable, no lock needed)
+				neighborVec := neighborNode.vector
+
+				// Re-snapshot for pruning to see latest nodes
 				h.globalLock.RLock()
-				neighborVec := make([]float32, len(neighborNode.vector))
-				copy(neighborVec, neighborNode.vector)
+				pruneNodes := h.nodes
 				h.globalLock.RUnlock()
 
-				for i, connID := range neighborConnections {
-					// RLock to protect h.nodes access and copy vector safely
-					h.globalLock.RLock()
-					connNode := h.nodes[connID]
-					connVec := make([]float32, len(connNode.vector))
-					copy(connVec, connNode.vector)
-					h.globalLock.RUnlock()
+				for _, connID := range neighborConnections {
+					if connID < 0 || connID >= len(pruneNodes) {
+						continue // Skip out-of-snapshot nodes
+					}
+					// Read vector directly (immutable, no lock needed)
+					connVec := pruneNodes[connID].vector
 					dist := h.distFunc(neighborVec, connVec)
-					candidatesForPrune[i] = SearchResult{ID: connID, Distance: dist}
+					candidatesForPrune = append(candidatesForPrune, SearchResult{ID: connID, Distance: dist})
 				}
 
-				prunedNeighbors := h.selectNeighborsHeuristic(neighborVec, candidatesForPrune, maxConn)
+				prunedNeighbors := h.selectNeighborsHeuristic(neighborVec, candidatesForPrune, maxConn, pruneNodes)
 				prunedIDs := make([]int, len(prunedNeighbors))
 				for i, n := range prunedNeighbors {
 					prunedIDs[i] = n.ID

@@ -551,3 +551,104 @@ func TestDocumentStorageVersionConfiguration(t *testing.T) {
 
 	t.Logf("Version configuration test passed - default version is V1.2")
 }
+
+// TestPutBatchBufferDedup verifies that PutBatch removes existing entries from
+// the writeBuffer before appending updates, preventing duplicate IDs.
+func TestPutBatchBufferDedup(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "vego-putbatch-dedup-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	storage, err := NewDocumentStorage(filepath.Join(tmpDir, "storage"), 64)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer storage.Close()
+
+	// Case 1: PutBatch updates a document already in writeBuffer
+	doc1 := &Document{
+		ID:     "doc1",
+		Vector: makeTestVector(64, 1.0),
+		Metadata: map[string]interface{}{
+			"version": "v1",
+		},
+	}
+	if err := storage.Put(doc1); err != nil {
+		t.Fatalf("Failed to put doc1: %v", err)
+	}
+	if storage.bufferSize != 1 {
+		t.Fatalf("Expected bufferSize=1, got %d", storage.bufferSize)
+	}
+
+	doc1Updated := &Document{
+		ID:     "doc1",
+		Vector: makeTestVector(64, 2.0),
+		Metadata: map[string]interface{}{
+			"version": "v2",
+		},
+	}
+	if err := storage.PutBatch([]*Document{doc1Updated}); err != nil {
+		t.Fatalf("Failed to PutBatch update doc1: %v", err)
+	}
+	if storage.bufferSize != 1 {
+		t.Errorf("Expected bufferSize=1 after update, got %d", storage.bufferSize)
+	}
+
+	// Verify only the latest version is in buffer
+	var count int
+	var version string
+	for _, d := range storage.writeBuffer {
+		if d.ID == "doc1" {
+			count++
+			version = d.Metadata["version"].(string)
+		}
+	}
+	if count != 1 {
+		t.Errorf("Expected 1 doc1 in buffer, got %d", count)
+	}
+	if version != "v2" {
+		t.Errorf("Expected version v2 in buffer, got %s", version)
+	}
+
+	// Case 2: PutBatch with duplicate IDs inside the batch itself
+	docA1 := &Document{
+		ID:     "dupA",
+		Vector: makeTestVector(64, 1.0),
+		Metadata: map[string]interface{}{
+			"version": "v1",
+		},
+	}
+	docA2 := &Document{
+		ID:     "dupA",
+		Vector: makeTestVector(64, 2.0),
+		Metadata: map[string]interface{}{
+			"version": "v2",
+		},
+	}
+	if err := storage.PutBatch([]*Document{docA1, docA2}); err != nil {
+		t.Fatalf("Failed to PutBatch duplicate IDs: %v", err)
+	}
+
+	// After Case 1 buffer had 1 doc (doc1). Now we added 2 docs but they
+	// should dedup against each other, so bufferSize should be 2 (doc1 + dupA_v2).
+	if storage.bufferSize != 2 {
+		t.Errorf("Expected bufferSize=2 after dedup batch, got %d", storage.bufferSize)
+	}
+
+	var dupCount int
+	var dupVersion string
+	for _, d := range storage.writeBuffer {
+		if d.ID == "dupA" {
+			dupCount++
+			dupVersion = d.Metadata["version"].(string)
+		}
+	}
+	if dupCount != 1 {
+		t.Errorf("Expected 1 dupA in buffer, got %d", dupCount)
+	}
+	if dupVersion != "v2" {
+		t.Errorf("Expected dupA version v2, got %s", dupVersion)
+	}
+}

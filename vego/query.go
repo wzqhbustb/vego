@@ -8,8 +8,9 @@ type SearchResult struct {
 
 // SearchOptions contains search options
 type SearchOptions struct {
-	EF     int    // Search scope (0 = use default)
-	Filter Filter // Optional metadata filter
+	EF        int    // Search scope (0 = use default)
+	Filter    Filter // Optional metadata filter
+	OverFetch int    // Over-fetch multiplier for SearchWithFilterContext (0 = use default 10)
 }
 
 // SearchOption is a functional option for search
@@ -19,6 +20,16 @@ type SearchOption func(*SearchOptions)
 func WithEF(ef int) SearchOption {
 	return func(o *SearchOptions) {
 		o.EF = ef
+	}
+}
+
+// WithOverFetch sets the over-fetch multiplier for SearchWithFilterContext.
+// Higher values reduce the chance of repeated HNSW searches under high
+// filter-dropout rates (e.g. archived documents), at the cost of a
+// larger single HNSW search.
+func WithOverFetch(overFetch int) SearchOption {
+	return func(o *SearchOptions) {
+		o.OverFetch = overFetch
 	}
 }
 

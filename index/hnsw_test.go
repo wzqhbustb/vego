@@ -676,8 +676,11 @@ func TestLargeScale(t *testing.T) {
 
 	index := NewHNSW(config)
 
-	// Add 10K vectors
+	// Reduce dataset under race detector to avoid timeout from instrumentation overhead
 	numVectors := 10000
+	if raceDetectorEnabled {
+		numVectors = 2000
+	}
 	t.Logf("Adding %d vectors...", numVectors)
 
 	for i := 0; i < numVectors; i++ {

@@ -88,10 +88,12 @@ func TestSearchWithDV(t *testing.T) {
 	})
 
 	t.Run("PartialDeletions", func(t *testing.T) {
-		// Delete every other node
+		// Delete every other node (50% deletion rate).
+		// Pass k*2 to compensate — SearchWithDV searches exactly k candidates
+		// and post-filters; the caller is responsible for over-fetch.
 		isDeleted := func(id int) bool { return id%2 == 0 }
-		
-		results, err := index.SearchWithDV(query, 3, 100, isDeleted)
+
+		results, err := index.SearchWithDV(query, 6, 100, isDeleted)
 		if err != nil {
 			t.Fatalf("SearchWithDV failed: %v", err)
 		}
