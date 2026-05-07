@@ -228,7 +228,7 @@ func TestConfigValidation(t *testing.T) {
 		},
 		{
 			name:    "negative embed dims",
-			opts:    []Option{WithEmbedding("", "", "", -1)},
+			opts:    []Option{WithEmbedDims(-1)},
 			wantErr: "embed dims must be > 0, got -1",
 		},
 		{

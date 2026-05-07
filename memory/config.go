@@ -339,6 +339,7 @@ func WithEmbedding(apiKey, baseURL, model string, dims int) Option {
 			c.EmbedModel = model
 		}
 		c.EmbedDims = dims
+		c.Dimension = dims // 自动同步，避免调用方手动传 WithDimension
 	}
 }
 
