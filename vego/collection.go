@@ -873,6 +873,13 @@ func (c *Collection) Compact() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// Step 0: Flush write buffer so that documents not yet persisted
+	// are included in the compaction.  Without this flush, buffered
+	// documents would be silently dropped when the index is rebuilt.
+	if err := c.storage.Flush(); err != nil {
+		return wrapError("Compact", c.name, "", fmt.Errorf("flush buffer: %w", err))
+	}
+
 	// Step 1: Get all valid documents (not marked as deleted)
 	validDocs, err := c.storage.GetAllValidDocuments()
 	if err != nil {
