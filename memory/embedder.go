@@ -333,12 +333,57 @@ func (e *Embedder) embedBatch(ctx context.Context, texts []string) ([][]float32,
 }
 
 // embed performs the actual HTTP request for a single text.
+// It retries up to 2 times on transient failures (5xx, network errors, EOF)
+// to cope with unstable local embedding servers such as Ollama.
 func (e *Embedder) embed(ctx context.Context, text string) ([]float32, error) {
-	vecs, err := e.embedBatch(ctx, []string{text})
-	if err != nil {
-		return nil, err
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			// If the context was cancelled between attempts, stop immediately.
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			e.logger.Warn("embed retrying",
+				"model", e.model,
+				"attempt", attempt,
+				"error", lastErr,
+			)
+			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
+		}
+		vecs, err := e.embedBatch(ctx, []string{text})
+		if err == nil {
+			return vecs[0], nil
+		}
+		lastErr = err
+		// Non-transient errors (4xx client errors except 429) should not be retried.
+		if isNonTransientError(err) {
+			break
+		}
 	}
-	return vecs[0], nil
+	return nil, lastErr
+}
+
+// isNonTransientError returns true for client-side errors that are unlikely
+// to succeed on retry (e.g. 400 Bad Request, 401 Unauthorized, 404, or
+// dimension mismatch which indicates a configuration problem).
+func isNonTransientError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	// 4xx errors (except 429 Too Many Requests) are generally non-transient.
+	for _, code := range []string{"400", "401", "403", "404", "422"} {
+		if strings.Contains(errStr, code) {
+			return true
+		}
+	}
+	// Business-logic errors that will never succeed on retry.
+	for _, keyword := range []string{"dimension mismatch", "invalid index", "missing embedding"} {
+		if strings.Contains(errStr, keyword) {
+			return true
+		}
+	}
+	return false
 }
 
 // --- internal request/response types ---

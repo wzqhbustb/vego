@@ -169,16 +169,31 @@ func (s *MemoryStore) extractFactsWithRetry(ctx context.Context, messages []Mess
 	}
 
 	// Try wrapped object format first (matches the default prompt).
+	// Use json.NewDecoder so that trailing garbage (e.g. an extra '"')
+	// after the first JSON value is ignored rather than treated as an error.
 	var wrapped struct {
 		Facts []ExtractedFact `json:"facts"`
 	}
-	wrappedErr := json.Unmarshal([]byte(raw), &wrapped)
+	wrappedErr := func() error {
+		dec := json.NewDecoder(strings.NewReader(raw))
+		if err := dec.Decode(&wrapped); err != nil {
+			return err
+		}
+		return nil
+	}()
 	if wrappedErr == nil && len(wrapped.Facts) > 0 {
 		return wrapped.Facts, nil
 	}
 
 	// Fallback: some LLMs may return a bare array despite the prompt.
-	facts, err := ParseJSON[[]ExtractedFact](raw)
+	facts, err := func() ([]ExtractedFact, error) {
+		var facts []ExtractedFact
+		dec := json.NewDecoder(strings.NewReader(raw))
+		if err := dec.Decode(&facts); err != nil {
+			return nil, err
+		}
+		return facts, nil
+	}()
 	if err == nil && len(facts) > 0 {
 		return facts, nil
 	}
