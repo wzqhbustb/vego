@@ -278,3 +278,75 @@ func TestParseJSONInvalid(t *testing.T) {
 		t.Error("Expected error for invalid JSON")
 	}
 }
+
+func TestCompleteJSONModeOn(t *testing.T) {
+	var gotReq chatCompletionRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotReq); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		if gotReq.ResponseFormat == nil || gotReq.ResponseFormat.Type != "json_object" {
+			t.Errorf("ResponseFormat: want json_object, got %+v", gotReq.ResponseFormat)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(chatCompletionResponse{
+			Choices: []struct {
+				Message chatMessage `json:"message"`
+			}{{Message: chatMessage{Role: "assistant", Content: `{"ok":true}`}}},
+			Usage: struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+			}{PromptTokens: 1, CompletionTokens: 1},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	client := NewLLMClient(LLMConfig{
+		APIKey:   "sk-test",
+		BaseURL:  srv.URL,
+		JSONMode: "on",
+	})
+	content, err := client.CompleteJSON(context.Background(), "sys", "user")
+	if err != nil {
+		t.Fatalf("CompleteJSON failed: %v", err)
+	}
+	if content != `{"ok":true}` {
+		t.Errorf("Content: want %q, got %q", `{"ok":true}`, content)
+	}
+}
+
+func TestCompleteJSONModeOff(t *testing.T) {
+	var gotReq chatCompletionRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotReq); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		if gotReq.ResponseFormat != nil {
+			t.Errorf("ResponseFormat: want nil, got %+v", gotReq.ResponseFormat)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(chatCompletionResponse{
+			Choices: []struct {
+				Message chatMessage `json:"message"`
+			}{{Message: chatMessage{Role: "assistant", Content: `{"ok":true}`}}},
+			Usage: struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+			}{PromptTokens: 1, CompletionTokens: 1},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	client := NewLLMClient(LLMConfig{
+		APIKey:   "sk-test",
+		BaseURL:  srv.URL,
+		JSONMode: "off",
+	})
+	content, err := client.CompleteJSON(context.Background(), "sys", "user")
+	if err != nil {
+		t.Fatalf("CompleteJSON failed: %v", err)
+	}
+	if content != `{"ok":true}` {
+		t.Errorf("Content: want %q, got %q", `{"ok":true}`, content)
+	}
+}

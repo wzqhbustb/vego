@@ -34,3 +34,6 @@ conversation-*.txt
 # Kimi exports
 kimi-export-*.md
 .aider*
+
+# Local demo / runtime data
+ollama-demo/

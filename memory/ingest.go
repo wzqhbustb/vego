@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -167,13 +168,28 @@ func (s *MemoryStore) extractFactsWithRetry(ctx context.Context, messages []Mess
 		return extractFactsRaw(messages), nil
 	}
 
-	facts, err := ParseJSON[[]ExtractedFact](raw)
-	if err != nil {
-		s.logger.WarnContext(ctx, "llm response parse failed, falling back to raw", "error", err)
-		return extractFactsRaw(messages), nil
+	// Try wrapped object format first (matches the default prompt).
+	var wrapped struct {
+		Facts []ExtractedFact `json:"facts"`
+	}
+	wrappedErr := json.Unmarshal([]byte(raw), &wrapped)
+	if wrappedErr == nil && len(wrapped.Facts) > 0 {
+		return wrapped.Facts, nil
 	}
 
-	return facts, nil
+	// Fallback: some LLMs may return a bare array despite the prompt.
+	facts, err := ParseJSON[[]ExtractedFact](raw)
+	if err == nil && len(facts) > 0 {
+		return facts, nil
+	}
+	arrayErr := err
+
+	s.logger.WarnContext(ctx, "llm response parse failed, falling back to raw",
+		"wrapped_error", wrappedErr,
+		"array_error", arrayErr,
+		"raw", raw,
+	)
+	return extractFactsRaw(messages), nil
 }
 
 // factExtractionPrompt returns the system prompt for fact extraction.
@@ -184,19 +200,20 @@ func (s *MemoryStore) factExtractionPrompt() string {
 	}
 	return "You are a memory extraction assistant. Extract concise, self-contained facts from conversations.\n\n" +
 		"Rules:\n" +
-		"1. Each item in the output array corresponds to one fact.\n" +
-		"2. Merge facts about the same topic into a single comprehensive description.\n" +
-		"3. Discard greetings, small talk, and purely social pleasantries.\n" +
-		"4. Explicitly preserve temporal anchors (dates, times, deadlines).\n" +
-		"5. Each fact must be self-contained and understandable without the original conversation.\n" +
-		"6. Mark search intents with query_intent: true (e.g., \"find\", \"search\", \"look up\", \"query\").\n" +
-		"7. Describe facts in the original language of the content.\n" +
-		"8. Include relevant tags to categorize facts (e.g., preference, project, contact).\n" +
-		"9. Do not extract facts that are common knowledge.\n" +
-		"10. If a message contains multiple distinct facts, split them into multiple items.\n" +
-		"11. Keep facts concise (ideally 1-2 sentences).\n" +
-		"12. Maintain factual accuracy; do not infer or fabricate information.\n\n" +
-		"Output JSON: [{\"content\":\"...\",\"tags\":[\"...\"],\"query_intent\":false}]"
+		"1. The output must be a JSON object with a single key \"facts\" whose value is an array.\n" +
+		"2. Each item in the \"facts\" array corresponds to one fact.\n" +
+		"3. Merge facts about the same topic into a single comprehensive description.\n" +
+		"4. Discard greetings, small talk, and purely social pleasantries.\n" +
+		"5. Explicitly preserve temporal anchors (dates, times, deadlines).\n" +
+		"6. Each fact must be self-contained and understandable without the original conversation.\n" +
+		"7. Mark search intents with query_intent: true (e.g., \"find\", \"search\", \"look up\", \"query\").\n" +
+		"8. Describe facts in the original language of the content.\n" +
+		"9. Include relevant tags to categorize facts (e.g., preference, project, contact).\n" +
+		"10. Do not extract facts that are common knowledge.\n" +
+		"11. If a message contains multiple distinct facts, split them into multiple items.\n" +
+		"12. Keep facts concise (ideally 1-2 sentences).\n" +
+		"13. Maintain factual accuracy; do not infer or fabricate information.\n\n" +
+		"Output JSON: {\"facts\":[{\"content\":\"...\",\"tags\":[\"...\"],\"query_intent\":false}]}"
 }
 
 // buildFactExtractionUserPrompt builds the user prompt from messages.

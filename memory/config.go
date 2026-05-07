@@ -23,10 +23,11 @@ type Config struct {
 	LLMTemperature float64 // Default 0.1; 0 is a valid value for OpenAI
 
 	// Embedding
-	EmbedAPIKey  string
-	EmbedBaseURL string
-	EmbedModel   string
-	EmbedDims    int // Default 1536
+	EmbedAPIKey      string
+	EmbedBaseURL     string
+	EmbedModel       string
+	EmbedDims        int
+	EmbedConcurrency int // 0 = batch (default), 1 = serial, >1 = max concurrent workers
 
 	// Search
 	SearchLimit       int     // Default 10
@@ -69,6 +70,9 @@ type Config struct {
 	// Prompts (optional overrides)
 	FactExtractionPrompt string // Custom system prompt for fact extraction; empty uses built-in English default
 	ReconcilePrompt      string // Custom system prompt for reconcile decisions; empty uses built-in English default
+
+	// Fact extraction JSON mode: "on" = force response_format, "off" = never send, "" = auto
+	FactExtractJSONMode string
 }
 
 // Option is a functional option for Config.
@@ -215,6 +219,12 @@ func (c *Config) validate() error {
 	if c.NearDupThreshold < 0 || c.NearDupThreshold > 1 {
 		return fmt.Errorf("near dup threshold must be in [0,1], got %f", c.NearDupThreshold)
 	}
+	if c.EmbedConcurrency < 0 {
+		return fmt.Errorf("embed concurrency must be >= 0, got %d", c.EmbedConcurrency)
+	}
+	if c.FactExtractJSONMode != "" && c.FactExtractJSONMode != "on" && c.FactExtractJSONMode != "off" {
+		return fmt.Errorf("fact extract json mode must be '', 'on', or 'off', got %q", c.FactExtractJSONMode)
+	}
 	return nil
 }
 
@@ -223,12 +233,13 @@ func (c *Config) validate() error {
 // ToLLMConfig returns an LLMConfig derived from this Config.
 func (c *Config) ToLLMConfig() LLMConfig {
 	return LLMConfig{
-		APIKey:       c.LLMAPIKey,
-		BaseURL:      c.LLMBaseURL,
-		Model:        c.LLMModel,
-		Temperature:  c.LLMTemperature,
-		RoundTripper: c.HTTPRoundTripper,
-		Logger:       c.Logger,
+		APIKey:                c.LLMAPIKey,
+		BaseURL:               c.LLMBaseURL,
+		Model:                 c.LLMModel,
+		Temperature:           c.LLMTemperature,
+		RoundTripper:          c.HTTPRoundTripper,
+		Logger:                c.Logger,
+		JSONMode: c.FactExtractJSONMode,
 	}
 }
 
@@ -239,6 +250,7 @@ func (c *Config) ToEmbedConfig() EmbedConfig {
 		BaseURL:      c.EmbedBaseURL,
 		Model:        c.EmbedModel,
 		Dims:         c.EmbedDims,
+		Concurrency:  c.EmbedConcurrency,
 		RoundTripper: c.HTTPRoundTripper,
 		Logger:       c.Logger,
 	}
@@ -328,6 +340,22 @@ func WithEmbedding(apiKey, baseURL, model string, dims int) Option {
 		}
 		c.EmbedDims = dims
 	}
+}
+
+// WithEmbedConcurrency controls embedding execution concurrency.
+//   - 0 (default): batch mode — all texts in a single API call.
+//   - 1:           serial mode — one-by-one to avoid crashing local models.
+//   - >1:          parallel worker pool — at most N concurrent requests.
+func WithEmbedConcurrency(n int) Option {
+	return func(c *Config) { c.EmbedConcurrency = n }
+}
+
+// WithFactExtractJSONMode controls whether the LLM client sends response_format: json_object.
+//   - "on":  always send (no fallback on HTTP 400).
+//   - "off": never send; rely on prompt instructions only.
+//   - "auto" or "": send with fallback on HTTP 400 (default).
+func WithFactExtractJSONMode(mode string) Option {
+	return func(c *Config) { c.FactExtractJSONMode = mode }
 }
 
 // WithDistanceFunc sets the distance function for similarity conversion.

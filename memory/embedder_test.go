@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -215,5 +216,94 @@ func TestEmbedContextCancel(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "context") {
 		t.Errorf("Error should mention context: %v", err)
+	}
+}
+
+func TestEmbedBatchParallel(t *testing.T) {
+	callCount := 0
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		callCount++
+		idx := callCount
+		mu.Unlock()
+
+		var req embeddingRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(embeddingResponse{
+			Data: []embeddingData{
+				{Index: 0, Embedding: []float32{float32(idx) * 0.1}},
+			},
+		}); err != nil {
+			t.Errorf("encode response: %v", err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	embedder := NewEmbedder(EmbedConfig{
+		APIKey:      "sk-test",
+		BaseURL:     srv.URL,
+		Model:       "test-model",
+		Dims:        1,
+		Concurrency: 2,
+	})
+
+	vecs, err := embedder.EmbedBatch(context.Background(), []string{"a", "b", "c"})
+	if err != nil {
+		t.Fatalf("EmbedBatch parallel failed: %v", err)
+	}
+	if len(vecs) != 3 {
+		t.Fatalf("expected 3 vectors, got %d", len(vecs))
+	}
+	if callCount != 3 {
+		t.Errorf("parallel mode should make 3 HTTP calls, got %d", callCount)
+	}
+}
+
+func TestEmbedBatchSerial(t *testing.T) {
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		var req embeddingRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(embeddingResponse{
+			Data: []embeddingData{
+				{Index: 0, Embedding: []float32{float32(callCount) * 0.1}},
+			},
+		}); err != nil {
+			t.Errorf("encode response: %v", err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	embedder := NewEmbedder(EmbedConfig{
+		APIKey:  "sk-test",
+		BaseURL: srv.URL,
+		Model:   "test-model",
+		Dims:    1,
+		Concurrency: 1,
+	})
+
+	vecs, err := embedder.EmbedBatch(context.Background(), []string{"hello", "world"})
+	if err != nil {
+		t.Fatalf("EmbedBatch serial failed: %v", err)
+	}
+	if len(vecs) != 2 {
+		t.Fatalf("expected 2 vectors, got %d", len(vecs))
+	}
+	if callCount != 2 {
+		t.Errorf("serial mode should make 2 HTTP calls, got %d", callCount)
+	}
+	if vecs[0][0] != 0.1 {
+		t.Errorf("first vector: want 0.1, got %f", vecs[0][0])
+	}
+	if vecs[1][0] != 0.2 {
+		t.Errorf("second vector: want 0.2, got %f", vecs[1][0])
 	}
 }
