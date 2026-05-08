@@ -3,7 +3,7 @@ package encoding
 import (
 	"testing"
 
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/format"
 )
 
@@ -26,7 +26,7 @@ func TestZstdEncoder_Encode_Int32(t *testing.T) {
 	for i := range values {
 		values[i] = int32(i)
 	}
-	array := arrow.NewInt32Array(values, nil)
+	array := core.NewInt32Array(values, nil)
 
 	encoded, err := encoder.Encode(array)
 	if err != nil {
@@ -38,12 +38,12 @@ func TestZstdEncoder_Encode_Int32(t *testing.T) {
 	}
 
 	// 解码验证
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32(), nil, encoded.NumValues)
+	decoded, err := decoder.Decode(encoded.Data, core.PrimInt32(), nil, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
 
-	result := decoded.(*arrow.Int32Array)
+	result := decoded.(*core.Int32Array)
 	if result.Len() != len(values) {
 		t.Errorf("Expected %d values, got %d", len(values), result.Len())
 	}
@@ -67,19 +67,19 @@ func TestZstdEncoder_Encode_Float64(t *testing.T) {
 	for i := range values {
 		values[i] = float64(i) * 0.5
 	}
-	array := arrow.NewFloat64Array(values, nil)
+	array := core.NewFloat64Array(values, nil)
 
 	encoded, err := encoder.Encode(array)
 	if err != nil {
 		t.Fatalf("Encode failed: %v", err)
 	}
 
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimFloat64(), nil, encoded.NumValues)
+	decoded, err := decoder.Decode(encoded.Data, core.PrimFloat64(), nil, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
 
-	result := decoded.(*arrow.Float64Array)
+	result := decoded.(*core.Float64Array)
 	for i := 0; i < len(values); i++ {
 		if result.Value(i) != values[i] {
 			t.Errorf("Value mismatch at %d", i)
@@ -96,7 +96,7 @@ func TestZstdEncoder_WithNulls(t *testing.T) {
 	}
 
 	// Zstd 支持 null
-	builder := arrow.NewInt32Builder()
+	builder := core.NewInt32Builder()
 	for i := 0; i < 100; i++ {
 		if i%10 == 0 {
 			builder.AppendNull()
@@ -111,12 +111,12 @@ func TestZstdEncoder_WithNulls(t *testing.T) {
 		t.Fatalf("Encode failed: %v", err)
 	}
 
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32(), nil, encoded.NumValues)
+	decoded, err := decoder.Decode(encoded.Data, core.PrimInt32(), nil, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
 
-	result := decoded.(*arrow.Int32Array)
+	result := decoded.(*core.Int32Array)
 	nullCount := 0
 	for i := 0; i < 100; i++ {
 		if i%10 == 0 {
@@ -146,7 +146,7 @@ func TestZstdEncoder_WithAllNulls(t *testing.T) {
 		t.Fatalf("Failed to create decoder: %v", err)
 	}
 
-	builder := arrow.NewInt32Builder()
+	builder := core.NewInt32Builder()
 	for i := 0; i < 100; i++ {
 		builder.AppendNull()
 	}
@@ -157,12 +157,12 @@ func TestZstdEncoder_WithAllNulls(t *testing.T) {
 		t.Fatalf("Encode failed: %v", err)
 	}
 
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32(), nil, encoded.NumValues)
+	decoded, err := decoder.Decode(encoded.Data, core.PrimInt32(), nil, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
 
-	result := decoded.(*arrow.Int32Array)
+	result := decoded.(*core.Int32Array)
 	if result.Len() != 100 {
 		t.Errorf("Expected 100 values, got %d", result.Len())
 	}
@@ -187,7 +187,7 @@ func TestZstdEncoder_WithComplexNulls(t *testing.T) {
 	const size = 123
 	isValid := make([]bool, size)
 	values := make([]int32, size)
-	builder := arrow.NewInt32Builder()
+	builder := core.NewInt32Builder()
 
 	for i := 0; i < size; i++ {
 		// 开头结尾和中间的null
@@ -207,12 +207,12 @@ func TestZstdEncoder_WithComplexNulls(t *testing.T) {
 		t.Fatalf("Encode failed: %v", err)
 	}
 
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32(), nil, encoded.NumValues)
+	decoded, err := decoder.Decode(encoded.Data, core.PrimInt32(), nil, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
 
-	result := decoded.(*arrow.Int32Array)
+	result := decoded.(*core.Int32Array)
 	if result.Len() != size {
 		t.Fatalf("Expected length %d, got %d", size, result.Len())
 	}
@@ -231,7 +231,7 @@ func TestZstdEncoder_EmptyArray(t *testing.T) {
 	encoder := NewZstdEncoder(3)
 
 	values := []int32{}
-	array := arrow.NewInt32Array(values, nil)
+	array := core.NewInt32Array(values, nil)
 
 	_, err := encoder.Encode(array)
 	if err != ErrEmptyArray {
@@ -243,10 +243,10 @@ func TestZstdEncoder_SupportsType(t *testing.T) {
 	encoder := NewZstdEncoder(3)
 
 	// Zstd 支持所有类型
-	if !encoder.SupportsType(arrow.PrimInt32()) {
+	if !encoder.SupportsType(core.PrimInt32()) {
 		t.Error("Should support Int32")
 	}
-	if !encoder.SupportsType(arrow.PrimFloat64()) {
+	if !encoder.SupportsType(core.PrimFloat64()) {
 		t.Error("Should support Float64")
 	}
 }
@@ -255,7 +255,7 @@ func TestZstdEncoder_EstimateSize(t *testing.T) {
 	encoder := NewZstdEncoder(3)
 
 	values := make([]int32, 100)
-	array := arrow.NewInt32Array(values, nil)
+	array := core.NewInt32Array(values, nil)
 
 	estimated := encoder.EstimateSize(array)
 	// Should be roughly 50% of original
@@ -270,7 +270,7 @@ func TestZstdEncoder_DifferentLevels(t *testing.T) {
 	for i := range values {
 		values[i] = int32(i)
 	}
-	array := arrow.NewInt32Array(values, nil)
+	array := core.NewInt32Array(values, nil)
 
 	for _, level := range []int{1, 3, 6, 9} {
 		encoder := NewZstdEncoder(level)
@@ -288,7 +288,7 @@ func BenchmarkZstdEncoder_Encode(b *testing.B) {
 	for i := range values {
 		values[i] = int32(i)
 	}
-	array := arrow.NewInt32Array(values, nil)
+	array := core.NewInt32Array(values, nil)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -302,7 +302,7 @@ func BenchmarkZstdDecoder_Decode(b *testing.B) {
 	for i := range values {
 		values[i] = int32(i)
 	}
-	array := arrow.NewInt32Array(values, nil)
+	array := core.NewInt32Array(values, nil)
 	encoded, _ := encoder.Encode(array)
 
 	decoder, err := NewZstdDecoder()
@@ -312,6 +312,6 @@ func BenchmarkZstdDecoder_Decode(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		decoder.Decode(encoded.Data, arrow.PrimInt32(), nil, encoded.NumValues)
+		decoder.Decode(encoded.Data, core.PrimInt32(), nil, encoded.NumValues)
 	}
 }

@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	lerrors "github.com/wzqhbustb/vego/storage/errors"
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 )
 
 type BitPackingDecoder struct{}
@@ -14,7 +14,7 @@ func NewBitPackingDecoder() *BitPackingDecoder {
 	return &BitPackingDecoder{}
 }
 
-func (d *BitPackingDecoder) Decode(data []byte, dtype arrow.DataType, nullBitmap []byte, numValues int) (arrow.Array, error) {
+func (d *BitPackingDecoder) Decode(data []byte, dtype core.DataType, nullBitmap []byte, numValues int) (core.Array, error) {
 	if len(data) < 5 {
 		return nil, lerrors.New(lerrors.ErrCorruptedFile).
 			Op("bitpacking_decode").
@@ -49,9 +49,9 @@ func (d *BitPackingDecoder) Decode(data []byte, dtype arrow.DataType, nullBitmap
 	}
 
 	switch dtype.ID() {
-	case arrow.INT32:
+	case core.INT32:
 		return d.decodeInt32(packedData, int(packedNumValues), bitWidth, nullBitmap, numValues)
-	case arrow.INT64:
+	case core.INT64:
 		return d.decodeInt64(packedData, int(packedNumValues), bitWidth, nullBitmap, numValues)
 	default:
 		return nil, lerrors.New(lerrors.ErrUnsupportedType).
@@ -61,12 +61,12 @@ func (d *BitPackingDecoder) Decode(data []byte, dtype arrow.DataType, nullBitmap
 	}
 }
 
-func (d *BitPackingDecoder) decodeInt32(data []byte, packedNumValues int, bitWidth uint8, nullBitmap []byte, numValues int) (arrow.Array, error) {
+func (d *BitPackingDecoder) decodeInt32(data []byte, packedNumValues int, bitWidth uint8, nullBitmap []byte, numValues int) (core.Array, error) {
 	values := unpackBitsToInt32(data, packedNumValues, bitWidth)
 	
 	// If no null bitmap, return directly
 	if nullBitmap == nil || numValues == 0 {
-		return arrow.NewInt32Array(values, nil), nil
+		return core.NewInt32Array(values, nil), nil
 	}
 	
 	// Expand with nulls: insert values back to their original positions
@@ -77,16 +77,16 @@ func (d *BitPackingDecoder) decodeInt32(data []byte, packedNumValues int, bitWid
 			Wrap(err).
 			Build()
 	}
-	bitmap := arrow.NewBitmapFromBytes(nullBitmap, numValues)
-	return arrow.NewInt32Array(expandedValues, bitmap), nil
+	bitmap := core.NewBitmapFromBytes(nullBitmap, numValues)
+	return core.NewInt32Array(expandedValues, bitmap), nil
 }
 
-func (d *BitPackingDecoder) decodeInt64(data []byte, packedNumValues int, bitWidth uint8, nullBitmap []byte, numValues int) (arrow.Array, error) {
+func (d *BitPackingDecoder) decodeInt64(data []byte, packedNumValues int, bitWidth uint8, nullBitmap []byte, numValues int) (core.Array, error) {
 	values := unpackBitsToInt64(data, packedNumValues, bitWidth)
 	
 	// If no null bitmap, return directly
 	if nullBitmap == nil || numValues == 0 {
-		return arrow.NewInt64Array(values, nil), nil
+		return core.NewInt64Array(values, nil), nil
 	}
 	
 	// Expand with nulls
@@ -97,8 +97,8 @@ func (d *BitPackingDecoder) decodeInt64(data []byte, packedNumValues int, bitWid
 			Wrap(err).
 			Build()
 	}
-	bitmap := arrow.NewBitmapFromBytes(nullBitmap, numValues)
-	return arrow.NewInt64Array(expandedValues, bitmap), nil
+	bitmap := core.NewBitmapFromBytes(nullBitmap, numValues)
+	return core.NewInt64Array(expandedValues, bitmap), nil
 }
 
 // unpackBitsToInt32 从字节流中解包出多个 int32 值

@@ -1,4 +1,4 @@
-package arrow
+package core
 
 import "testing"
 
@@ -165,12 +165,12 @@ func TestNewBuilderForType(t *testing.T) {
 		dtype        DataType
 		expectedType string
 	}{
-		{PrimInt32(), "*arrow.Int32Builder"},
-		{PrimInt64(), "*arrow.Int64Builder"},
-		{PrimFloat32(), "*arrow.Float32Builder"},
-		{PrimFloat64(), "*arrow.Float64Builder"},
-		{FixedSizeListOf(PrimFloat32(), 3), "*arrow.FixedSizeListBuilder"},
-		{ListOf(PrimInt32()), "*arrow.ListBuilder"},
+		{PrimInt32(), "*core.Int32Builder"},
+		{PrimInt64(), "*core.Int64Builder"},
+		{PrimFloat32(), "*core.Float32Builder"},
+		{PrimFloat64(), "*core.Float64Builder"},
+		{FixedSizeListOf(PrimFloat32(), 3), "*core.FixedSizeListBuilder"},
+		{ListOf(PrimInt32()), "*core.ListBuilder"},
 	}
 
 	for _, tt := range tests {

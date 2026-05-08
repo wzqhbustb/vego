@@ -1,4 +1,4 @@
-package arrow
+package core
 
 // Array is the interface for all Arrow arrays
 type Array interface {

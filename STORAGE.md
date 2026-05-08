@@ -181,7 +181,7 @@ Struct         // For complex records
 
 ```go
 // Create a 128-dimensional float32 vector type
-vectorType := arrow.VectorType(128)
+vectorType := core.VectorType(128)
 // Result: fixed_size_list<float32>[128]
 
 // Memory layout for 1000 vectors:
@@ -239,7 +239,7 @@ type Reader struct {
 }
 
 // Automatic mode selection
-func (r *Reader) ReadRecordBatch() (*arrow.RecordBatch, error) {
+func (r *Reader) ReadRecordBatch() (*core.RecordBatch, error) {
     if r.useAsync {
         return r.readColumnsAsync()  // Concurrent column reads
     }
@@ -271,11 +271,11 @@ func (f *EncoderFactory) SelectEncoder(dtype DataType, stats *Statistics) Encode
     }
     
     switch dtype.ID() {
-    case arrow.INT32, arrow.INT64:
+    case core.INT32, core.INT64:
         return f.selectIntegerEncoder(stats)
-    case arrow.FLOAT32, arrow.FLOAT64:
+    case core.FLOAT32, core.FLOAT64:
         return f.selectFloatEncoder(stats)
-    case arrow.FIXED_SIZE_LIST:
+    case core.FIXED_SIZE_LIST:
         return f.selectFixedSizeListEncoder(stats)
     }
 }
@@ -414,17 +414,17 @@ Application
 package main
 
 import (
-    "github.com/wzqhbustb/vego/storage/arrow"
+    "github.com/wzqhbustb/vego/core"
     "github.com/wzqhbustb/vego/storage/column"
     "github.com/wzqhbustb/vego/storage/encoding"
 )
 
 func main() {
     // 1. Define schema
-    schema := arrow.NewSchema([]arrow.Field{
-        arrow.NewField("id", arrow.PrimInt32(), false),
-        arrow.NewField("vector", arrow.VectorType(128), false),
-        arrow.NewField("level", arrow.PrimInt32(), false),
+    schema := core.NewSchema([]core.Field{
+        core.NewField("id", core.PrimInt32(), false),
+        core.NewField("vector", core.VectorType(128), false),
+        core.NewField("level", core.PrimInt32(), false),
     }, nil)
     
     // 2. Create writer with encoding factory
@@ -436,16 +436,16 @@ func main() {
     defer writer.Close()
     
     // 3. Prepare data arrays
-    ids := arrow.NewInt32Array([]int32{0, 1, 2, 3, 4}, nil)
-    vectors := arrow.NewFloat32Array(
+    ids := core.NewInt32Array([]int32{0, 1, 2, 3, 4}, nil)
+    vectors := core.NewFloat32Array(
         // Flattened: 5 vectors × 128 dimensions
         make([]float32, 5*128), 
         nil,
     )
-    levels := arrow.NewInt32Array([]int32{3, 2, 4, 1, 3}, nil)
+    levels := core.NewInt32Array([]int32{3, 2, 4, 1, 3}, nil)
     
     // 4. Create RecordBatch
-    batch, err := arrow.NewRecordBatch(schema, 5, []arrow.Array{ids, vectors, levels})
+    batch, err := core.NewRecordBatch(schema, 5, []core.Array{ids, vectors, levels})
     if err != nil {
         panic(err)
     }
@@ -473,9 +473,9 @@ if err != nil {
 }
 
 // Access columns
-idColumn := batch.Column(0).(*arrow.Int32Array)
-vectorColumn := batch.Column(1).(*arrow.FixedSizeListArray)
-levelColumn := batch.Column(2).(*arrow.Int32Array)
+idColumn := batch.Column(0).(*core.Int32Array)
+vectorColumn := batch.Column(1).(*core.FixedSizeListArray)
+levelColumn := batch.Column(2).(*core.Int32Array)
 
 // Read values
 for i := 0; i < batch.NumRows(); i++ {

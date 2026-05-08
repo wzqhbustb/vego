@@ -10,7 +10,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/column"
 	"github.com/wzqhbustb/vego/storage/encoding"
 )
@@ -31,10 +31,10 @@ func main() {
 
 	// Step 1: Define schema
 	fmt.Println("Step 1: Defining Arrow schema...")
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "id", Type: arrow.PrimInt64(), Nullable: false},
-		{Name: "vector", Type: arrow.VectorType(dimension), Nullable: false},
-		{Name: "score", Type: arrow.PrimFloat32(), Nullable: false},
+	schema := core.NewSchema([]core.Field{
+		{Name: "id", Type: core.PrimInt64(), Nullable: false},
+		{Name: "vector", Type: core.VectorType(dimension), Nullable: false},
+		{Name: "score", Type: core.PrimFloat32(), Nullable: false},
 	}, nil)
 	fmt.Printf("✓ Schema created with %d fields:\n", schema.NumFields())
 	for i := 0; i < schema.NumFields(); i++ {
@@ -46,11 +46,11 @@ func main() {
 	// Step 2: Build data arrays
 	fmt.Printf("Step 2: Building data arrays (%d vectors)...\n", numVectors)
 	
-	idBuilder := arrow.NewInt64Builder()
-	vectorBuilder := arrow.NewFixedSizeListBuilder(
-		arrow.FixedSizeListOf(arrow.PrimFloat32(), dimension).(*arrow.FixedSizeListType),
+	idBuilder := core.NewInt64Builder()
+	vectorBuilder := core.NewFixedSizeListBuilder(
+		core.FixedSizeListOf(core.PrimFloat32(), dimension).(*core.FixedSizeListType),
 	)
-	scoreBuilder := arrow.NewFloat32Builder()
+	scoreBuilder := core.NewFloat32Builder()
 
 	for i := 0; i < numVectors; i++ {
 		// ID
@@ -79,7 +79,7 @@ func main() {
 
 	// Step 3: Create RecordBatch
 	fmt.Println("Step 3: Creating RecordBatch...")
-	batch, err := arrow.NewRecordBatch(schema, numVectors, []arrow.Array{
+	batch, err := core.NewRecordBatch(schema, numVectors, []core.Array{
 		idArray, vectorArray, scoreArray,
 	})
 	if err != nil {
@@ -141,13 +141,13 @@ func main() {
 
 	// Step 6: Access data
 	fmt.Println("Step 6: Accessing data...")
-	resultIDArray := resultBatch.Column(0).(*arrow.Int64Array)
-	resultVectorArray := resultBatch.Column(1).(*arrow.FixedSizeListArray)
-	resultScoreArray := resultBatch.Column(2).(*arrow.Float32Array)
+	resultIDArray := resultBatch.Column(0).(*core.Int64Array)
+	resultVectorArray := resultBatch.Column(1).(*core.FixedSizeListArray)
+	resultScoreArray := resultBatch.Column(2).(*core.Float32Array)
 
 	// Show first 5 rows
 	fmt.Printf("First 5 rows:\n")
-	vectorValues := resultVectorArray.Values().(*arrow.Float32Array)
+	vectorValues := resultVectorArray.Values().(*core.Float32Array)
 	for i := 0; i < 5; i++ {
 		id := resultIDArray.Value(i)
 		score := resultScoreArray.Value(i)

@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/format"
 )
 
@@ -19,11 +19,11 @@ func TestRowIndexWriterReader(t *testing.T) {
 	filename := filepath.Join(tmpDir, "test_rowindex.lance")
 
 	// Create schema with only supported types
-	fields := []arrow.Field{
-		arrow.NewField("id", arrow.PrimInt64(), false),
-		arrow.NewField("embedding", arrow.VectorType(128), false),
+	fields := []core.Field{
+		core.NewField("id", core.PrimInt64(), false),
+		core.NewField("embedding", core.VectorType(128), false),
 	}
-	schema := arrow.NewSchema(fields, nil)
+	schema := core.NewSchema(fields, nil)
 
 	// Write file with RowIndex (V1.1)
 	t.Run("write_v1.1_with_rowindex", func(t *testing.T) {
@@ -33,16 +33,16 @@ func TestRowIndexWriterReader(t *testing.T) {
 		}
 
 		// Create record batch using builders
-		builder := arrow.NewRecordBatchBuilder(schema)
+		builder := core.NewRecordBatchBuilder(schema)
 
 		// Build id column
-		idBuilder := builder.Field(0).(*arrow.Int64Builder)
+		idBuilder := builder.Field(0).(*core.Int64Builder)
 		idBuilder.Append(1)
 		idBuilder.Append(2)
 		idBuilder.Append(3)
 
 		// Build embedding column (vector)
-		embBuilder := builder.Field(1).(*arrow.FixedSizeListBuilder)
+		embBuilder := builder.Field(1).(*core.FixedSizeListBuilder)
 		for i := 0; i < 3; i++ {
 			embBuilder.AppendValues(make([]float32, 128))
 		}
@@ -132,10 +132,10 @@ func TestRowIndexWriterV10(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_v10.lance")
 
-	fields := []arrow.Field{
-		arrow.NewField("id", arrow.PrimInt64(), false),
+	fields := []core.Field{
+		core.NewField("id", core.PrimInt64(), false),
 	}
-	schema := arrow.NewSchema(fields, nil)
+	schema := core.NewSchema(fields, nil)
 
 	// Write V1.0 file (no RowIndex)
 	writer, err := NewRowIndexWriter(filename, schema, format.V1_0, nil)
@@ -143,8 +143,8 @@ func TestRowIndexWriterV10(t *testing.T) {
 		t.Fatalf("Failed to create writer: %v", err)
 	}
 
-	builder := arrow.NewRecordBatchBuilder(schema)
-	idBuilder := builder.Field(0).(*arrow.Int64Builder)
+	builder := core.NewRecordBatchBuilder(schema)
+	idBuilder := builder.Field(0).(*core.Int64Builder)
 	idBuilder.Append(1)
 	idBuilder.Append(2)
 
@@ -195,25 +195,25 @@ func TestRowIndexWriterV12(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_v12.lance")
 
-	fields := []arrow.Field{
-		arrow.NewField("id", arrow.PrimInt64(), false),
-		arrow.NewField("vector", arrow.VectorType(64), false),
+	fields := []core.Field{
+		core.NewField("id", core.PrimInt64(), false),
+		core.NewField("vector", core.VectorType(64), false),
 	}
-	schema := arrow.NewSchema(fields, nil)
+	schema := core.NewSchema(fields, nil)
 
 	writer, err := NewRowIndexWriter(filename, schema, format.V1_2, nil)
 	if err != nil {
 		t.Fatalf("Failed to create writer: %v", err)
 	}
 
-	builder := arrow.NewRecordBatchBuilder(schema)
+	builder := core.NewRecordBatchBuilder(schema)
 
-	idBuilder := builder.Field(0).(*arrow.Int64Builder)
+	idBuilder := builder.Field(0).(*core.Int64Builder)
 	for i := 1; i <= 5; i++ {
 		idBuilder.Append(int64(i))
 	}
 
-	vecBuilder := builder.Field(1).(*arrow.FixedSizeListBuilder)
+	vecBuilder := builder.Field(1).(*core.FixedSizeListBuilder)
 	for i := 0; i < 5; i++ {
 		vecBuilder.AppendValues(make([]float32, 64))
 	}
@@ -275,18 +275,18 @@ func TestRowIndexStats(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_stats.lance")
 
-	fields := []arrow.Field{
-		arrow.NewField("id", arrow.PrimInt64(), false),
+	fields := []core.Field{
+		core.NewField("id", core.PrimInt64(), false),
 	}
-	schema := arrow.NewSchema(fields, nil)
+	schema := core.NewSchema(fields, nil)
 
 	writer, err := NewRowIndexWriter(filename, schema, format.V1_1, nil)
 	if err != nil {
 		t.Fatalf("Failed to create writer: %v", err)
 	}
 
-	builder := arrow.NewRecordBatchBuilder(schema)
-	idBuilder := builder.Field(0).(*arrow.Int64Builder)
+	builder := core.NewRecordBatchBuilder(schema)
+	idBuilder := builder.Field(0).(*core.Int64Builder)
 	for i := 0; i < 10; i++ {
 		idBuilder.Append(int64(i))
 	}
@@ -340,18 +340,18 @@ func TestRowIndexUpdate(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_update.lance")
 
-	fields := []arrow.Field{
-		arrow.NewField("id", arrow.PrimInt64(), false),
+	fields := []core.Field{
+		core.NewField("id", core.PrimInt64(), false),
 	}
-	schema := arrow.NewSchema(fields, nil)
+	schema := core.NewSchema(fields, nil)
 
 	writer, err := NewRowIndexWriter(filename, schema, format.V1_1, nil)
 	if err != nil {
 		t.Fatalf("Failed to create writer: %v", err)
 	}
 
-	builder := arrow.NewRecordBatchBuilder(schema)
-	idBuilder := builder.Field(0).(*arrow.Int64Builder)
+	builder := core.NewRecordBatchBuilder(schema)
+	idBuilder := builder.Field(0).(*core.Int64Builder)
 	idBuilder.Append(1)
 
 	batch, err := builder.NewBatch()
@@ -397,11 +397,11 @@ func TestBlockCache_V12Integration(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_blockcache_v12.lance")
 
-	fields := []arrow.Field{
-		arrow.NewField("id", arrow.PrimInt64(), false),
-		arrow.NewField("vector", arrow.VectorType(64), false),
+	fields := []core.Field{
+		core.NewField("id", core.PrimInt64(), false),
+		core.NewField("vector", core.VectorType(64), false),
 	}
-	schema := arrow.NewSchema(fields, nil)
+	schema := core.NewSchema(fields, nil)
 
 	// Write V1.2 file with custom block size
 	writer, err := NewRowIndexWriter(filename, schema, format.V1_2, nil)
@@ -412,12 +412,12 @@ func TestBlockCache_V12Integration(t *testing.T) {
 	// Set custom block size
 	writer.SetBlockSize(32 * 1024) // 32 KB
 
-	builder := arrow.NewRecordBatchBuilder(schema)
-	idBuilder := builder.Field(0).(*arrow.Int64Builder)
+	builder := core.NewRecordBatchBuilder(schema)
+	idBuilder := builder.Field(0).(*core.Int64Builder)
 	idBuilder.Append(1)
 	idBuilder.Append(2)
 
-	vecBuilder := builder.Field(1).(*arrow.FixedSizeListBuilder)
+	vecBuilder := builder.Field(1).(*core.FixedSizeListBuilder)
 	vecBuilder.AppendValues(make([]float32, 64))
 	vecBuilder.AppendValues(make([]float32, 64))
 
@@ -487,18 +487,18 @@ func TestBlockCache_NoCacheV10(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_no_cache_v10.lance")
 
-	fields := []arrow.Field{
-		arrow.NewField("id", arrow.PrimInt64(), false),
+	fields := []core.Field{
+		core.NewField("id", core.PrimInt64(), false),
 	}
-	schema := arrow.NewSchema(fields, nil)
+	schema := core.NewSchema(fields, nil)
 
 	writer, err := NewRowIndexWriter(filename, schema, format.V1_0, nil)
 	if err != nil {
 		t.Fatalf("Failed to create writer: %v", err)
 	}
 
-	builder := arrow.NewRecordBatchBuilder(schema)
-	idBuilder := builder.Field(0).(*arrow.Int64Builder)
+	builder := core.NewRecordBatchBuilder(schema)
+	idBuilder := builder.Field(0).(*core.Int64Builder)
 	idBuilder.Append(1)
 
 	batch, err := builder.NewBatch()

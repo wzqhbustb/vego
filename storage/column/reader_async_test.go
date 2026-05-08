@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wzqhbustb/vego/storage/arrow"
-	lanceio "github.com/wzqhbustb/vego/storage/io"
+	"github.com/wzqhbustb/vego/core"
+	"github.com/wzqhbustb/vego/vfs"
 )
 
 // ====================
@@ -17,12 +17,12 @@ import (
 // ====================
 
 // setupAsyncIO 创建测试用 AsyncIO - 改为接受 testing.TB
-func setupAsyncIO(t testing.TB) *lanceio.AsyncIO {
-	config := lanceio.DefaultConfig()
+func setupAsyncIO(t testing.TB) *vfs.AsyncIO {
+	config := vfs.DefaultConfig()
 	config.Workers = 4
 	config.QueueSize = 100
 	config.SchedulerCap = 1000
-	asyncIO, err := lanceio.New(config)
+	asyncIO, err := vfs.New(config)
 	if err != nil {
 		t.Fatalf("Failed to create AsyncIO: %v", err)
 	}
@@ -31,15 +31,15 @@ func setupAsyncIO(t testing.TB) *lanceio.AsyncIO {
 
 // createTestFile 创建测试用 Lance 文件
 func createTestFile(t testing.TB, filename string, numRows int, numColumns int) {
-	fields := make([]arrow.Field, numColumns)
+	fields := make([]core.Field, numColumns)
 	for i := 0; i < numColumns; i++ {
-		fields[i] = arrow.Field{
+		fields[i] = core.Field{
 			Name:     fmt.Sprintf("col%d", i),
-			Type:     arrow.PrimInt32(),
+			Type:     core.PrimInt32(),
 			Nullable: false,
 		}
 	}
-	schema := arrow.NewSchema(fields, nil)
+	schema := core.NewSchema(fields, nil)
 
 	writer, err := NewWriter(filename, schema, defaultEncoderFactory())
 	if err != nil {
@@ -62,9 +62,9 @@ func createTestFile(t testing.TB, filename string, numRows int, numColumns int) 
 			size = numRows - start
 		}
 
-		columns := make([]arrow.Array, numColumns)
+		columns := make([]core.Array, numColumns)
 		for col := 0; col < numColumns; col++ {
-			builder := arrow.NewInt32Builder()
+			builder := core.NewInt32Builder()
 			for row := 0; row < size; row++ {
 				builder.Append(int32(start + row + col*1000))
 			}
@@ -72,7 +72,7 @@ func createTestFile(t testing.TB, filename string, numRows int, numColumns int) 
 			builder.Release()
 		}
 
-		batch, err := arrow.NewRecordBatch(schema, size, columns)
+		batch, err := core.NewRecordBatch(schema, size, columns)
 		if err != nil {
 			t.Fatalf("NewRecordBatch failed: %v", err)
 		}
@@ -131,7 +131,7 @@ func TestReader_WithAsyncIO_Basic(t *testing.T) {
 	}
 
 	// 验证第一列的前几个值
-	col0 := batch.Column(0).(*arrow.Int32Array)
+	col0 := batch.Column(0).(*core.Int32Array)
 	expectedValues := []int32{0, 1, 2, 3, 4}
 	for i, expected := range expectedValues {
 		if col0.Value(i) != expected {
@@ -193,7 +193,7 @@ func TestReader_WithAsyncIO_MultipleColumns(t *testing.T) {
 
 	// 验证每列的数据
 	for col := 0; col < numColumns; col++ {
-		colArray := batch.Column(col).(*arrow.Int32Array)
+		colArray := batch.Column(col).(*core.Int32Array)
 		expected := int32(col * 1000)
 		if colArray.Value(0) != expected {
 			t.Errorf("col%d[0]: expected %d, got %d", col, expected, colArray.Value(0))
@@ -679,8 +679,8 @@ func TestReader_WithAsyncIO_EmptyFile(t *testing.T) {
 	filename := filepath.Join(tmpDir, "test_empty.lance")
 
 	// 创建空 schema 文件
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "data", Type: arrow.PrimInt32(), Nullable: false},
+	schema := core.NewSchema([]core.Field{
+		{Name: "data", Type: core.PrimInt32(), Nullable: false},
 	}, nil)
 
 	writer, err := NewWriter(filename, schema, defaultEncoderFactory())
@@ -761,15 +761,15 @@ func TestReader_WithAsyncIO_SingleColumn(t *testing.T) {
 
 // createTestFileFloat32 创建 Float32 类型的测试文件
 func createTestFileFloat32(t testing.TB, filename string, numRows int, numColumns int) {
-	fields := make([]arrow.Field, numColumns)
+	fields := make([]core.Field, numColumns)
 	for i := 0; i < numColumns; i++ {
-		fields[i] = arrow.Field{
+		fields[i] = core.Field{
 			Name:     fmt.Sprintf("float_col%d", i),
-			Type:     arrow.PrimFloat32(),
+			Type:     core.PrimFloat32(),
 			Nullable: false,
 		}
 	}
-	schema := arrow.NewSchema(fields, nil)
+	schema := core.NewSchema(fields, nil)
 
 	writer, err := NewWriter(filename, schema, defaultEncoderFactory())
 	if err != nil {
@@ -788,9 +788,9 @@ func createTestFileFloat32(t testing.TB, filename string, numRows int, numColumn
 			size = numRows - start
 		}
 
-		columns := make([]arrow.Array, numColumns)
+		columns := make([]core.Array, numColumns)
 		for col := 0; col < numColumns; col++ {
-			builder := arrow.NewFloat32Builder()
+			builder := core.NewFloat32Builder()
 			for row := 0; row < size; row++ {
 				// 生成一些有趣的 float 值：整数部分 + 小数部分
 				value := float32(start+row)*1.5 + float32(col)*0.1
@@ -800,7 +800,7 @@ func createTestFileFloat32(t testing.TB, filename string, numRows int, numColumn
 			builder.Release()
 		}
 
-		batch, err := arrow.NewRecordBatch(schema, size, columns)
+		batch, err := core.NewRecordBatch(schema, size, columns)
 		if err != nil {
 			t.Fatalf("NewRecordBatch failed: %v", err)
 		}
@@ -813,15 +813,15 @@ func createTestFileFloat32(t testing.TB, filename string, numRows int, numColumn
 
 // createTestFileFloat64 创建 Float64 类型的测试文件
 func createTestFileFloat64(t testing.TB, filename string, numRows int, numColumns int) {
-	fields := make([]arrow.Field, numColumns)
+	fields := make([]core.Field, numColumns)
 	for i := 0; i < numColumns; i++ {
-		fields[i] = arrow.Field{
+		fields[i] = core.Field{
 			Name:     fmt.Sprintf("double_col%d", i),
-			Type:     arrow.PrimFloat64(),
+			Type:     core.PrimFloat64(),
 			Nullable: false,
 		}
 	}
-	schema := arrow.NewSchema(fields, nil)
+	schema := core.NewSchema(fields, nil)
 
 	writer, err := NewWriter(filename, schema, defaultEncoderFactory())
 	if err != nil {
@@ -840,9 +840,9 @@ func createTestFileFloat64(t testing.TB, filename string, numRows int, numColumn
 			size = numRows - start
 		}
 
-		columns := make([]arrow.Array, numColumns)
+		columns := make([]core.Array, numColumns)
 		for col := 0; col < numColumns; col++ {
-			builder := arrow.NewFloat64Builder()
+			builder := core.NewFloat64Builder()
 			for row := 0; row < size; row++ {
 				// 生成高精度浮点数
 				value := float64(start+row)*3.14159265359 + float64(col)*0.001
@@ -852,7 +852,7 @@ func createTestFileFloat64(t testing.TB, filename string, numRows int, numColumn
 			builder.Release()
 		}
 
-		batch, err := arrow.NewRecordBatch(schema, size, columns)
+		batch, err := core.NewRecordBatch(schema, size, columns)
 		if err != nil {
 			t.Fatalf("NewRecordBatch failed: %v", err)
 		}
@@ -866,14 +866,14 @@ func createTestFileFloat64(t testing.TB, filename string, numRows int, numColumn
 // createTestFileMixed 创建混合类型（int + float）的测试文件
 func createTestFileMixed(t testing.TB, filename string, numRows int) {
 	// 混合类型：int32, float32, float64, int64, float32
-	fields := []arrow.Field{
-		{Name: "id", Type: arrow.PrimInt32(), Nullable: false},
-		{Name: "score", Type: arrow.PrimFloat32(), Nullable: false},
-		{Name: "value", Type: arrow.PrimFloat64(), Nullable: false},
-		{Name: "count", Type: arrow.PrimInt64(), Nullable: false},
-		{Name: "ratio", Type: arrow.PrimFloat32(), Nullable: false},
+	fields := []core.Field{
+		{Name: "id", Type: core.PrimInt32(), Nullable: false},
+		{Name: "score", Type: core.PrimFloat32(), Nullable: false},
+		{Name: "value", Type: core.PrimFloat64(), Nullable: false},
+		{Name: "count", Type: core.PrimInt64(), Nullable: false},
+		{Name: "ratio", Type: core.PrimFloat32(), Nullable: false},
 	}
-	schema := arrow.NewSchema(fields, nil)
+	schema := core.NewSchema(fields, nil)
 
 	writer, err := NewWriter(filename, schema, defaultEncoderFactory())
 	if err != nil {
@@ -893,36 +893,36 @@ func createTestFileMixed(t testing.TB, filename string, numRows int) {
 		}
 
 		// int32 column
-		idBuilder := arrow.NewInt32Builder()
+		idBuilder := core.NewInt32Builder()
 		for row := 0; row < size; row++ {
 			idBuilder.Append(int32(start + row))
 		}
 
 		// float32 column
-		scoreBuilder := arrow.NewFloat32Builder()
+		scoreBuilder := core.NewFloat32Builder()
 		for row := 0; row < size; row++ {
 			scoreBuilder.Append(float32(start+row) * 0.5)
 		}
 
 		// float64 column
-		valueBuilder := arrow.NewFloat64Builder()
+		valueBuilder := core.NewFloat64Builder()
 		for row := 0; row < size; row++ {
 			valueBuilder.Append(float64(start+row) * 2.718281828)
 		}
 
 		// int64 column
-		countBuilder := arrow.NewInt64Builder()
+		countBuilder := core.NewInt64Builder()
 		for row := 0; row < size; row++ {
 			countBuilder.Append(int64(start+row) * 1000)
 		}
 
 		// float32 column
-		ratioBuilder := arrow.NewFloat32Builder()
+		ratioBuilder := core.NewFloat32Builder()
 		for row := 0; row < size; row++ {
 			ratioBuilder.Append(float32(start+row) / 100.0)
 		}
 
-		columns := []arrow.Array{
+		columns := []core.Array{
 			idBuilder.NewArray(),
 			scoreBuilder.NewArray(),
 			valueBuilder.NewArray(),
@@ -937,7 +937,7 @@ func createTestFileMixed(t testing.TB, filename string, numRows int) {
 		countBuilder.Release()
 		ratioBuilder.Release()
 
-		batch, err := arrow.NewRecordBatch(schema, size, columns)
+		batch, err := core.NewRecordBatch(schema, size, columns)
 		if err != nil {
 			t.Fatalf("NewRecordBatch failed: %v", err)
 		}
@@ -983,7 +983,7 @@ func TestReader_WithAsyncIO_Float32(t *testing.T) {
 	}
 
 	// 验证 Float32 数据
-	col0 := batch.Column(0).(*arrow.Float32Array)
+	col0 := batch.Column(0).(*core.Float32Array)
 	expectedValues := []float32{0, 1.5, 3.0, 4.5, 6.0}
 	for i, expected := range expectedValues {
 		if col0.Value(i) != expected {
@@ -992,7 +992,7 @@ func TestReader_WithAsyncIO_Float32(t *testing.T) {
 	}
 
 	// 验证第二列的数据（带列偏移）
-	col1 := batch.Column(1).(*arrow.Float32Array)
+	col1 := batch.Column(1).(*core.Float32Array)
 	expectedCol1 := float32(0*1.5 + 1*0.1) // 0 + 0.1
 	if col1.Value(0) != expectedCol1 {
 		t.Errorf("col1[0]: expected %v, got %v", expectedCol1, col1.Value(0))
@@ -1025,7 +1025,7 @@ func TestReader_WithAsyncIO_Float64(t *testing.T) {
 	}
 
 	// 验证 Float64 数据（高精度）
-	col0 := batch.Column(0).(*arrow.Float64Array)
+	col0 := batch.Column(0).(*core.Float64Array)
 	expectedValue := float64(0) * 3.14159265359
 	if col0.Value(0) != expectedValue {
 		t.Errorf("col0[0]: expected %v, got %v", expectedValue, col0.Value(0))
@@ -1061,7 +1061,7 @@ func TestReader_WithAsyncIO_MixedTypes(t *testing.T) {
 	}
 
 	// 验证各列类型
-	expectedTypes := []arrow.TypeID{arrow.INT32, arrow.FLOAT32, arrow.FLOAT64, arrow.INT64, arrow.FLOAT32}
+	expectedTypes := []core.TypeID{core.INT32, core.FLOAT32, core.FLOAT64, core.INT64, core.FLOAT32}
 	for i, expectedType := range expectedTypes {
 		actualType := schema.Field(i).Type.ID()
 		if actualType != expectedType {
@@ -1080,28 +1080,28 @@ func TestReader_WithAsyncIO_MixedTypes(t *testing.T) {
 	}
 
 	// 验证各列数据
-	idCol := batch.Column(0).(*arrow.Int32Array)
+	idCol := batch.Column(0).(*core.Int32Array)
 	if idCol.Value(0) != 0 || idCol.Value(1) != 1 {
 		t.Errorf("ID column values incorrect: %d, %d", idCol.Value(0), idCol.Value(1))
 	}
 
-	scoreCol := batch.Column(1).(*arrow.Float32Array)
+	scoreCol := batch.Column(1).(*core.Float32Array)
 	if scoreCol.Value(0) != 0 || scoreCol.Value(1) != 0.5 {
 		t.Errorf("Score column values incorrect: %v, %v", scoreCol.Value(0), scoreCol.Value(1))
 	}
 
-	valueCol := batch.Column(2).(*arrow.Float64Array)
+	valueCol := batch.Column(2).(*core.Float64Array)
 	expectedValue := float64(1) * 2.718281828
 	if valueCol.Value(1) != expectedValue {
 		t.Errorf("Value column[1]: expected %v, got %v", expectedValue, valueCol.Value(1))
 	}
 
-	countCol := batch.Column(3).(*arrow.Int64Array)
+	countCol := batch.Column(3).(*core.Int64Array)
 	if countCol.Value(0) != 0 || countCol.Value(1) != 1000 {
 		t.Errorf("Count column values incorrect: %d, %d", countCol.Value(0), countCol.Value(1))
 	}
 
-	ratioCol := batch.Column(4).(*arrow.Float32Array)
+	ratioCol := batch.Column(4).(*core.Float32Array)
 	if ratioCol.Value(100) != 1.0 {
 		t.Errorf("Ratio column[100]: expected 1.0, got %v", ratioCol.Value(100))
 	}
@@ -1176,7 +1176,7 @@ func TestReader_WithAsyncIO_FloatConcurrency(t *testing.T) {
 			}
 
 			// 验证 float 数据精度
-			col0 := batch.Column(0).(*arrow.Float64Array)
+			col0 := batch.Column(0).(*core.Float64Array)
 			expected0 := float64(0) * 3.14159265359
 			if col0.Value(0) != expected0 {
 				errChan <- fmt.Errorf("reader %d: col0[0] = %v, want %v", id, col0.Value(0), expected0)

@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"strconv"
 	"strings"
 
@@ -18,7 +18,7 @@ type Header struct {
 	Magic      uint32        // Magic number (0x4C414E43)
 	Version    uint16        // File format version
 	Flags      uint16        // Feature flags
-	Schema     *arrow.Schema // Arrow schema
+	Schema     *core.Schema // Arrow schema
 	NumRows    int64         // Total number of rows
 	NumColumns int32         // Number of columns
 	PageSize   int32         // Default page size
@@ -36,7 +36,7 @@ const (
 )
 
 // NewHeader creates a new header
-func NewHeader(schema *arrow.Schema, numRows int64) *Header {
+func NewHeader(schema *core.Schema, numRows int64) *Header {
 	return &Header{
 		Magic:      MagicNumber,
 		Version:    CurrentVersion,
@@ -195,7 +195,7 @@ func (h *Header) ReadFrom(r io.Reader) (int64, error) {
 }
 
 // serializeSchemaToJSON with proper escaping
-func serializeSchemaToJSON(schema *arrow.Schema) []byte {
+func serializeSchemaToJSON(schema *core.Schema) []byte {
 	// Use standard json.Marshal for safety
 	type fieldJSON struct {
 		Name     string `json:"name"`
@@ -228,21 +228,21 @@ func serializeSchemaToJSON(schema *arrow.Schema) []byte {
 }
 
 // serializeTypeName converts DataType to string representation
-func serializeTypeName(dt arrow.DataType) string {
+func serializeTypeName(dt core.DataType) string {
 	switch t := dt.(type) {
-	case *arrow.Int32Type:
+	case *core.Int32Type:
 		return "int32"
-	case *arrow.Int64Type:
+	case *core.Int64Type:
 		return "int64"
-	case *arrow.Float32Type:
+	case *core.Float32Type:
 		return "float32"
-	case *arrow.Float64Type:
+	case *core.Float64Type:
 		return "float64"
-	case *arrow.BinaryType:
+	case *core.BinaryType:
 		return "binary"
-	case *arrow.StringType:
+	case *core.StringType:
 		return "string"
-	case *arrow.FixedSizeListType:
+	case *core.FixedSizeListType:
 		elemType := serializeTypeName(t.Elem())
 		return fmt.Sprintf("fixed_size_list[%d]<%s>", t.Size(), elemType)
 	default:
@@ -250,7 +250,7 @@ func serializeTypeName(dt arrow.DataType) string {
 	}
 }
 
-func deserializeSchemaFromJSON(data []byte) (*arrow.Schema, error) {
+func deserializeSchemaFromJSON(data []byte) (*core.Schema, error) {
 	// Parse JSON structure
 	var schemaJSON struct {
 		Fields []struct {
@@ -273,8 +273,8 @@ func deserializeSchemaFromJSON(data []byte) (*arrow.Schema, error) {
 			Build()
 	}
 
-	// Convert JSON fields to arrow.Field
-	fields := make([]arrow.Field, len(schemaJSON.Fields)) // 注意：不是指针切片
+	// Convert JSON fields to core.Field
+	fields := make([]core.Field, len(schemaJSON.Fields)) // 注意：不是指针切片
 	for i, f := range schemaJSON.Fields {
 		dataType, err := parseDataType(f.Type)
 		if err != nil {
@@ -286,7 +286,7 @@ func deserializeSchemaFromJSON(data []byte) (*arrow.Schema, error) {
 				Build()
 		}
 
-		fields[i] = arrow.Field{
+		fields[i] = core.Field{
 			Name:     f.Name,
 			Type:     dataType,
 			Nullable: f.Nullable,
@@ -295,27 +295,27 @@ func deserializeSchemaFromJSON(data []byte) (*arrow.Schema, error) {
 	}
 
 	// Create schema with metadata using constructor
-	schema := arrow.NewSchema(fields, schemaJSON.Metadata)
+	schema := core.NewSchema(fields, schemaJSON.Metadata)
 
 	return schema, nil
 }
 
-// parseDataType parses a type string to arrow.DataType
-func parseDataType(typeStr string) (arrow.DataType, error) {
+// parseDataType parses a type string to core.DataType
+func parseDataType(typeStr string) (core.DataType, error) {
 	// Handle basic types
 	switch typeStr {
 	case "int32":
-		return arrow.PrimInt32(), nil
+		return core.PrimInt32(), nil
 	case "int64":
-		return arrow.PrimInt64(), nil
+		return core.PrimInt64(), nil
 	case "float32":
-		return arrow.PrimFloat32(), nil
+		return core.PrimFloat32(), nil
 	case "float64":
-		return arrow.PrimFloat64(), nil
+		return core.PrimFloat64(), nil
 	case "binary":
-		return arrow.PrimBinary(), nil
+		return core.PrimBinary(), nil
 	case "string", "utf8":
-		return arrow.PrimString(), nil
+		return core.PrimString(), nil
 	}
 
 	// Handle FixedSizeList (e.g., "fixed_size_list[768]<float32>")
@@ -327,7 +327,7 @@ func parseDataType(typeStr string) (arrow.DataType, error) {
 }
 
 // parseFixedSizeListType parses "fixed_size_list[768]<float32>" format
-func parseFixedSizeListType(typeStr string) (arrow.DataType, error) {
+func parseFixedSizeListType(typeStr string) (core.DataType, error) {
 	// Extract size: "fixed_size_list[768]<float32>" -> 768
 	sizeStart := strings.Index(typeStr, "[")
 	sizeEnd := strings.Index(typeStr, "]")
@@ -368,5 +368,5 @@ func parseFixedSizeListType(typeStr string) (arrow.DataType, error) {
 	}
 
 	// 使用构造函数创建
-	return arrow.FixedSizeListOf(elemType, size), nil
+	return core.FixedSizeListOf(elemType, size), nil
 }

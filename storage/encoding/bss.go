@@ -6,7 +6,7 @@ import (
 	"math"
 
 	lerrors "github.com/wzqhbustb/vego/storage/errors"
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/format"
 )
 
@@ -22,15 +22,15 @@ func (e *BSSEncoder) Type() format.EncodingType {
 	return format.EncodingBSSEncoding
 }
 
-func (e *BSSEncoder) Encode(array arrow.Array) (*EncodedData, error) {
+func (e *BSSEncoder) Encode(array core.Array) (*EncodedData, error) {
 	if array.Len() == 0 {
 		return nil, ErrEmptyArray
 	}
 
 	switch arr := array.(type) {
-	case *arrow.Float32Array:
+	case *core.Float32Array:
 		return e.encodeFloat32(arr)
-	case *arrow.Float64Array:
+	case *core.Float64Array:
 		return e.encodeFloat64(arr)
 	default:
 		return nil, lerrors.New(lerrors.ErrUnsupportedType).
@@ -39,7 +39,7 @@ func (e *BSSEncoder) Encode(array arrow.Array) (*EncodedData, error) {
 	}
 }
 
-func (e *BSSEncoder) encodeFloat32(arr *arrow.Float32Array) (*EncodedData, error) {
+func (e *BSSEncoder) encodeFloat32(arr *core.Float32Array) (*EncodedData, error) {
 	numValues := arr.Len()
 	nullN := arr.NullN()
 
@@ -93,7 +93,7 @@ func (e *BSSEncoder) encodeFloat32(arr *arrow.Float32Array) (*EncodedData, error
 	}, nil
 }
 
-func (e *BSSEncoder) encodeFloat64(arr *arrow.Float64Array) (*EncodedData, error) {
+func (e *BSSEncoder) encodeFloat64(arr *core.Float64Array) (*EncodedData, error) {
 	numValues := arr.Len()
 	nullN := arr.NullN()
 
@@ -151,7 +151,7 @@ func (e *BSSEncoder) encodeFloat64(arr *arrow.Float64Array) (*EncodedData, error
 	}, nil
 }
 
-func (e *BSSEncoder) EstimateSize(array arrow.Array) int {
+func (e *BSSEncoder) EstimateSize(array core.Array) int {
 	numValues := array.Len()
 	nullN := array.NullN()
 	// Estimate non-null values
@@ -159,7 +159,7 @@ func (e *BSSEncoder) EstimateSize(array arrow.Array) int {
 	return estimatedNonNull * GetValueSize(array.DataType().ID())
 }
 
-func (e *BSSEncoder) SupportsType(dtype arrow.DataType) bool {
+func (e *BSSEncoder) SupportsType(dtype core.DataType) bool {
 	id := dtype.ID()
-	return id == arrow.FLOAT32 || id == arrow.FLOAT64
+	return id == core.FLOAT32 || id == core.FLOAT64
 }

@@ -3,7 +3,7 @@ package column
 import (
 	"bytes"
 	"io"
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/encoding"
 	lerrors "github.com/wzqhbustb/vego/storage/errors"
 	"github.com/wzqhbustb/vego/storage/format"
@@ -34,7 +34,7 @@ type Writer struct {
 }
 
 // NewWriter creates a new column writer
-func NewWriter(filename string, schema *arrow.Schema, factory *encoding.EncoderFactory) (*Writer, error) {
+func NewWriter(filename string, schema *core.Schema, factory *encoding.EncoderFactory) (*Writer, error) {
 	file, err := os.Create(filename)
 	if err != nil {
 		return nil, lerrors.IO("new_writer", filename, err)
@@ -111,7 +111,7 @@ func (w *Writer) writeHeaderWithPadding() error {
 }
 
 // WriteRecordBatch writes a RecordBatch to the file
-func (w *Writer) WriteRecordBatch(batch *arrow.RecordBatch) error {
+func (w *Writer) WriteRecordBatch(batch *core.RecordBatch) error {
 	if w.closed {
 		return lerrors.New(lerrors.ErrInvalidArgument).
 			Op("write_record_batch").
@@ -182,7 +182,7 @@ func (w *Writer) WriteRecordBatch(batch *arrow.RecordBatch) error {
 }
 
 // writeColumn writes a single column (Array) to the file
-func (w *Writer) writeColumn(columnIndex int32, array arrow.Array) error {
+func (w *Writer) writeColumn(columnIndex int32, array core.Array) error {
 	// Convert array to pages
 	pages, err := w.pageWriter.WritePages(array, columnIndex)
 	if err != nil {

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/encoding"
 	lerrors "github.com/wzqhbustb/vego/storage/errors"
 	"github.com/wzqhbustb/vego/storage/format"
@@ -20,8 +20,8 @@ func TestReadPagesSync(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "multi_page.lance")
 
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "data", Type: arrow.PrimInt32(), Nullable: false},
+	schema := core.NewSchema([]core.Field{
+		{Name: "data", Type: core.PrimInt32(), Nullable: false},
 	}, nil)
 
 	writer, err := NewWriter(filename, schema, encoding.NewEncoderFactory(3))
@@ -29,13 +29,13 @@ func TestReadPagesSync(t *testing.T) {
 		t.Fatalf("NewWriter failed: %v", err)
 	}
 
-	builder := arrow.NewInt32Builder()
+	builder := core.NewInt32Builder()
 	for i := 0; i < 100000; i++ {
 		builder.Append(int32(i))
 	}
 	array := builder.NewArray()
 
-	batch, _ := arrow.NewRecordBatch(schema, 100000, []arrow.Array{array})
+	batch, _ := core.NewRecordBatch(schema, 100000, []core.Array{array})
 	if err := writer.WriteRecordBatch(batch); err != nil {
 		t.Fatalf("WriteRecordBatch failed: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestReadPagesSync(t *testing.T) {
 		t.Errorf("Expected 100000 rows, got %d", result.NumRows())
 	}
 
-	resultArray := result.Column(0).(*arrow.Int32Array)
+	resultArray := result.Column(0).(*core.Int32Array)
 	for i := 0; i < 1000; i++ {
 		if resultArray.Value(i) != int32(i) {
 			t.Errorf("Data mismatch at %d: expected %d, got %d", i, i, resultArray.Value(i))
@@ -69,9 +69,9 @@ func TestReadPagesSync_MultipleColumns(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "multi_col_multi_page.lance")
 
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "id", Type: arrow.PrimInt32(), Nullable: false},
-		{Name: "value", Type: arrow.PrimFloat64(), Nullable: true},
+	schema := core.NewSchema([]core.Field{
+		{Name: "id", Type: core.PrimInt32(), Nullable: false},
+		{Name: "value", Type: core.PrimFloat64(), Nullable: true},
 	}, nil)
 
 	writer, err := NewWriter(filename, schema, encoding.NewEncoderFactory(3))
@@ -80,8 +80,8 @@ func TestReadPagesSync_MultipleColumns(t *testing.T) {
 	}
 
 	for batchNum := 0; batchNum < 3; batchNum++ {
-		idBuilder := arrow.NewInt32Builder()
-		valueBuilder := arrow.NewFloat64Builder()
+		idBuilder := core.NewInt32Builder()
+		valueBuilder := core.NewFloat64Builder()
 
 		for i := 0; i < 50000; i++ {
 			idBuilder.Append(int32(batchNum*50000 + i))
@@ -92,7 +92,7 @@ func TestReadPagesSync_MultipleColumns(t *testing.T) {
 			}
 		}
 
-		batch, _ := arrow.NewRecordBatch(schema, 50000, []arrow.Array{
+		batch, _ := core.NewRecordBatch(schema, 50000, []core.Array{
 			idBuilder.NewArray(),
 			valueBuilder.NewArray(),
 		})
@@ -117,7 +117,7 @@ func TestReadPagesSync_MultipleColumns(t *testing.T) {
 		t.Fatalf("ReadRecordBatch failed: %v", err)
 	}
 
-	valueCol := result.Column(1).(*arrow.Float64Array)
+	valueCol := result.Column(1).(*core.Float64Array)
 	expectedNulls := 150000 / 10
 	if valueCol.NullN() != expectedNulls {
 		t.Errorf("Expected %d nulls, got %d", expectedNulls, valueCol.NullN())
@@ -249,15 +249,15 @@ func TestBoundary_TruncatedFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "truncated.lance")
 
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "id", Type: arrow.PrimInt32(), Nullable: false},
+	schema := core.NewSchema([]core.Field{
+		{Name: "id", Type: core.PrimInt32(), Nullable: false},
 	}, nil)
 
 	writer, _ := NewWriter(filename, schema, encoding.NewEncoderFactory(3))
-	builder := arrow.NewInt32Builder()
+	builder := core.NewInt32Builder()
 	builder.Append(1)
 	array := builder.NewArray()
-	batch, _ := arrow.NewRecordBatch(schema, 1, []arrow.Array{array})
+	batch, _ := core.NewRecordBatch(schema, 1, []core.Array{array})
 	writer.WriteRecordBatch(batch)
 	writer.Close()
 
@@ -276,15 +276,15 @@ func TestBoundary_CorruptedFooter(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "corrupted_footer.lance")
 
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "id", Type: arrow.PrimInt32(), Nullable: false},
+	schema := core.NewSchema([]core.Field{
+		{Name: "id", Type: core.PrimInt32(), Nullable: false},
 	}, nil)
 
 	writer, _ := NewWriter(filename, schema, encoding.NewEncoderFactory(3))
-	builder := arrow.NewInt32Builder()
+	builder := core.NewInt32Builder()
 	builder.Append(1)
 	array := builder.NewArray()
-	batch, _ := arrow.NewRecordBatch(schema, 1, []arrow.Array{array})
+	batch, _ := core.NewRecordBatch(schema, 1, []core.Array{array})
 	writer.WriteRecordBatch(batch)
 	writer.Close()
 
@@ -322,7 +322,7 @@ func TestBoundary_ZeroLengthArray(t *testing.T) {
 	factory := encoding.NewEncoderFactory(3)
 	writer := NewPageWriter(factory)
 
-	builder := arrow.NewInt32Builder()
+	builder := core.NewInt32Builder()
 	array := builder.NewArray()
 
 	_, err := writer.WritePages(array, 0)
@@ -335,8 +335,8 @@ func TestBoundary_VeryLargePageSize(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "large_page.lance")
 
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "id", Type: arrow.PrimInt32(), Nullable: false},
+	schema := core.NewSchema([]core.Field{
+		{Name: "id", Type: core.PrimInt32(), Nullable: false},
 	}, nil)
 
 	writer, err := NewWriter(filename, schema, encoding.NewEncoderFactory(3))
@@ -344,13 +344,13 @@ func TestBoundary_VeryLargePageSize(t *testing.T) {
 		t.Fatalf("NewWriter failed: %v", err)
 	}
 
-	builder := arrow.NewInt32Builder()
+	builder := core.NewInt32Builder()
 	for i := 0; i < 10; i++ {
 		builder.Append(int32(i))
 	}
 	array := builder.NewArray()
 
-	batch, _ := arrow.NewRecordBatch(schema, 10, []arrow.Array{array})
+	batch, _ := core.NewRecordBatch(schema, 10, []core.Array{array})
 	if err := writer.WriteRecordBatch(batch); err != nil {
 		t.Fatalf("WriteRecordBatch failed: %v", err)
 	}

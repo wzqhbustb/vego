@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	lerrors "github.com/wzqhbustb/vego/storage/errors"
 	"strings"
 	"testing"
@@ -38,7 +38,7 @@ func assertErrorContains(t *testing.T, err error, substr string, msg string) {
 // TestHeaderSerializationRoundtrip tests basic header write/read roundtrip
 func TestHeaderSerializationRoundtrip(t *testing.T) {
 	// Create a schema with various field types
-	schema := arrow.SchemaForVectors(768)
+	schema := core.SchemaForVectors(768)
 
 	// Create header
 	original := NewHeader(schema, 1000)
@@ -141,7 +141,7 @@ func TestHeaderWithDifferentVectorDimensions(t *testing.T) {
 
 	for _, dim := range dimensions {
 		t.Run(fmt.Sprintf("dim_%d", dim), func(t *testing.T) {
-			schema := arrow.SchemaForVectors(dim)
+			schema := core.SchemaForVectors(dim)
 			header := NewHeader(schema, 500)
 
 			buf := new(bytes.Buffer)
@@ -158,11 +158,11 @@ func TestHeaderWithDifferentVectorDimensions(t *testing.T) {
 
 			// Verify vector field type
 			vectorField := deserialized.Schema.Field(1) // "vector" is second field
-			if vectorField.Type.ID() != arrow.FIXED_SIZE_LIST {
+			if vectorField.Type.ID() != core.FIXED_SIZE_LIST {
 				t.Errorf("Vector field type mismatch: got %v, want FIXED_SIZE_LIST", vectorField.Type.ID())
 			}
 
-			listType, ok := vectorField.Type.(*arrow.FixedSizeListType)
+			listType, ok := vectorField.Type.(*core.FixedSizeListType)
 			if !ok {
 				t.Fatal("Failed to cast vector type to FixedSizeListType")
 			}
@@ -177,11 +177,11 @@ func TestHeaderWithDifferentVectorDimensions(t *testing.T) {
 // TestHeaderWithCustomSchema tests serialization with custom schema
 func TestHeaderWithCustomSchema(t *testing.T) {
 	// Create custom schema with various types
-	fields := []arrow.Field{
-		arrow.NewField("id", arrow.PrimInt32(), false),
-		arrow.NewField("score", arrow.PrimFloat64(), true), // nullable
-		arrow.NewField("name", arrow.PrimString(), false),
-		arrow.NewField("embedding", arrow.VectorType(512), false),
+	fields := []core.Field{
+		core.NewField("id", core.PrimInt32(), false),
+		core.NewField("score", core.PrimFloat64(), true), // nullable
+		core.NewField("name", core.PrimString(), false),
+		core.NewField("embedding", core.VectorType(512), false),
 	}
 
 	metadata := map[string]string{
@@ -190,7 +190,7 @@ func TestHeaderWithCustomSchema(t *testing.T) {
 		"author":      "test",
 	}
 
-	schema := arrow.NewSchema(fields, metadata)
+	schema := core.NewSchema(fields, metadata)
 	header := NewHeader(schema, 2000)
 
 	buf := new(bytes.Buffer)
@@ -274,7 +274,7 @@ func TestHeaderValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			schema := arrow.SchemaForVectors(768)
+			schema := core.SchemaForVectors(768)
 			header := NewHeader(schema, 1000)
 			tt.modify(header)
 
@@ -296,7 +296,7 @@ func TestHeaderValidation(t *testing.T) {
 
 // TestHeaderFlags tests flag operations
 func TestHeaderFlags(t *testing.T) {
-	schema := arrow.SchemaForVectors(768)
+	schema := core.SchemaForVectors(768)
 	header := NewHeader(schema, 1000)
 
 	// Initially no flags
@@ -346,10 +346,10 @@ func TestHeaderFlags(t *testing.T) {
 
 // TestSchemaWithSpecialCharacters tests JSON escaping
 func TestSchemaWithSpecialCharacters(t *testing.T) {
-	fields := []arrow.Field{
-		arrow.NewField(`field"with"quotes`, arrow.PrimInt32(), false),
-		arrow.NewField(`field\with\backslash`, arrow.PrimFloat32(), false),
-		arrow.NewField("field\nwith\nnewline", arrow.PrimString(), false),
+	fields := []core.Field{
+		core.NewField(`field"with"quotes`, core.PrimInt32(), false),
+		core.NewField(`field\with\backslash`, core.PrimFloat32(), false),
+		core.NewField("field\nwith\nnewline", core.PrimString(), false),
 	}
 
 	metadata := map[string]string{
@@ -357,7 +357,7 @@ func TestSchemaWithSpecialCharacters(t *testing.T) {
 		`key\backslash`: `value\backslash`,
 	}
 
-	schema := arrow.NewSchema(fields, metadata)
+	schema := core.NewSchema(fields, metadata)
 	header := NewHeader(schema, 100)
 
 	buf := new(bytes.Buffer)
@@ -394,14 +394,14 @@ func TestSchemaWithSpecialCharacters(t *testing.T) {
 func TestMaxSchemaSize(t *testing.T) {
 	// Create schema with many fields to exceed 1MB limit
 	// Each field JSON is ~90 bytes, need >11500 fields to exceed 1MB
-	fields := make([]arrow.Field, 15000)
+	fields := make([]core.Field, 15000)
 	for i := 0; i < 15000; i++ {
 		// Each field name is long to increase JSON size
 		name := fmt.Sprintf("very_long_field_name_to_increase_json_size_with_extra_padding_%d", i)
-		fields[i] = arrow.NewField(name, arrow.PrimInt32(), false)
+		fields[i] = core.NewField(name, core.PrimInt32(), false)
 	}
 
-	schema := arrow.NewSchema(fields, nil)
+	schema := core.NewSchema(fields, nil)
 	header := NewHeader(schema, 1000)
 
 	buf := new(bytes.Buffer)
@@ -422,7 +422,7 @@ func TestMaxSchemaSize(t *testing.T) {
 
 // TestInvalidSchemaLength tests malicious schema length
 func TestInvalidSchemaLength(t *testing.T) {
-	schema := arrow.SchemaForVectors(768)
+	schema := core.SchemaForVectors(768)
 	header := NewHeader(schema, 1000)
 
 	buf := new(bytes.Buffer)
@@ -492,17 +492,17 @@ func TestVectorDimensionLimit(t *testing.T) {
 
 // TestAllDataTypes tests serialization of all supported data types
 func TestAllDataTypes(t *testing.T) {
-	fields := []arrow.Field{
-		arrow.NewField("int32_field", arrow.PrimInt32(), false),
-		arrow.NewField("int64_field", arrow.PrimInt64(), false),
-		arrow.NewField("float32_field", arrow.PrimFloat32(), false),
-		arrow.NewField("float64_field", arrow.PrimFloat64(), false),
-		arrow.NewField("binary_field", arrow.PrimBinary(), false),
-		arrow.NewField("string_field", arrow.PrimString(), false),
-		arrow.NewField("vector_field", arrow.FixedSizeListOf(arrow.PrimFloat32(), 768), false),
+	fields := []core.Field{
+		core.NewField("int32_field", core.PrimInt32(), false),
+		core.NewField("int64_field", core.PrimInt64(), false),
+		core.NewField("float32_field", core.PrimFloat32(), false),
+		core.NewField("float64_field", core.PrimFloat64(), false),
+		core.NewField("binary_field", core.PrimBinary(), false),
+		core.NewField("string_field", core.PrimString(), false),
+		core.NewField("vector_field", core.FixedSizeListOf(core.PrimFloat32(), 768), false),
 	}
 
-	schema := arrow.NewSchema(fields, nil)
+	schema := core.NewSchema(fields, nil)
 	header := NewHeader(schema, 1000)
 
 	buf := new(bytes.Buffer)
@@ -518,14 +518,14 @@ func TestAllDataTypes(t *testing.T) {
 	}
 
 	// Verify all types
-	expectedTypes := []arrow.TypeID{
-		arrow.INT32,
-		arrow.INT64,
-		arrow.FLOAT32,
-		arrow.FLOAT64,
-		arrow.BINARY,
-		arrow.STRING,
-		arrow.FIXED_SIZE_LIST,
+	expectedTypes := []core.TypeID{
+		core.INT32,
+		core.INT64,
+		core.FLOAT32,
+		core.FLOAT64,
+		core.BINARY,
+		core.STRING,
+		core.FIXED_SIZE_LIST,
 	}
 
 	for i, expected := range expectedTypes {

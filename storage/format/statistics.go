@@ -12,7 +12,7 @@ import (
 	"math"
 
 	lerrors "github.com/wzqhbustb/vego/storage/errors"
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 )
 
 // MaxStatsValueSize is the maximum size for Min/Max values to prevent OOM attacks.
@@ -444,7 +444,7 @@ func (cs *ColumnStatistics) GetMinMaxFloat64() (min, max float64, ok bool) {
 // ComputeColumnStatistics computes statistics for an Arrow array.
 // Currently supports: Int32, Int64, Float32, Float64.
 // For unsupported types, returns statistics with only NullCount (HasMinMax=false).
-func ComputeColumnStatistics(array arrow.Array, columnIndex int32) *ColumnStatistics {
+func ComputeColumnStatistics(array core.Array, columnIndex int32) *ColumnStatistics {
 	stats := &ColumnStatistics{
 		Version:     1,
 		ColumnIndex: columnIndex,
@@ -457,13 +457,13 @@ func ComputeColumnStatistics(array arrow.Array, columnIndex int32) *ColumnStatis
 	}
 	
 	switch arr := array.(type) {
-	case *arrow.Int32Array:
+	case *core.Int32Array:
 		computeInt32Stats(arr, stats)
-	case *arrow.Int64Array:
+	case *core.Int64Array:
 		computeInt64Stats(arr, stats)
-	case *arrow.Float32Array:
+	case *core.Float32Array:
 		computeFloat32Stats(arr, stats)
-	case *arrow.Float64Array:
+	case *core.Float64Array:
 		computeFloat64Stats(arr, stats)
 	default:
 		// Unsupported type: return stats with only NullCount
@@ -473,7 +473,7 @@ func ComputeColumnStatistics(array arrow.Array, columnIndex int32) *ColumnStatis
 	return stats
 }
 
-func computeInt32Stats(arr *arrow.Int32Array, stats *ColumnStatistics) {
+func computeInt32Stats(arr *core.Int32Array, stats *ColumnStatistics) {
 	values := arr.Values()
 	
 	// Fast path: no null values
@@ -525,7 +525,7 @@ func minMaxInt32Slice(values []int32) (int32, int32) {
 	return min, max
 }
 
-func computeInt64Stats(arr *arrow.Int64Array, stats *ColumnStatistics) {
+func computeInt64Stats(arr *core.Int64Array, stats *ColumnStatistics) {
 	values := arr.Values()
 	
 	// Fast path: no null values
@@ -576,7 +576,7 @@ func minMaxInt64Slice(values []int64) (int64, int64) {
 	return min, max
 }
 
-func computeFloat32Stats(arr *arrow.Float32Array, stats *ColumnStatistics) {
+func computeFloat32Stats(arr *core.Float32Array, stats *ColumnStatistics) {
 	values := arr.Values()
 	
 	// Fast path: no null values
@@ -653,7 +653,7 @@ func minMaxFloat32Slice(values []float32) (float32, float32) {
 	return min, max
 }
 
-func computeFloat64Stats(arr *arrow.Float64Array, stats *ColumnStatistics) {
+func computeFloat64Stats(arr *core.Float64Array, stats *ColumnStatistics) {
 	values := arr.Values()
 	
 	// Fast path: no null values

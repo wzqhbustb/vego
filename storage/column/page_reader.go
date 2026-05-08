@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/encoding"
 	lerrors "github.com/wzqhbustb/vego/storage/errors"
 	"github.com/wzqhbustb/vego/storage/format"
@@ -19,7 +19,7 @@ func NewPageReader() *PageReader {
 }
 
 // ReadPage converts a Page back into an Array.
-func (r *PageReader) ReadPage(page *format.Page, dataType arrow.DataType) (arrow.Array, error) {
+func (r *PageReader) ReadPage(page *format.Page, dataType core.DataType) (core.Array, error) {
 	if page == nil {
 		return nil, lerrors.New(lerrors.ErrInvalidArgument).
 			Op("read_page").
@@ -84,7 +84,7 @@ func (r *PageReader) ReadPage(page *format.Page, dataType arrow.DataType) (arrow
 
 // ReadPageFromData 直接从编码后的数据解码 Array（用于 AsyncIO 返回的数据）
 // 注意：data 是完整的 Page 字节流（包含 30 字节 header + encoded data + optional null bitmap)
-func (r *PageReader) ReadPageFromData(data []byte, encodingType format.EncodingType, numValues int32, dataType arrow.DataType) (arrow.Array, error) {
+func (r *PageReader) ReadPageFromData(data []byte, encodingType format.EncodingType, numValues int32, dataType core.DataType) (core.Array, error) {
 	const PageHeaderSize = 30
 
 	if len(data) < PageHeaderSize {
@@ -188,25 +188,25 @@ func (r *PageReader) ReadPageFromData(data []byte, encodingType format.EncodingT
 }
 
 // createAllNullArray creates an array with all null values
-func (r *PageReader) createAllNullArray(dataType arrow.DataType, numValues int, nullBitmap []byte) (arrow.Array, error) {
-	bitmap := arrow.NewBitmapFromBytes(nullBitmap, numValues)
+func (r *PageReader) createAllNullArray(dataType core.DataType, numValues int, nullBitmap []byte) (core.Array, error) {
+	bitmap := core.NewBitmapFromBytes(nullBitmap, numValues)
 	
 	switch dataType.ID() {
-	case arrow.INT32:
+	case core.INT32:
 		values := make([]int32, numValues)
-		return arrow.NewInt32Array(values, bitmap), nil
-	case arrow.INT64:
+		return core.NewInt32Array(values, bitmap), nil
+	case core.INT64:
 		values := make([]int64, numValues)
-		return arrow.NewInt64Array(values, bitmap), nil
-	case arrow.FLOAT32:
+		return core.NewInt64Array(values, bitmap), nil
+	case core.FLOAT32:
 		values := make([]float32, numValues)
-		return arrow.NewFloat32Array(values, bitmap), nil
-	case arrow.FLOAT64:
+		return core.NewFloat32Array(values, bitmap), nil
+	case core.FLOAT64:
 		values := make([]float64, numValues)
-		return arrow.NewFloat64Array(values, bitmap), nil
-	case arrow.FIXED_SIZE_LIST:
+		return core.NewFloat64Array(values, bitmap), nil
+	case core.FIXED_SIZE_LIST:
 		// 全 null FixedSizeList 数组：需要创建嵌套的全 null 子数组
-		listType := dataType.(*arrow.FixedSizeListType)
+		listType := dataType.(*core.FixedSizeListType)
 		return r.createAllNullFixedSizeListArray(listType, numValues, bitmap)
 	default:
 		return nil, lerrors.New(lerrors.ErrUnsupportedType).
@@ -217,27 +217,27 @@ func (r *PageReader) createAllNullArray(dataType arrow.DataType, numValues int, 
 }
 
 // createAllNullFixedSizeListArray 创建全 null 的 FixedSizeList 数组
-func (r *PageReader) createAllNullFixedSizeListArray(listType *arrow.FixedSizeListType, numValues int, bitmap *arrow.Bitmap) (arrow.Array, error) {
+func (r *PageReader) createAllNullFixedSizeListArray(listType *core.FixedSizeListType, numValues int, bitmap *core.Bitmap) (core.Array, error) {
 	elemType := listType.Elem()
 	elemSize := listType.Size()
 	
 	// 创建全 null 的子数组
 	totalElemCount := numValues * elemSize
-	var elemArray arrow.Array
+	var elemArray core.Array
 	
 	switch elemType.ID() {
-	case arrow.FLOAT32:
+	case core.FLOAT32:
 		elemValues := make([]float32, totalElemCount)
-		elemArray = arrow.NewFloat32Array(elemValues, nil)
-	case arrow.FLOAT64:
+		elemArray = core.NewFloat32Array(elemValues, nil)
+	case core.FLOAT64:
 		elemValues := make([]float64, totalElemCount)
-		elemArray = arrow.NewFloat64Array(elemValues, nil)
-	case arrow.INT32:
+		elemArray = core.NewFloat64Array(elemValues, nil)
+	case core.INT32:
 		elemValues := make([]int32, totalElemCount)
-		elemArray = arrow.NewInt32Array(elemValues, nil)
-	case arrow.INT64:
+		elemArray = core.NewInt32Array(elemValues, nil)
+	case core.INT64:
 		elemValues := make([]int64, totalElemCount)
-		elemArray = arrow.NewInt64Array(elemValues, nil)
+		elemArray = core.NewInt64Array(elemValues, nil)
 	default:
 		return nil, lerrors.New(lerrors.ErrUnsupportedType).
 			Op("create_all_null_fixed_size_list").
@@ -245,5 +245,5 @@ func (r *PageReader) createAllNullFixedSizeListArray(listType *arrow.FixedSizeLi
 			Build()
 	}
 	
-	return arrow.NewFixedSizeListArray(listType, elemArray, bitmap), nil
+	return core.NewFixedSizeListArray(listType, elemArray, bitmap), nil
 }

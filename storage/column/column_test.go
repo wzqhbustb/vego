@@ -2,7 +2,7 @@ package column
 
 import (
 	"encoding/binary"
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/encoding"
 	"os"
 	"path/filepath"
@@ -77,15 +77,15 @@ func TestCalculateNumPages(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// 构建测试数组
-			var array arrow.Array
+			var array core.Array
 			if tt.useInt64 {
-				builder := arrow.NewInt64Builder()
+				builder := core.NewInt64Builder()
 				for i := 0; i < tt.arrayLen; i++ {
 					builder.Append(int64(i))
 				}
 				array = builder.NewArray()
 			} else {
-				builder := arrow.NewInt32Builder()
+				builder := core.NewInt32Builder()
 				for i := 0; i < tt.arrayLen; i++ {
 					builder.Append(int32(i))
 				}
@@ -225,7 +225,7 @@ func TestSplitArrayIntoRanges(t *testing.T) {
 func TestMergeFixedSizeListArrays(t *testing.T) {
 	// 创建测试用的FSL类型 (768维向量，类似Embedding)
 	dim := 768
-	listType := arrow.FixedSizeListOf(arrow.PrimFloat32(), dim)
+	listType := core.FixedSizeListOf(core.PrimFloat32(), dim)
 
 	tests := []struct {
 		name          string
@@ -265,12 +265,12 @@ func TestMergeFixedSizeListArrays(t *testing.T) {
 			reader := &Reader{}
 
 			// 构建多个FSL数组
-			var arrays []arrow.Array
+			var arrays []core.Array
 			expectedNullCount := 0
 
 			for arrIdx := 0; arrIdx < tt.numArrays; arrIdx++ {
 				// 使用FixedSizeListBuilder创建数组
-				builder := arrow.NewFixedSizeListBuilder(listType.(*arrow.FixedSizeListType))
+				builder := core.NewFixedSizeListBuilder(listType.(*core.FixedSizeListType))
 
 				for vecIdx := 0; vecIdx < tt.vectorsPerArr; vecIdx++ {
 					if tt.withNulls && vecIdx%3 == 0 {
@@ -287,18 +287,18 @@ func TestMergeFixedSizeListArrays(t *testing.T) {
 					}
 				}
 
-				fslArray := builder.NewArray().(*arrow.FixedSizeListArray)
+				fslArray := builder.NewArray().(*core.FixedSizeListArray)
 				arrays = append(arrays, fslArray)
 			}
 
 			// 调用被测函数
-			merged, err := reader.mergeFixedSizeListArrays(arrays, listType.(*arrow.FixedSizeListType))
+			merged, err := reader.mergeFixedSizeListArrays(arrays, listType.(*core.FixedSizeListType))
 			if err != nil {
 				t.Fatalf("mergeFixedSizeListArrays failed: %v", err)
 			}
 
 			// 验证结果
-			mergedFsl := merged.(*arrow.FixedSizeListArray)
+			mergedFsl := merged.(*core.FixedSizeListArray)
 			expectedLen := tt.numArrays * tt.vectorsPerArr
 			if mergedFsl.Len() != expectedLen {
 				t.Errorf("Expected length %d, got %d", expectedLen, mergedFsl.Len())
@@ -316,7 +316,7 @@ func TestMergeFixedSizeListArrays(t *testing.T) {
 			}
 
 			// 验证向量值正确性 (只检查非null向量)
-			values := mergedFsl.Values().(*arrow.Float32Array)
+			values := mergedFsl.Values().(*core.Float32Array)
 			for arrIdx := 0; arrIdx < tt.numArrays; arrIdx++ {
 				for vecIdx := 0; vecIdx < tt.vectorsPerArr; vecIdx++ {
 					if tt.withNulls && vecIdx%3 == 0 {
@@ -351,14 +351,14 @@ func TestEstimatePageSize(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		buildArray  func() arrow.Array
+		buildArray  func() core.Array
 		expectError bool
 		description string
 	}{
 		{
 			name: "Int32数组_无null",
-			buildArray: func() arrow.Array {
-				builder := arrow.NewInt32Builder()
+			buildArray: func() core.Array {
+				builder := core.NewInt32Builder()
 				for i := 0; i < 1000; i++ {
 					builder.Append(int32(i))
 				}
@@ -369,8 +369,8 @@ func TestEstimatePageSize(t *testing.T) {
 		},
 		{
 			name: "Int32数组_有null_应该回退到Zstd",
-			buildArray: func() arrow.Array {
-				builder := arrow.NewInt32Builder()
+			buildArray: func() core.Array {
+				builder := core.NewInt32Builder()
 				for i := 0; i < 1000; i++ {
 					if i%5 == 0 {
 						builder.AppendNull()
@@ -385,8 +385,8 @@ func TestEstimatePageSize(t *testing.T) {
 		},
 		{
 			name: "Int64数组",
-			buildArray: func() arrow.Array {
-				builder := arrow.NewInt64Builder()
+			buildArray: func() core.Array {
+				builder := core.NewInt64Builder()
 				for i := 0; i < 500; i++ {
 					builder.Append(int64(i * 1000000))
 				}
@@ -397,8 +397,8 @@ func TestEstimatePageSize(t *testing.T) {
 		},
 		{
 			name: "Float32数组",
-			buildArray: func() arrow.Array {
-				builder := arrow.NewFloat32Builder()
+			buildArray: func() core.Array {
+				builder := core.NewFloat32Builder()
 				for i := 0; i < 1000; i++ {
 					builder.Append(float32(i) * 0.5)
 				}
@@ -409,8 +409,8 @@ func TestEstimatePageSize(t *testing.T) {
 		},
 		{
 			name: "Float64数组",
-			buildArray: func() arrow.Array {
-				builder := arrow.NewFloat64Builder()
+			buildArray: func() core.Array {
+				builder := core.NewFloat64Builder()
 				for i := 0; i < 500; i++ {
 					builder.Append(float64(i) * 1.5)
 				}
@@ -421,10 +421,10 @@ func TestEstimatePageSize(t *testing.T) {
 		},
 		{
 			name: "FSL向量数组_强制Zstd",
-			buildArray: func() arrow.Array {
+			buildArray: func() core.Array {
 				dim := 768
-				listType := arrow.FixedSizeListOf(arrow.PrimFloat32(), dim)
-				childBuilder := arrow.NewFloat32Builder()
+				listType := core.FixedSizeListOf(core.PrimFloat32(), dim)
+				childBuilder := core.NewFloat32Builder()
 
 				for i := 0; i < 10; i++ { // 10个向量
 					for d := 0; d < dim; d++ {
@@ -432,8 +432,8 @@ func TestEstimatePageSize(t *testing.T) {
 					}
 				}
 				childArray := childBuilder.NewArray()
-				return arrow.NewFixedSizeListArray(
-					listType.(*arrow.FixedSizeListType),
+				return core.NewFixedSizeListArray(
+					listType.(*core.FixedSizeListType),
 					childArray,
 					nil,
 				)
@@ -443,8 +443,8 @@ func TestEstimatePageSize(t *testing.T) {
 		},
 		{
 			name: "空数组_应该报错",
-			buildArray: func() arrow.Array {
-				builder := arrow.NewInt32Builder()
+			buildArray: func() core.Array {
+				builder := core.NewInt32Builder()
 				return builder.NewArray() // 空
 			},
 			expectError: true,
@@ -452,7 +452,7 @@ func TestEstimatePageSize(t *testing.T) {
 		},
 		{
 			name: "nil数组_应该报错",
-			buildArray: func() arrow.Array {
+			buildArray: func() core.Array {
 				return nil
 			},
 			expectError: true,
@@ -487,15 +487,15 @@ func TestEstimatePageSize(t *testing.T) {
 			var originalSize int
 			if array != nil {
 				switch arr := array.(type) {
-				case *arrow.Int32Array:
+				case *core.Int32Array:
 					originalSize = arr.Len() * 4
-				case *arrow.Int64Array:
+				case *core.Int64Array:
 					originalSize = arr.Len() * 8
-				case *arrow.Float32Array:
+				case *core.Float32Array:
 					originalSize = arr.Len() * 4
-				case *arrow.Float64Array:
+				case *core.Float64Array:
 					originalSize = arr.Len() * 8
-				case *arrow.FixedSizeListArray:
+				case *core.FixedSizeListArray:
 					originalSize = arr.Len() * arr.ListSize() * 4
 				}
 			}
@@ -517,7 +517,7 @@ func TestEstimatePageSize_WithNullsFallback(t *testing.T) {
 	writer := NewPageWriter(factory)
 
 	// 创建有null的数组 (会触发回退到Zstd)
-	builder := arrow.NewInt32Builder()
+	builder := core.NewInt32Builder()
 	for i := 0; i < 1000; i++ {
 		if i%10 == 0 {
 			builder.AppendNull()

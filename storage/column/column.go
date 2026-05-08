@@ -2,7 +2,7 @@ package column
 
 import (
 	"fmt"
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	lerrors "github.com/wzqhbustb/vego/storage/errors"
 	"github.com/wzqhbustb/vego/storage/format"
 )
@@ -11,7 +11,7 @@ import (
 type ColumnMetadata struct {
 	Index     int32               // Column index in schema
 	Name      string              // Column name
-	DataType  arrow.DataType      // Column data type
+	DataType  core.DataType      // Column data type
 	NumPages  int32               // Number of pages for this column
 	NumValues int64               // Total number of values
 	Encoding  format.EncodingType // Encoding type used
@@ -65,7 +65,7 @@ func newColumnError(op, column, message string) error {
 }
 
 // validateArray validates that an array is suitable for serialization
-func validateArray(array arrow.Array, field arrow.Field) error {
+func validateArray(array core.Array, field core.Field) error {
 	if array == nil {
 		return newColumnError("validate", field.Name, "array is nil")
 	}
@@ -83,7 +83,7 @@ func validateArray(array arrow.Array, field arrow.Field) error {
 }
 
 // calculateNumPages calculates how many pages are needed for an array
-func calculateNumPages(array arrow.Array, pageSize int32) int32 {
+func calculateNumPages(array core.Array, pageSize int32) int32 {
 	// Estimate bytes per value (rough approximation)
 	bytesPerValue := estimateBytesPerValue(array.DataType())
 	totalBytes := int64(array.Len()) * int64(bytesPerValue)
@@ -101,22 +101,22 @@ func calculateNumPages(array arrow.Array, pageSize int32) int32 {
 }
 
 // estimateBytesPerValue estimates bytes per value for a data type
-func estimateBytesPerValue(dt arrow.DataType) int32 {
+func estimateBytesPerValue(dt core.DataType) int32 {
 	switch t := dt.(type) {
-	case *arrow.Int32Type:
+	case *core.Int32Type:
 		return 4
-	case *arrow.Int64Type:
+	case *core.Int64Type:
 		return 8
-	case *arrow.Float32Type:
+	case *core.Float32Type:
 		return 4
-	case *arrow.Float64Type:
+	case *core.Float64Type:
 		return 8
-	case *arrow.FixedSizeListType:
+	case *core.FixedSizeListType:
 		elemSize := estimateBytesPerValue(t.Elem())
 		return elemSize * int32(t.Size())
-	case *arrow.StringType:
+	case *core.StringType:
 		return 16 // Average estimate
-	case *arrow.BinaryType:
+	case *core.BinaryType:
 		return 16 // Average estimate
 	default:
 		return 8 // Default estimate

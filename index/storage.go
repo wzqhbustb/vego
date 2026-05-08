@@ -2,7 +2,7 @@ package hnsw
 
 import (
 	"fmt"
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/column"
 	"github.com/wzqhbustb/vego/storage/encoding" // [NEW] Import encoding package
 	"os"
@@ -15,11 +15,11 @@ func defaultEncoderFactory() *encoding.EncoderFactory {
 }
 
 // SchemaForNodes creates schema for node storage
-func SchemaForNodes(dimension int) *arrow.Schema {
-	return arrow.NewSchema([]arrow.Field{
-		arrow.NewField("id", arrow.PrimInt32(), false),
-		arrow.NewField("vector", arrow.VectorType(dimension), false),
-		arrow.NewField("level", arrow.PrimInt32(), false),
+func SchemaForNodes(dimension int) *core.Schema {
+	return core.NewSchema([]core.Field{
+		core.NewField("id", core.PrimInt32(), false),
+		core.NewField("vector", core.VectorType(dimension), false),
+		core.NewField("level", core.PrimInt32(), false),
 	}, map[string]string{
 		"purpose":   "hnsw_nodes",
 		"dimension": fmt.Sprintf("%d", dimension),
@@ -27,27 +27,27 @@ func SchemaForNodes(dimension int) *arrow.Schema {
 }
 
 // SchemaForConnections creates schema for connection storage
-func SchemaForConnections() *arrow.Schema {
-	return arrow.NewSchema([]arrow.Field{
-		arrow.NewField("node_id", arrow.PrimInt32(), false),
-		arrow.NewField("layer", arrow.PrimInt32(), false),
-		arrow.NewField("neighbor_id", arrow.PrimInt32(), false),
+func SchemaForConnections() *core.Schema {
+	return core.NewSchema([]core.Field{
+		core.NewField("node_id", core.PrimInt32(), false),
+		core.NewField("layer", core.PrimInt32(), false),
+		core.NewField("neighbor_id", core.PrimInt32(), false),
 	}, map[string]string{
 		"purpose": "hnsw_connections",
 	})
 }
 
 // SchemaForMetadata creates schema for metadata storage (using Int32 arrays)
-func SchemaForMetadata() *arrow.Schema {
-	return arrow.NewSchema([]arrow.Field{
-		arrow.NewField("M", arrow.PrimInt32(), false),
-		arrow.NewField("Mmax", arrow.PrimInt32(), false),
-		arrow.NewField("Mmax0", arrow.PrimInt32(), false),
-		arrow.NewField("efConstruction", arrow.PrimInt32(), false),
-		arrow.NewField("dimension", arrow.PrimInt32(), false),
-		arrow.NewField("entryPoint", arrow.PrimInt32(), false),
-		arrow.NewField("maxLevel", arrow.PrimInt32(), false),
-		arrow.NewField("numNodes", arrow.PrimInt32(), false),
+func SchemaForMetadata() *core.Schema {
+	return core.NewSchema([]core.Field{
+		core.NewField("M", core.PrimInt32(), false),
+		core.NewField("Mmax", core.PrimInt32(), false),
+		core.NewField("Mmax0", core.PrimInt32(), false),
+		core.NewField("efConstruction", core.PrimInt32(), false),
+		core.NewField("dimension", core.PrimInt32(), false),
+		core.NewField("entryPoint", core.PrimInt32(), false),
+		core.NewField("maxLevel", core.PrimInt32(), false),
+		core.NewField("numNodes", core.PrimInt32(), false),
 	}, map[string]string{
 		"purpose": "hnsw_metadata",
 	})
@@ -110,16 +110,16 @@ func (h *HNSWIndex) saveNodes(filename string) error {
 	}
 
 	// Create Arrow arrays
-	idArray := arrow.NewInt32Array(ids, nil)
-	vectorArray := arrow.NewFloat32Array(vectors, nil)
-	levelArray := arrow.NewInt32Array(levels, nil)
+	idArray := core.NewInt32Array(ids, nil)
+	vectorArray := core.NewFloat32Array(vectors, nil)
+	levelArray := core.NewInt32Array(levels, nil)
 
 	// Create FixedSizeListArray for vectors
-	vectorType := arrow.VectorType(h.dimension).(*arrow.FixedSizeListType)
-	vectorListArray := arrow.NewFixedSizeListArray(vectorType, vectorArray, nil)
+	vectorType := core.VectorType(h.dimension).(*core.FixedSizeListType)
+	vectorListArray := core.NewFixedSizeListArray(vectorType, vectorArray, nil)
 
 	// Create RecordBatch
-	batch, err := arrow.NewRecordBatch(schema, numNodes, []arrow.Array{
+	batch, err := core.NewRecordBatch(schema, numNodes, []core.Array{
 		idArray,
 		vectorListArray,
 		levelArray,
@@ -170,12 +170,12 @@ func (h *HNSWIndex) saveConnections(filename string) error {
 	}
 
 	// Create Arrow arrays
-	nodeIDArray := arrow.NewInt32Array(nodeIDs, nil)
-	layerArray := arrow.NewInt32Array(layers, nil)
-	neighborIDArray := arrow.NewInt32Array(neighborIDs, nil)
+	nodeIDArray := core.NewInt32Array(nodeIDs, nil)
+	layerArray := core.NewInt32Array(layers, nil)
+	neighborIDArray := core.NewInt32Array(neighborIDs, nil)
 
 	// Create RecordBatch
-	batch, err := arrow.NewRecordBatch(schema, len(nodeIDs), []arrow.Array{
+	batch, err := core.NewRecordBatch(schema, len(nodeIDs), []core.Array{
 		nodeIDArray,
 		layerArray,
 		neighborIDArray,
@@ -214,17 +214,17 @@ func (h *HNSWIndex) saveMetadata(filename string) error {
 	}
 
 	// Create Arrow arrays (each field is an array of length 1)
-	mArray := arrow.NewInt32Array([]int32{metadata[0]}, nil)
-	mmaxArray := arrow.NewInt32Array([]int32{metadata[1]}, nil)
-	mmax0Array := arrow.NewInt32Array([]int32{metadata[2]}, nil)
-	efConstructionArray := arrow.NewInt32Array([]int32{metadata[3]}, nil)
-	dimensionArray := arrow.NewInt32Array([]int32{metadata[4]}, nil)
-	entryPointArray := arrow.NewInt32Array([]int32{metadata[5]}, nil)
-	maxLevelArray := arrow.NewInt32Array([]int32{metadata[6]}, nil)
-	numNodesArray := arrow.NewInt32Array([]int32{metadata[7]}, nil)
+	mArray := core.NewInt32Array([]int32{metadata[0]}, nil)
+	mmaxArray := core.NewInt32Array([]int32{metadata[1]}, nil)
+	mmax0Array := core.NewInt32Array([]int32{metadata[2]}, nil)
+	efConstructionArray := core.NewInt32Array([]int32{metadata[3]}, nil)
+	dimensionArray := core.NewInt32Array([]int32{metadata[4]}, nil)
+	entryPointArray := core.NewInt32Array([]int32{metadata[5]}, nil)
+	maxLevelArray := core.NewInt32Array([]int32{metadata[6]}, nil)
+	numNodesArray := core.NewInt32Array([]int32{metadata[7]}, nil)
 
 	// Create RecordBatch
-	batch, err := arrow.NewRecordBatch(schema, 1, []arrow.Array{
+	batch, err := core.NewRecordBatch(schema, 1, []core.Array{
 		mArray,
 		mmaxArray,
 		mmax0Array,
@@ -302,7 +302,7 @@ func loadMetadata(filename string) ([]int32, error) {
 	// Extract all metadata values
 	metadata := make([]int32, 8)
 	for i := 0; i < 8; i++ {
-		array := batch.Column(i).(*arrow.Int32Array)
+		array := batch.Column(i).(*core.Int32Array)
 		metadata[i] = array.Value(0)
 	}
 
@@ -322,12 +322,12 @@ func (h *HNSWIndex) loadNodes(filename string) error {
 		return fmt.Errorf("read nodes failed: %w", err)
 	}
 
-	idArray := batch.Column(0).(*arrow.Int32Array)
-	vectorListArray := batch.Column(1).(*arrow.FixedSizeListArray)
-	levelArray := batch.Column(2).(*arrow.Int32Array)
+	idArray := batch.Column(0).(*core.Int32Array)
+	vectorListArray := batch.Column(1).(*core.FixedSizeListArray)
+	levelArray := batch.Column(2).(*core.Int32Array)
 
 	// Get underlying float array
-	vectorArray := vectorListArray.Values().(*arrow.Float32Array)
+	vectorArray := vectorListArray.Values().(*core.Float32Array)
 	vectorValues := vectorArray.Values()
 
 	// Verify continuity of node IDs
@@ -379,9 +379,9 @@ func (h *HNSWIndex) loadConnections(filename string) error {
 		return fmt.Errorf("read connections failed: %w", err)
 	}
 
-	nodeIDArray := batch.Column(0).(*arrow.Int32Array)
-	layerArray := batch.Column(1).(*arrow.Int32Array)
-	neighborIDArray := batch.Column(2).(*arrow.Int32Array)
+	nodeIDArray := batch.Column(0).(*core.Int32Array)
+	layerArray := batch.Column(1).(*core.Int32Array)
+	neighborIDArray := batch.Column(2).(*core.Int32Array)
 
 	numConnections := nodeIDArray.Len()
 

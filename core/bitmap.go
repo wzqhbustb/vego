@@ -1,4 +1,4 @@
-package arrow
+package core
 
 import "math/bits"
 

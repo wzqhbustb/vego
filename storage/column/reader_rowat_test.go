@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/encoding"
 	"github.com/wzqhbustb/vego/storage/format"
 )
@@ -24,10 +24,10 @@ func TestReadRowAtBasic(t *testing.T) {
 
 	// Create test file with RowIndex
 	filename := filepath.Join(tmpDir, "test.lance")
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "id", Type: arrow.PrimInt64(), Nullable: false},
-		{Name: "vector", Type: arrow.VectorType(4), Nullable: false},
-		{Name: "timestamp", Type: arrow.PrimInt64(), Nullable: false},
+	schema := core.NewSchema([]core.Field{
+		{Name: "id", Type: core.PrimInt64(), Nullable: false},
+		{Name: "vector", Type: core.VectorType(4), Nullable: false},
+		{Name: "timestamp", Type: core.PrimInt64(), Nullable: false},
 	}, nil)
 
 	factory := encoding.NewEncoderFactory(3)
@@ -37,11 +37,11 @@ func TestReadRowAtBasic(t *testing.T) {
 	}
 
 	// Build data: 5 rows
-	idBuilder := arrow.NewInt64Builder()
-	vectorBuilder := arrow.NewFixedSizeListBuilder(
-		arrow.FixedSizeListOf(arrow.PrimFloat32(), 4).(*arrow.FixedSizeListType),
+	idBuilder := core.NewInt64Builder()
+	vectorBuilder := core.NewFixedSizeListBuilder(
+		core.FixedSizeListOf(core.PrimFloat32(), 4).(*core.FixedSizeListType),
 	)
-	timestampBuilder := arrow.NewInt64Builder()
+	timestampBuilder := core.NewInt64Builder()
 
 	expectedIDs := []int64{100, 200, 300, 400, 500}
 	expectedVectors := [][]float32{
@@ -59,7 +59,7 @@ func TestReadRowAtBasic(t *testing.T) {
 		timestampBuilder.Append(expectedTimestamps[i])
 	}
 
-	batch, err := arrow.NewRecordBatch(schema, 5, []arrow.Array{
+	batch, err := core.NewRecordBatch(schema, 5, []core.Array{
 		idBuilder.NewArray(),
 		vectorBuilder.NewArray(),
 		timestampBuilder.NewArray(),
@@ -132,8 +132,8 @@ func TestReadRowAtBounds(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	filename := filepath.Join(tmpDir, "test.lance")
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "id", Type: arrow.PrimInt64(), Nullable: false},
+	schema := core.NewSchema([]core.Field{
+		{Name: "id", Type: core.PrimInt64(), Nullable: false},
 	}, nil)
 
 	factory := encoding.NewEncoderFactory(3)
@@ -143,12 +143,12 @@ func TestReadRowAtBounds(t *testing.T) {
 	}
 
 	// Write 3 rows
-	idBuilder := arrow.NewInt64Builder()
+	idBuilder := core.NewInt64Builder()
 	for i := 0; i < 3; i++ {
 		idBuilder.Append(int64(i + 1))
 	}
 
-	batch, _ := arrow.NewRecordBatch(schema, 3, []arrow.Array{idBuilder.NewArray()})
+	batch, _ := core.NewRecordBatch(schema, 3, []core.Array{idBuilder.NewArray()})
 	writer.WriteRecordBatch(batch)
 	for i := 0; i < 3; i++ {
 		writer.AddRowID(string(rune('a'+i)), int64(i))
@@ -199,8 +199,8 @@ func TestReadRowAtEmptyFile(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	filename := filepath.Join(tmpDir, "test.lance")
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "id", Type: arrow.PrimInt64(), Nullable: false},
+	schema := core.NewSchema([]core.Field{
+		{Name: "id", Type: core.PrimInt64(), Nullable: false},
 	}, nil)
 
 	factory := encoding.NewEncoderFactory(3)
@@ -210,8 +210,8 @@ func TestReadRowAtEmptyFile(t *testing.T) {
 	}
 
 	// Write empty batch
-	idBuilder := arrow.NewInt64Builder()
-	batch, _ := arrow.NewRecordBatch(schema, 0, []arrow.Array{idBuilder.NewArray()})
+	idBuilder := core.NewInt64Builder()
+	batch, _ := core.NewRecordBatch(schema, 0, []core.Array{idBuilder.NewArray()})
 	writer.WriteRecordBatch(batch)
 	writer.Close()
 
@@ -239,9 +239,9 @@ func TestReadRowAtWithCache(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	filename := filepath.Join(tmpDir, "test.lance")
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "id", Type: arrow.PrimInt64(), Nullable: false},
-		{Name: "value", Type: arrow.PrimFloat32(), Nullable: false},
+	schema := core.NewSchema([]core.Field{
+		{Name: "id", Type: core.PrimInt64(), Nullable: false},
+		{Name: "value", Type: core.PrimFloat32(), Nullable: false},
 	}, nil)
 
 	factory := encoding.NewEncoderFactory(3)
@@ -251,14 +251,14 @@ func TestReadRowAtWithCache(t *testing.T) {
 	}
 
 	// Write 10 rows
-	idBuilder := arrow.NewInt64Builder()
-	valueBuilder := arrow.NewFloat32Builder()
+	idBuilder := core.NewInt64Builder()
+	valueBuilder := core.NewFloat32Builder()
 	for i := 0; i < 10; i++ {
 		idBuilder.Append(int64(i))
 		valueBuilder.Append(float32(i * 10))
 	}
 
-	batch, _ := arrow.NewRecordBatch(schema, 10, []arrow.Array{
+	batch, _ := core.NewRecordBatch(schema, 10, []core.Array{
 		idBuilder.NewArray(),
 		valueBuilder.NewArray(),
 	})
@@ -313,8 +313,8 @@ func TestReadRowAtConsistency(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	filename := filepath.Join(tmpDir, "test.lance")
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "id", Type: arrow.PrimInt64(), Nullable: false},
+	schema := core.NewSchema([]core.Field{
+		{Name: "id", Type: core.PrimInt64(), Nullable: false},
 	}, nil)
 
 	factory := encoding.NewEncoderFactory(3)
@@ -324,12 +324,12 @@ func TestReadRowAtConsistency(t *testing.T) {
 	}
 
 	// Write 100 rows
-	idBuilder := arrow.NewInt64Builder()
+	idBuilder := core.NewInt64Builder()
 	for i := 0; i < 100; i++ {
 		idBuilder.Append(int64(i * i)) // Use squares to verify correctness
 	}
 
-	batch, _ := arrow.NewRecordBatch(schema, 100, []arrow.Array{idBuilder.NewArray()})
+	batch, _ := core.NewRecordBatch(schema, 100, []core.Array{idBuilder.NewArray()})
 	writer.WriteRecordBatch(batch)
 	for i := 0; i < 100; i++ {
 		writer.AddRowID(fmt.Sprintf("doc-%d", i), int64(i))

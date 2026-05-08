@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/format"
 )
 
@@ -53,7 +53,7 @@ func TestBitPacking_Roundtrip(t *testing.T) {
 				// Create a pattern to test different values
 				values[i] = int32(uint64(i) % (maxValue + 1))
 			}
-			array := arrow.NewInt32Array(values, nil)
+			array := core.NewInt32Array(values, nil)
 
 			encoded, err := encoder.Encode(array)
 			if err != nil {
@@ -70,12 +70,12 @@ func TestBitPacking_Roundtrip(t *testing.T) {
 				t.Errorf("Expected encoded length %d, got %d", 1+4+expectedBytes, len(encoded.Data))
 			}
 
-			decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32(), nil, encoded.NumValues)
+			decoded, err := decoder.Decode(encoded.Data, core.PrimInt32(), nil, encoded.NumValues)
 			if err != nil {
 				t.Fatalf("Decode failed: %v", err)
 			}
 
-			result := decoded.(*arrow.Int32Array)
+			result := decoded.(*core.Int32Array)
 			if result.Len() != len(values) {
 				t.Fatalf("Expected %d values, got %d", len(values), result.Len())
 			}
@@ -100,19 +100,19 @@ func TestBitPackingEncoder_Encode_Int64(t *testing.T) {
 	for i := range values {
 		values[i] = int64(i * 100)
 	}
-	array := arrow.NewInt64Array(values, nil)
+	array := core.NewInt64Array(values, nil)
 
 	encoded, err := encoder.Encode(array)
 	if err != nil {
 		t.Fatalf("Encode failed: %v", err)
 	}
 
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt64(), nil, encoded.NumValues)
+	decoded, err := decoder.Decode(encoded.Data, core.PrimInt64(), nil, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
 
-	result := decoded.(*arrow.Int64Array)
+	result := decoded.(*core.Int64Array)
 	for i, expected := range values {
 		if result.Value(i) != expected {
 			t.Errorf("Value mismatch at %d", i)
@@ -126,7 +126,7 @@ func TestBitPackingEncoder_WithNulls(t *testing.T) {
 	decoder := NewBitPackingDecoder()
 
 	// 创建包含 null 的数组
-	builder := arrow.NewInt32Builder()
+	builder := core.NewInt32Builder()
 	expectedValues := make([]int32, 0, 5)
 	for i := 0; i < 10; i++ {
 		if i%2 == 0 {
@@ -154,12 +154,12 @@ func TestBitPackingEncoder_WithNulls(t *testing.T) {
 	}
 
 	// 解码并验证
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32(), encoded.NullBitmap, encoded.NumValues)
+	decoded, err := decoder.Decode(encoded.Data, core.PrimInt32(), encoded.NullBitmap, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
 
-	result := decoded.(*arrow.Int32Array)
+	result := decoded.(*core.Int32Array)
 	if result.Len() != 10 {
 		t.Fatalf("Expected 10 values, got %d", result.Len())
 	}
@@ -186,7 +186,7 @@ func TestBitPackingEncoder_UnsupportedType(t *testing.T) {
 
 	// Float32 不支持
 	values := []float32{1.0, 2.0, 3.0}
-	array := arrow.NewFloat32Array(values, nil)
+	array := core.NewFloat32Array(values, nil)
 
 	_, err := encoder.Encode(array)
 	if err == nil {
@@ -198,7 +198,7 @@ func TestBitPackingEncoder_ValueTooLarge(t *testing.T) {
 	encoder := NewBitPackingEncoder(4) // 只能表示 0-15
 
 	values := []int32{1, 2, 3, 100} // 100 > 15
-	array := arrow.NewInt32Array(values, nil)
+	array := core.NewInt32Array(values, nil)
 
 	_, err := encoder.Encode(array)
 	if err == nil {
@@ -208,7 +208,7 @@ func TestBitPackingEncoder_ValueTooLarge(t *testing.T) {
 
 func TestBitPackingEncoder_NegativeValue(t *testing.T) {
 	encoder := NewBitPackingEncoder(8)
-	array := arrow.NewInt32Array([]int32{1, 2, -3}, nil)
+	array := core.NewInt32Array([]int32{1, 2, -3}, nil)
 	_, err := encoder.Encode(array)
 	if err == nil {
 		t.Error("Expected error for negative value")
@@ -219,7 +219,7 @@ func TestBitPackingEncoder_EmptyArray(t *testing.T) {
 	encoder := NewBitPackingEncoder(8)
 
 	values := []int32{}
-	array := arrow.NewInt32Array(values, nil)
+	array := core.NewInt32Array(values, nil)
 
 	_, err := encoder.Encode(array)
 	if err != ErrEmptyArray {
@@ -230,13 +230,13 @@ func TestBitPackingEncoder_EmptyArray(t *testing.T) {
 func TestBitPackingEncoder_SupportsType(t *testing.T) {
 	encoder := NewBitPackingEncoder(8)
 
-	if !encoder.SupportsType(arrow.PrimInt32()) {
+	if !encoder.SupportsType(core.PrimInt32()) {
 		t.Error("Should support Int32")
 	}
-	if !encoder.SupportsType(arrow.PrimInt64()) {
+	if !encoder.SupportsType(core.PrimInt64()) {
 		t.Error("Should support Int64")
 	}
-	if encoder.SupportsType(arrow.PrimFloat32()) {
+	if encoder.SupportsType(core.PrimFloat32()) {
 		t.Error("Should not support Float32")
 	}
 }
@@ -245,7 +245,7 @@ func TestBitPackingEncoder_EstimateSize(t *testing.T) {
 	encoder := NewBitPackingEncoder(8)
 
 	values := make([]int32, 100)
-	array := arrow.NewInt32Array(values, nil)
+	array := core.NewInt32Array(values, nil)
 
 	estimated := encoder.EstimateSize(array)
 	// 100 values * 8 bits = 100 bytes, plus header
@@ -258,7 +258,7 @@ func TestBitPackingDecoder_CorruptedData(t *testing.T) {
 	decoder := NewBitPackingDecoder()
 
 	// Data too short for header
-	_, err := decoder.Decode([]byte{0x01, 0x02, 0x03}, arrow.PrimInt32(), nil, 0)
+	_, err := decoder.Decode([]byte{0x01, 0x02, 0x03}, core.PrimInt32(), nil, 0)
 	if err == nil {
 		t.Error("Expected error for corrupted data (too short)")
 	}
@@ -267,7 +267,7 @@ func TestBitPackingDecoder_CorruptedData(t *testing.T) {
 	// Header: bitWidth=8, len=100. Data: only 1 byte.
 	header := []byte{8, 100, 0, 0, 0}
 	data := append(header, 0xAA)
-	_, err = decoder.Decode(data, arrow.PrimInt32(), nil, 0)
+	_, err = decoder.Decode(data, core.PrimInt32(), nil, 0)
 	if err == nil {
 		t.Error("Expected error for corrupted data (length mismatch)")
 	}
@@ -282,7 +282,7 @@ func BenchmarkBitPackingEncoder_Encode(b *testing.B) {
 	for i := range values {
 		values[i] = int32(i) % maxValue
 	}
-	array := arrow.NewInt32Array(values, nil)
+	array := core.NewInt32Array(values, nil)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -299,13 +299,13 @@ func BenchmarkBitPackingDecoder_Decode(b *testing.B) {
 	for i := range values {
 		values[i] = int32(i) % maxValue
 	}
-	array := arrow.NewInt32Array(values, nil)
+	array := core.NewInt32Array(values, nil)
 	encoded, _ := encoder.Encode(array)
 
 	decoder := NewBitPackingDecoder()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		decoder.Decode(encoded.Data, arrow.PrimInt32(), nil, encoded.NumValues)
+		decoder.Decode(encoded.Data, core.PrimInt32(), nil, encoded.NumValues)
 	}
 }

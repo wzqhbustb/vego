@@ -3,7 +3,7 @@ package encoding
 import (
 	"math"
 	"math/bits"
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	time "time"
 
 	lerrors "github.com/wzqhbustb/vego/storage/errors"
@@ -49,7 +49,7 @@ type Statistics struct {
 	NumValues int64
 
 	// Metadata
-	DataType   arrow.TypeID // Data type for validation
+	DataType   core.TypeID // Data type for validation
 	ComputedAt time.Time    // When statistics were computed
 	IsComplete bool         // Whether full computation or sampling was used
 
@@ -72,7 +72,7 @@ type Statistics struct {
 }
 
 // ComputeStatistics computes all relevant statistics for an Arrow array
-func ComputeStatistics(array arrow.Array) *Statistics {
+func ComputeStatistics(array core.Array) *Statistics {
 	stats := &Statistics{
 		NumValues:  int64(array.Len()),
 		DataType:   array.DataType().ID(),
@@ -88,24 +88,24 @@ func ComputeStatistics(array arrow.Array) *Statistics {
 
 	// Compute type-specific statistics
 	switch arr := array.(type) {
-	case *arrow.Int32Array:
+	case *core.Int32Array:
 		computeFixedWidthStats(stats, arr.Data().Buffers()[0], 32, arr.Len())
-	case *arrow.Int64Array:
+	case *core.Int64Array:
 		computeFixedWidthStats(stats, arr.Data().Buffers()[0], 64, arr.Len())
-	case *arrow.Float32Array:
+	case *core.Float32Array:
 		computeFloat32Stats(stats, arr.Data().Buffers()[0], arr.Len())
-	case *arrow.Float64Array:
+	case *core.Float64Array:
 		computeFloat64Stats(stats, arr.Data().Buffers()[0], arr.Len())
-	case *arrow.FixedSizeListArray:
+	case *core.FixedSizeListArray:
 		// For FSL (vectors), compute stats on the flattened values
 		values := arr.Values()
 		// 更新 NumValues 为展平后的值数量，以保持统计信息一致性
 		stats.NumValues = int64(values.Len())
 
 		switch valArr := values.(type) {
-		case *arrow.Float32Array:
+		case *core.Float32Array:
 			computeFloat32Stats(stats, valArr.Data().Buffers()[0], valArr.Len())
-		case *arrow.Int32Array:
+		case *core.Int32Array:
 			computeFixedWidthStats(stats, valArr.Data().Buffers()[0], 32, valArr.Len())
 		}
 	}
@@ -114,7 +114,7 @@ func ComputeStatistics(array arrow.Array) *Statistics {
 }
 
 // computeFixedWidthStats computes statistics for fixed-width integer types
-func computeFixedWidthStats(stats *Statistics, buffer *arrow.Buffer, bitsPerValue int, numValues int) {
+func computeFixedWidthStats(stats *Statistics, buffer *core.Buffer, bitsPerValue int, numValues int) {
 	data := buffer.Bytes()
 
 	// Data size
@@ -209,7 +209,7 @@ func computeFixedWidthStats(stats *Statistics, buffer *arrow.Buffer, bitsPerValu
 }
 
 // computeFloat32Stats computes statistics for float32 arrays
-func computeFloat32Stats(stats *Statistics, buffer *arrow.Buffer, numValues int) {
+func computeFloat32Stats(stats *Statistics, buffer *core.Buffer, numValues int) {
 	data := buffer.Bytes()
 
 	dataSize := uint64(len(data))
@@ -226,7 +226,7 @@ func computeFloat32Stats(stats *Statistics, buffer *arrow.Buffer, numValues int)
 }
 
 // computeFloat64Stats computes statistics for float64 arrays
-func computeFloat64Stats(stats *Statistics, buffer *arrow.Buffer, numValues int) {
+func computeFloat64Stats(stats *Statistics, buffer *core.Buffer, numValues int) {
 	data := buffer.Bytes()
 
 	dataSize := uint64(len(data))

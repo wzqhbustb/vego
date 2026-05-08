@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	lerrors "github.com/wzqhbustb/vego/storage/errors"
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/format"
 )
 
@@ -29,15 +29,15 @@ func (e *BitPackingEncoder) Type() format.EncodingType {
 	return format.EncodingBitPacked
 }
 
-func (e *BitPackingEncoder) Encode(array arrow.Array) (*EncodedData, error) {
+func (e *BitPackingEncoder) Encode(array core.Array) (*EncodedData, error) {
 	if array.Len() == 0 {
 		return nil, ErrEmptyArray
 	}
 
 	switch arr := array.(type) {
-	case *arrow.Int32Array:
+	case *core.Int32Array:
 		return e.encodeInt32(arr)
-	case *arrow.Int64Array:
+	case *core.Int64Array:
 		return e.encodeInt64(arr)
 	default:
 		return nil, lerrors.New(lerrors.ErrUnsupportedType).
@@ -47,7 +47,7 @@ func (e *BitPackingEncoder) Encode(array arrow.Array) (*EncodedData, error) {
 	}
 }
 
-func (e *BitPackingEncoder) encodeInt32(arr *arrow.Int32Array) (*EncodedData, error) {
+func (e *BitPackingEncoder) encodeInt32(arr *core.Int32Array) (*EncodedData, error) {
 	numValues := arr.Len()
 	nullN := arr.NullN()
 
@@ -110,7 +110,7 @@ func (e *BitPackingEncoder) encodeInt32(arr *arrow.Int32Array) (*EncodedData, er
 	}, nil
 }
 
-func (e *BitPackingEncoder) encodeInt64(arr *arrow.Int64Array) (*EncodedData, error) {
+func (e *BitPackingEncoder) encodeInt64(arr *core.Int64Array) (*EncodedData, error) {
 	numValues := arr.Len()
 	nullN := arr.NullN()
 
@@ -255,7 +255,7 @@ func packBitsInt64(values []int64, bitWidth uint8) []byte {
 	return result
 }
 
-func (e *BitPackingEncoder) EstimateSize(array arrow.Array) int {
+func (e *BitPackingEncoder) EstimateSize(array core.Array) int {
 	numValues := array.Len()
 	nullN := array.NullN()
 	// Estimate non-null values
@@ -264,7 +264,7 @@ func (e *BitPackingEncoder) EstimateSize(array arrow.Array) int {
 	return 5 + (estimatedNonNull*int(e.bitWidth)+7)/8
 }
 
-func (e *BitPackingEncoder) SupportsType(dtype arrow.DataType) bool {
+func (e *BitPackingEncoder) SupportsType(dtype core.DataType) bool {
 	id := dtype.ID()
-	return id == arrow.INT32 || id == arrow.INT64
+	return id == core.INT32 || id == core.INT64
 }

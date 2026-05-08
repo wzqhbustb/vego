@@ -15,7 +15,7 @@ import (
 	"time"
 
 	hnsw "github.com/wzqhbustb/vego/index"
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/column"
 	"github.com/wzqhbustb/vego/storage/encoding"
 	"github.com/wzqhbustb/vego/storage/format"
@@ -181,11 +181,11 @@ func hashID(id string) int64 {
 }
 
 // createSchema creates the Arrow schema for vector storage
-func (s *DocumentStorage) createSchema() *arrow.Schema {
-	return arrow.NewSchema([]arrow.Field{
-		{Name: "id_hash", Type: arrow.PrimInt64(), Nullable: false},
-		{Name: "vector", Type: arrow.VectorType(s.dimension), Nullable: false},
-		{Name: "timestamp", Type: arrow.PrimInt64(), Nullable: false},
+func (s *DocumentStorage) createSchema() *core.Schema {
+	return core.NewSchema([]core.Field{
+		{Name: "id_hash", Type: core.PrimInt64(), Nullable: false},
+		{Name: "vector", Type: core.VectorType(s.dimension), Nullable: false},
+		{Name: "timestamp", Type: core.PrimInt64(), Nullable: false},
 	}, nil)
 }
 
@@ -938,7 +938,7 @@ func (s *DocumentStorage) writeColumnStorage(docs []*Document) error {
 }
 
 // doWriteColumnStorage performs the actual write operation to the specified file.
-func (s *DocumentStorage) doWriteColumnStorage(filePath string, schema *arrow.Schema, docs []*Document) error {
+func (s *DocumentStorage) doWriteColumnStorage(filePath string, schema *core.Schema, docs []*Document) error {
 	// Use RowIndexWriter for V1.1+ format support
 	writer, err := column.NewRowIndexWriter(filePath, schema, s.version, s.factory)
 	if err != nil {
@@ -951,11 +951,11 @@ func (s *DocumentStorage) doWriteColumnStorage(filePath string, schema *arrow.Sc
 	}
 
 	// Build arrays
-	idBuilder := arrow.NewInt64Builder()
-	vectorBuilder := arrow.NewFixedSizeListBuilder(
-		arrow.FixedSizeListOf(arrow.PrimFloat32(), s.dimension).(*arrow.FixedSizeListType),
+	idBuilder := core.NewInt64Builder()
+	vectorBuilder := core.NewFixedSizeListBuilder(
+		core.FixedSizeListOf(core.PrimFloat32(), s.dimension).(*core.FixedSizeListType),
 	)
-	timestampBuilder := arrow.NewInt64Builder()
+	timestampBuilder := core.NewInt64Builder()
 
 	// Populate builders
 	for _, doc := range docs {
@@ -970,7 +970,7 @@ func (s *DocumentStorage) doWriteColumnStorage(filePath string, schema *arrow.Sc
 	timestampArray := timestampBuilder.NewArray()
 
 	// Create record batch
-	batch, err := arrow.NewRecordBatch(schema, len(docs), []arrow.Array{
+	batch, err := core.NewRecordBatch(schema, len(docs), []core.Array{
 		idArray, vectorArray, timestampArray,
 	})
 	if err != nil {
@@ -1054,9 +1054,9 @@ func (s *DocumentStorage) readAllDocuments() ([]*Document, error) {
 	}
 
 	// Extract columns
-	idHashArray := batch.Column(0).(*arrow.Int64Array)
-	vectorArray := batch.Column(1).(*arrow.FixedSizeListArray)
-	timestampArray := batch.Column(2).(*arrow.Int64Array)
+	idHashArray := batch.Column(0).(*core.Int64Array)
+	vectorArray := batch.Column(1).(*core.FixedSizeListArray)
+	timestampArray := batch.Column(2).(*core.Int64Array)
 
 	// Get metadata
 	s.metaStore.mu.RLock()
@@ -1065,7 +1065,7 @@ func (s *DocumentStorage) readAllDocuments() ([]*Document, error) {
 	// Use a map to deduplicate by hash (last write wins)
 	// This handles the case where updates create duplicate entries
 	docMap := make(map[int64]*Document)
-	vectorValues := vectorArray.Values().(*arrow.Float32Array).Values()
+	vectorValues := vectorArray.Values().(*core.Float32Array).Values()
 
 	for i := 0; i < batch.NumRows(); i++ {
 		idHash := idHashArray.Value(i)

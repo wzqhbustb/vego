@@ -7,7 +7,7 @@ import (
 	"encoding/binary"
 	"math/bits"
 
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 )
 
 // EncodeNullBitmap encodes a []bool into a compact bitmap.
@@ -49,7 +49,7 @@ func DecodeNullBitmap(data []byte, n int) []bool {
 
 // ExtractNullBitmap extracts the null bitmap from an Arrow array.
 // Returns nil if the array has no nulls.
-func ExtractNullBitmap(array arrow.Array) []byte {
+func ExtractNullBitmap(array core.Array) []byte {
 	if array.NullN() == 0 {
 		return nil
 	}

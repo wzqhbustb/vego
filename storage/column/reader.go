@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	lerrors "github.com/wzqhbustb/vego/storage/errors"
 	"github.com/wzqhbustb/vego/storage/format"
 	"os"
@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	lanceio "github.com/wzqhbustb/vego/storage/io" // 使用别名避免冲突
+	"github.com/wzqhbustb/vego/vfs"
 )
 
 // Reader reads RecordBatch data from a Lance file
@@ -28,7 +28,7 @@ type Reader struct {
 	stats      *format.StatisticsList // Column statistics for Zone Map optimization
 
 	// Phase 2: 异步 I/O 支持（可选）
-	asyncIO      *lanceio.AsyncIO
+	asyncIO      *vfs.AsyncIO
 	fileID       string // 在 AsyncIO 中注册的文件 ID
 	useAsync     bool   // 是否启用异步模式
 	asyncEnabled bool   // AsyncIO 是否可用（文件已注册）
@@ -107,7 +107,7 @@ func GenerateCacheKey(filename string) string {
 }
 
 // NewReaderWithAsyncIO 不需要自己打开文件
-func NewReaderWithAsyncIO(filename string, asyncIO *lanceio.AsyncIO) (*Reader, error) {
+func NewReaderWithAsyncIO(filename string, asyncIO *vfs.AsyncIO) (*Reader, error) {
 	if asyncIO == nil {
 		return NewReader(filename)
 	}
@@ -229,7 +229,7 @@ func (r *Reader) readFooter() error {
 }
 
 // Schema returns the schema of the file
-func (r *Reader) Schema() *arrow.Schema {
+func (r *Reader) Schema() *core.Schema {
 	return r.header.Schema
 }
 
@@ -240,7 +240,7 @@ func (r *Reader) NumRows() int64 {
 
 // ReadRecordBatch reads all data and returns a RecordBatch
 // 根据 Reader 配置自动选择同步或异步模式
-func (r *Reader) ReadRecordBatch() (*arrow.RecordBatch, error) {
+func (r *Reader) ReadRecordBatch() (*core.RecordBatch, error) {
 	if r.closed {
 		return nil, lerrors.New(lerrors.ErrInvalidArgument).
 			Op("read_record_batch").
@@ -251,7 +251,7 @@ func (r *Reader) ReadRecordBatch() (*arrow.RecordBatch, error) {
 	schema := r.header.Schema
 	numColumns := schema.NumFields()
 
-	columns := make([]arrow.Array, numColumns)
+	columns := make([]core.Array, numColumns)
 	var readErr error
 
 	if r.useAsync && r.asyncEnabled {
@@ -266,7 +266,7 @@ func (r *Reader) ReadRecordBatch() (*arrow.RecordBatch, error) {
 		return nil, readErr
 	}
 
-	batch, err := arrow.NewRecordBatch(schema, int(r.header.NumRows), columns)
+	batch, err := core.NewRecordBatch(schema, int(r.header.NumRows), columns)
 	if err != nil {
 		return nil, lerrors.New(lerrors.ErrInvalidArgument).
 			Op("create_record_batch").
@@ -279,7 +279,7 @@ func (r *Reader) ReadRecordBatch() (*arrow.RecordBatch, error) {
 }
 
 // readColumnsSync 同步读取所有列
-func (r *Reader) readColumnsSync(columns []arrow.Array) error {
+func (r *Reader) readColumnsSync(columns []core.Array) error {
 	schema := r.header.Schema
 	for colIdx := 0; colIdx < schema.NumFields(); colIdx++ {
 		column, err := r.readColumn(int32(colIdx))
@@ -296,7 +296,7 @@ func (r *Reader) readColumnsSync(columns []arrow.Array) error {
 }
 
 // readColumnsAsync 异步并发读取所有列
-func (r *Reader) readColumnsAsync(columns []arrow.Array) error {
+func (r *Reader) readColumnsAsync(columns []core.Array) error {
 	schema := r.header.Schema
 	numColumns := schema.NumFields()
 
@@ -346,7 +346,7 @@ func (r *Reader) readColumnsAsync(columns []arrow.Array) error {
 }
 
 // readColumn reads a single column from the file
-func (r *Reader) readColumn(columnIndex int32) (arrow.Array, error) {
+func (r *Reader) readColumn(columnIndex int32) (core.Array, error) {
 	pageIndices := r.footer.GetColumnPages(columnIndex)
 	if len(pageIndices) == 0 {
 		return nil, lerrors.PageNotFound("", columnIndex, 0)
@@ -362,7 +362,7 @@ func (r *Reader) readColumn(columnIndex int32) (arrow.Array, error) {
 	field := r.header.Schema.Field(int(columnIndex))
 
 	// 读取所有 pages
-	var arrays []arrow.Array
+	var arrays []core.Array
 	for _, pageIdx := range pageIndices {
 		page, err := r.readPage(pageIdx)
 		if err != nil {
@@ -388,7 +388,7 @@ func (r *Reader) readColumn(columnIndex int32) (arrow.Array, error) {
 }
 
 // 批量异步读取所有 pages
-func (r *Reader) readColumnAsync(columnIndex int32) (arrow.Array, error) {
+func (r *Reader) readColumnAsync(columnIndex int32) (core.Array, error) {
 	pageIndices := r.footer.GetColumnPages(columnIndex)
 	if len(pageIndices) == 0 {
 		return nil, fmt.Errorf("no pages found for column %d", columnIndex)
@@ -410,7 +410,7 @@ func (r *Reader) readColumnAsync(columnIndex int32) (arrow.Array, error) {
 }
 
 // readPageAsyncWithEncoding 使用指定编码异步读取 page
-func (r *Reader) readPageAsyncWithEncoding(pageIdx format.PageIndex, encoding format.EncodingType, dataType arrow.DataType) (arrow.Array, error) {
+func (r *Reader) readPageAsyncWithEncoding(pageIdx format.PageIndex, encoding format.EncodingType, dataType core.DataType) (core.Array, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -438,19 +438,19 @@ func (r *Reader) readPageAsyncWithEncoding(pageIdx format.PageIndex, encoding fo
 // 【修改】修复 ReadPages 使用方式，避免超时
 // readPagesAsync 批量异步读取多个 Page
 // 【修改】使用 SubmitBatch 批量提交，避免过多 goroutine
-func (r *Reader) readPagesAsync(pageIndices []format.PageIndex, dataType arrow.DataType) ([]arrow.Array, error) {
+func (r *Reader) readPagesAsync(pageIndices []format.PageIndex, dataType core.DataType) ([]core.Array, error) {
 	if !r.useAsync || !r.asyncEnabled {
 		return r.readPagesSync(pageIndices, dataType)
 	}
 
 	if len(pageIndices) == 0 {
-		return []arrow.Array{}, nil
+		return []core.Array{}, nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	arrays := make([]arrow.Array, len(pageIndices))
+	arrays := make([]core.Array, len(pageIndices))
 	errChan := make(chan error, len(pageIndices))
 	var wg sync.WaitGroup
 
@@ -521,8 +521,8 @@ func (r *Reader) readPagesAsync(pageIndices []format.PageIndex, dataType arrow.D
 }
 
 // readPagesSync 同步读取多个 Page（回退方案）
-func (r *Reader) readPagesSync(pageIndices []format.PageIndex, dataType arrow.DataType) ([]arrow.Array, error) {
-	arrays := make([]arrow.Array, len(pageIndices))
+func (r *Reader) readPagesSync(pageIndices []format.PageIndex, dataType core.DataType) ([]core.Array, error) {
+	arrays := make([]core.Array, len(pageIndices))
 
 	for i, pageIdx := range pageIndices {
 		page, err := r.readPage(pageIdx)
@@ -672,7 +672,7 @@ func (r *Reader) readPageAsync(pageIndex format.PageIndex) (*format.Page, error)
 }
 
 // mergeArrays merges multiple arrays of the same type into one
-func (r *Reader) mergeArrays(arrays []arrow.Array, dataType arrow.DataType) (arrow.Array, error) {
+func (r *Reader) mergeArrays(arrays []core.Array, dataType core.DataType) (core.Array, error) {
 	if len(arrays) == 0 {
 		return nil, lerrors.New(lerrors.ErrInvalidArgument).
 			Op("merge_arrays").
@@ -685,24 +685,24 @@ func (r *Reader) mergeArrays(arrays []arrow.Array, dataType arrow.DataType) (arr
 	}
 
 	switch dataType.ID() {
-	case arrow.INT32:
+	case core.INT32:
 		return r.mergeInt32Arrays(arrays)
-	case arrow.INT64:
+	case core.INT64:
 		return r.mergeInt64Arrays(arrays)
-	case arrow.FLOAT32:
+	case core.FLOAT32:
 		return r.mergeFloat32Arrays(arrays)
-	case arrow.FLOAT64:
+	case core.FLOAT64:
 		return r.mergeFloat64Arrays(arrays)
-	case arrow.FIXED_SIZE_LIST:
-		return r.mergeFixedSizeListArrays(arrays, dataType.(*arrow.FixedSizeListType))
+	case core.FIXED_SIZE_LIST:
+		return r.mergeFixedSizeListArrays(arrays, dataType.(*core.FixedSizeListType))
 	default:
 		return nil, lerrors.UnsupportedType("merge_arrays", dataType.Name(), "")
 	}
 }
 
 // mergeInt32Arrays merges multiple Int32Array into one
-func (r *Reader) mergeInt32Arrays(arrays []arrow.Array) (arrow.Array, error) {
-	builder := arrow.NewInt32Builder()
+func (r *Reader) mergeInt32Arrays(arrays []core.Array) (core.Array, error) {
+	builder := core.NewInt32Builder()
 	defer builder.Release()
 
 	// Calculate total size for reservation
@@ -714,7 +714,7 @@ func (r *Reader) mergeInt32Arrays(arrays []arrow.Array) (arrow.Array, error) {
 
 	// Append all values
 	for _, arr := range arrays {
-		int32Arr := arr.(*arrow.Int32Array)
+		int32Arr := arr.(*core.Int32Array)
 		for i := 0; i < int32Arr.Len(); i++ {
 			if int32Arr.IsNull(i) {
 				builder.AppendNull()
@@ -728,8 +728,8 @@ func (r *Reader) mergeInt32Arrays(arrays []arrow.Array) (arrow.Array, error) {
 }
 
 // mergeInt64Arrays merges multiple Int64Array into one
-func (r *Reader) mergeInt64Arrays(arrays []arrow.Array) (arrow.Array, error) {
-	builder := &arrow.Int64Builder{}
+func (r *Reader) mergeInt64Arrays(arrays []core.Array) (core.Array, error) {
+	builder := &core.Int64Builder{}
 
 	totalSize := 0
 	for _, arr := range arrays {
@@ -738,7 +738,7 @@ func (r *Reader) mergeInt64Arrays(arrays []arrow.Array) (arrow.Array, error) {
 	builder.Reserve(totalSize)
 
 	for _, arr := range arrays {
-		int64Arr := arr.(*arrow.Int64Array)
+		int64Arr := arr.(*core.Int64Array)
 		for i := 0; i < int64Arr.Len(); i++ {
 			if int64Arr.IsNull(i) {
 				builder.AppendNull()
@@ -752,8 +752,8 @@ func (r *Reader) mergeInt64Arrays(arrays []arrow.Array) (arrow.Array, error) {
 }
 
 // mergeFloat32Arrays merges multiple Float32Array into one
-func (r *Reader) mergeFloat32Arrays(arrays []arrow.Array) (arrow.Array, error) {
-	builder := arrow.NewFloat32Builder()
+func (r *Reader) mergeFloat32Arrays(arrays []core.Array) (core.Array, error) {
+	builder := core.NewFloat32Builder()
 	defer builder.Release()
 
 	totalSize := 0
@@ -763,7 +763,7 @@ func (r *Reader) mergeFloat32Arrays(arrays []arrow.Array) (arrow.Array, error) {
 	builder.Reserve(totalSize)
 
 	for _, arr := range arrays {
-		float32Arr := arr.(*arrow.Float32Array)
+		float32Arr := arr.(*core.Float32Array)
 		for i := 0; i < float32Arr.Len(); i++ {
 			if float32Arr.IsNull(i) {
 				builder.AppendNull()
@@ -777,8 +777,8 @@ func (r *Reader) mergeFloat32Arrays(arrays []arrow.Array) (arrow.Array, error) {
 }
 
 // mergeFloat64Arrays merges multiple Float64Array into one
-func (r *Reader) mergeFloat64Arrays(arrays []arrow.Array) (arrow.Array, error) {
-	builder := &arrow.Float64Builder{}
+func (r *Reader) mergeFloat64Arrays(arrays []core.Array) (core.Array, error) {
+	builder := &core.Float64Builder{}
 
 	totalSize := 0
 	for _, arr := range arrays {
@@ -787,7 +787,7 @@ func (r *Reader) mergeFloat64Arrays(arrays []arrow.Array) (arrow.Array, error) {
 	builder.Reserve(totalSize)
 
 	for _, arr := range arrays {
-		float64Arr := arr.(*arrow.Float64Array)
+		float64Arr := arr.(*core.Float64Array)
 		for i := 0; i < float64Arr.Len(); i++ {
 			if float64Arr.IsNull(i) {
 				builder.AppendNull()
@@ -801,8 +801,8 @@ func (r *Reader) mergeFloat64Arrays(arrays []arrow.Array) (arrow.Array, error) {
 }
 
 // mergeFixedSizeListArrays merges multiple FixedSizeListArray into one
-func (r *Reader) mergeFixedSizeListArrays(arrays []arrow.Array, listType *arrow.FixedSizeListType) (arrow.Array, error) {
-	builder := arrow.NewFixedSizeListBuilder(listType)
+func (r *Reader) mergeFixedSizeListArrays(arrays []core.Array, listType *core.FixedSizeListType) (core.Array, error) {
+	builder := core.NewFixedSizeListBuilder(listType)
 	defer builder.Release()
 
 	totalSize := 0
@@ -812,7 +812,7 @@ func (r *Reader) mergeFixedSizeListArrays(arrays []arrow.Array, listType *arrow.
 	builder.Reserve(totalSize)
 
 	for _, arr := range arrays {
-		listArr := arr.(*arrow.FixedSizeListArray)
+		listArr := arr.(*core.FixedSizeListArray)
 
 		for i := 0; i < listArr.Len(); i++ {
 			if listArr.IsNull(i) {
@@ -829,7 +829,7 @@ func (r *Reader) mergeFixedSizeListArrays(arrays []arrow.Array, listType *arrow.
 }
 
 // getFixedSizeListValues extracts values from a FixedSizeListArray at index i
-func (r *Reader) getFixedSizeListValues(arr *arrow.FixedSizeListArray, index int) []float32 {
+func (r *Reader) getFixedSizeListValues(arr *core.FixedSizeListArray, index int) []float32 {
 	listSize := arr.ListSize()
 	values := make([]float32, listSize)
 
@@ -840,11 +840,11 @@ func (r *Reader) getFixedSizeListValues(arr *arrow.FixedSizeListArray, index int
 	startOffset := index * listSize
 
 	switch valArr := valuesArray.(type) {
-	case *arrow.Float32Array:
+	case *core.Float32Array:
 		for j := 0; j < listSize; j++ {
 			values[j] = valArr.Value(startOffset + j)
 		}
-	case *arrow.Int32Array:
+	case *core.Int32Array:
 		for j := 0; j < listSize; j++ {
 			values[j] = float32(valArr.Value(startOffset + j))
 		}
@@ -955,22 +955,22 @@ func (r *Reader) readColumnRowAt(columnIndex int32, rowIdx int64) (interface{}, 
 
 // extractValueFromArray extracts a single value from an array at the given index.
 // Returns nil if the value at idx is null.
-func (r *Reader) extractValueFromArray(arr arrow.Array, idx int, dataType arrow.DataType) (interface{}, error) {
+func (r *Reader) extractValueFromArray(arr core.Array, idx int, dataType core.DataType) (interface{}, error) {
 	// Check for null first
 	if arr.IsNull(idx) {
 		return nil, nil
 	}
 
 	switch arr := arr.(type) {
-	case *arrow.Int64Array:
+	case *core.Int64Array:
 		return arr.Value(idx), nil
-	case *arrow.Int32Array:
+	case *core.Int32Array:
 		return int64(arr.Value(idx)), nil
-	case *arrow.Float32Array:
+	case *core.Float32Array:
 		return arr.Value(idx), nil
-	case *arrow.Float64Array:
+	case *core.Float64Array:
 		return arr.Value(idx), nil
-	case *arrow.FixedSizeListArray:
+	case *core.FixedSizeListArray:
 		// Handle vector type
 		return r.getFixedSizeListValues(arr, idx), nil
 	default:

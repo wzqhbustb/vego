@@ -1,4 +1,4 @@
-package arrow
+package core
 
 // Builder is the interface for building arrays incrementally
 type Builder interface {

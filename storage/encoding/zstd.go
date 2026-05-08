@@ -5,7 +5,7 @@ import (
 	"sync"
 
 	lerrors "github.com/wzqhbustb/vego/storage/errors"
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/format"
 
 	"github.com/klauspost/compress/zstd"
@@ -51,7 +51,7 @@ func (e *ZstdEncoder) Type() format.EncodingType {
 	return format.EncodingZstd
 }
 
-func (e *ZstdEncoder) Encode(array arrow.Array) (*EncodedData, error) {
+func (e *ZstdEncoder) Encode(array core.Array) (*EncodedData, error) {
 	if array.Len() == 0 {
 		return nil, ErrEmptyArray
 	}
@@ -82,19 +82,19 @@ func (e *ZstdEncoder) Encode(array arrow.Array) (*EncodedData, error) {
 	}, nil
 }
 
-func (e *ZstdEncoder) EstimateSize(array arrow.Array) int {
+func (e *ZstdEncoder) EstimateSize(array core.Array) int {
 	// 保守估计：原始大小的 50%
 	return array.Len() * GetValueSize(array.DataType().ID()) / 2
 }
 
-func (e *ZstdEncoder) SupportsType(dtype arrow.DataType) bool {
+func (e *ZstdEncoder) SupportsType(dtype core.DataType) bool {
 	return true // Zstd 支持所有类型
 }
 
 // arrayToBytesWithNull 将 Array 转换为字节（包含 values 和 null bitmap）
 // 格式: [numValues:4][values...][bitmapLen:4][bitmap...]
 // 对于 FixedSizeListArray，bitmap 是 list-level 的
-func arrayToBytesWithNull(array arrow.Array) ([]byte, error) {
+func arrayToBytesWithNull(array core.Array) ([]byte, error) {
 	numValues := array.Len()
 
 	// 获取 values 的字节

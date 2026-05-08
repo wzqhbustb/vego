@@ -4,7 +4,7 @@
 package column
 
 import (
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/encoding"
 	"github.com/wzqhbustb/vego/storage/format"
 	lerrors "github.com/wzqhbustb/vego/storage/errors"
@@ -17,12 +17,12 @@ type RowIndexWriter struct {
 	version       format.VersionPolicy
 	writeRowIndex bool
 	blockSize     int32
-	schema        *arrow.Schema
+	schema        *core.Schema
 }
 
 // NewRowIndexWriter creates a writer with RowIndex support
 // If version is V1.0, RowIndex will not be written
-func NewRowIndexWriter(filename string, schema *arrow.Schema, version format.VersionPolicy, factory *encoding.EncoderFactory) (*RowIndexWriter, error) {
+func NewRowIndexWriter(filename string, schema *core.Schema, version format.VersionPolicy, factory *encoding.EncoderFactory) (*RowIndexWriter, error) {
 	if factory == nil {
 		factory = encoding.NewEncoderFactory(3)
 	}
