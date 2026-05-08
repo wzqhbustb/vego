@@ -7,12 +7,11 @@ LANCE_PKG := $(MODULE_NAME)
 
 # 子包列表
 PACKAGES := \
-	$(MODULE_NAME)/arrow \
+	github.com/wzqhbustb/vego/core \
+	github.com/wzqhbustb/vego/vfs \
 	$(MODULE_NAME)/column \
 	$(MODULE_NAME)/encoding \
-	$(MODULE_NAME)/format \
-	$(MODULE_NAME)/io \
-	$(MODULE_NAME)/errors
+	$(MODULE_NAME)/format
 
 # 测试配置
 TEST_TIMEOUT := 300s
@@ -68,9 +67,13 @@ cover:
 # 单包测试
 # =============================================================================
 
-.PHONY: test-arrow
-test-arrow:
-	@cd $(MODULE_ROOT) && go test $(LANCE_PKG)/arrow -v
+.PHONY: test-core
+test-core:
+	@cd $(MODULE_ROOT) && go test github.com/wzqhbustb/vego/core -v
+
+.PHONY: test-vfs
+test-vfs:
+	@cd $(MODULE_ROOT) && go test github.com/wzqhbustb/vego/vfs -v
 
 .PHONY: test-column
 test-column:
@@ -86,11 +89,7 @@ test-format:
 
 .PHONY: test-io
 test-io:
-	@cd $(MODULE_ROOT) && go test $(LANCE_PKG)/io -v
-
-.PHONY: test-errors
-test-errors:
-	@cd $(MODULE_ROOT) && go test $(LANCE_PKG)/errors -v
+	@cd $(MODULE_ROOT) && go test github.com/wzqhbustb/vego/vfs -v
 
 # =============================================================================
 # 性能测试（基础版）
@@ -101,9 +100,13 @@ bench:
 	@echo "Running benchmarks..."
 	@cd $(MODULE_ROOT) && go test $(PACKAGES) -bench=. -benchmem -run=^$$
 
-.PHONY: bench-arrow
-bench-arrow:
-	@cd $(MODULE_ROOT) && go test $(LANCE_PKG)/arrow -bench=. -benchmem -run=^$$
+.PHONY: bench-core
+bench-core:
+	@cd $(MODULE_ROOT) && go test github.com/wzqhbustb/vego/core -bench=. -benchmem -run=^$$
+
+.PHONY: bench-vfs
+bench-vfs:
+	@cd $(MODULE_ROOT) && go test github.com/wzqhbustb/vego/vfs -bench=. -benchmem -run=^$$
 
 .PHONY: bench-encoding
 bench-encoding:
@@ -198,13 +201,13 @@ bench-encoding-all:
 bench-io:
 	@echo "Running IO benchmarks..."
 	@mkdir -p $(MODULE_ROOT)/$(BENCH_RESULTS_DIR)
-	@cd $(MODULE_ROOT) && go test $(LANCE_PKG)/io \
+	@cd $(MODULE_ROOT) && go test github.com/wzqhbustb/vego/vfs \
 		-bench=Benchmark \
 		-benchmem \
 		-run=^$$ \
 		-count=3 \
 		-timeout=10m \
-		2>&1 | tee $(BENCH_RESULTS_DIR)/io_$$(date +%Y%m%d_%H%M%S).txt
+		2>&1 | tee $(BENCH_RESULTS_DIR)/vfs_$$(date +%Y%m%d_%H%M%S).txt
 
 # 列存储端到端基准测试
 .PHONY: bench-column
@@ -313,8 +316,9 @@ help:
 	@echo ""
 	@echo "Basic Benchmarks:"
 	@echo "  make bench         - Run all benchmarks (quick)"
-	@echo "  make bench-arrow   - Run arrow benchmarks"
-	@echo "  make bench-encoding- Run encoding benchmarks"
+	@echo "  make bench-core    - Run core benchmarks"
+	@echo "  make bench-vfs     - Run vfs benchmarks"
+	@echo "  make bench-encoding - Run encoding benchmarks"
 	@echo ""
 	@echo "Advanced Benchmarks (Phase0):"
 	@echo "  make bench-full         - Full benchmark with 3 iterations"
