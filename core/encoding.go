@@ -1,5 +1,5 @@
 // langgraphdemogo/lance/errors/encoding.go
-package errors
+package core
 
 import "fmt"
 

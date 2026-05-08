@@ -1,5 +1,5 @@
 // langgraphdemogo/lance/errors/column.go
-package errors
+package core
 
 // ColumnNotFound 列未找到
 func ColumnNotFound(path string, column string, available []string) error {

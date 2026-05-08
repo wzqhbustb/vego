@@ -5,21 +5,20 @@ import (
 	"encoding/binary"
 	"fmt"
 	"github.com/wzqhbustb/vego/core"
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
 	"strings"
 	"testing"
 )
 
 // assertErrorCode 检查错误是否为指定的错误码
-func assertErrorCode(t *testing.T, err error, code lerrors.ErrorCode, msg string) {
+func assertErrorCode(t *testing.T, err error, code core.ErrorCode, msg string) {
 	t.Helper()
 	if err == nil {
 		t.Errorf("%s: expected error, got nil", msg)
 		return
 	}
-	if !lerrors.Is(err, code) {
+	if !core.Is(err, code) {
 		t.Errorf("%s: expected error code %v, got %v (err=%v)",
-			msg, code, lerrors.GetCode(err), err)
+			msg, code, core.GetCode(err), err)
 	}
 }
 
@@ -228,7 +227,7 @@ func TestHeaderValidation(t *testing.T) {
 		name        string
 		modify      func(*Header)
 		wantErr     string            // 向后兼容：检查错误消息子串
-		wantErrCode lerrors.ErrorCode // 新的：检查错误码
+		wantErrCode core.ErrorCode // 新的：检查错误码
 	}{
 		{
 			name: "invalid magic",
@@ -236,7 +235,7 @@ func TestHeaderValidation(t *testing.T) {
 				h.Magic = 0xDEADBEEF
 			},
 			wantErr:     "invalid magic number",
-			wantErrCode: lerrors.ErrInvalidMagic,
+			wantErrCode: core.ErrInvalidMagic,
 		},
 		{
 			name: "nil schema",
@@ -244,7 +243,7 @@ func TestHeaderValidation(t *testing.T) {
 				h.Schema = nil
 			},
 			wantErr:     "schema is nil",
-			wantErrCode: lerrors.ErrInvalidArgument,
+			wantErrCode: core.ErrInvalidArgument,
 		},
 		{
 			name: "negative row count",
@@ -252,7 +251,7 @@ func TestHeaderValidation(t *testing.T) {
 				h.NumRows = -100
 			},
 			wantErr:     "invalid row count",
-			wantErrCode: lerrors.ErrInvalidArgument,
+			wantErrCode: core.ErrInvalidArgument,
 		},
 		{
 			name: "column count mismatch",
@@ -260,7 +259,7 @@ func TestHeaderValidation(t *testing.T) {
 				h.NumColumns = 999
 			},
 			wantErr:     "column count mismatch",
-			wantErrCode: lerrors.ErrSchemaMismatch,
+			wantErrCode: core.ErrSchemaMismatch,
 		},
 		{
 			name: "invalid page size",
@@ -268,7 +267,7 @@ func TestHeaderValidation(t *testing.T) {
 				h.PageSize = -1
 			},
 			wantErr:     "invalid page size",
-			wantErrCode: lerrors.ErrInvalidArgument,
+			wantErrCode: core.ErrInvalidArgument,
 		},
 	}
 
@@ -412,7 +411,7 @@ func TestMaxSchemaSize(t *testing.T) {
 	}
 
 	// 检查错误码而不是字符串
-	assertErrorCode(t, err, lerrors.ErrMetadataError, "TestMaxSchemaSize")
+	assertErrorCode(t, err, core.ErrMetadataError, "TestMaxSchemaSize")
 	// 也可以检查包含特定上下文信息
 	if !strings.Contains(err.Error(), "schema too large") &&
 		!strings.Contains(err.Error(), "schema") {
@@ -444,7 +443,7 @@ func TestInvalidSchemaLength(t *testing.T) {
 	}
 
 	// 检查错误码
-	assertErrorCode(t, err, lerrors.ErrMetadataError, "TestInvalidSchemaLength")
+	assertErrorCode(t, err, core.ErrMetadataError, "TestInvalidSchemaLength")
 }
 
 // TestVectorDimensionLimit tests max vector dimension
@@ -453,14 +452,14 @@ func TestVectorDimensionLimit(t *testing.T) {
 		name      string
 		dimension int
 		wantError bool
-		errCode   lerrors.ErrorCode // 新的：期望的错误码
+		errCode   core.ErrorCode // 新的：期望的错误码
 	}{
 		{"valid small", 128, false, 0},
 		{"valid large", 10000, false, 0},
 		{"valid max", 100000, false, 0},
-		{"invalid too large", 100001, true, lerrors.ErrInvalidArgument},
-		{"invalid negative", -1, true, lerrors.ErrInvalidArgument},
-		{"invalid zero", 0, true, lerrors.ErrInvalidArgument},
+		{"invalid too large", 100001, true, core.ErrInvalidArgument},
+		{"invalid negative", -1, true, core.ErrInvalidArgument},
+		{"invalid zero", 0, true, core.ErrInvalidArgument},
 	}
 
 	for _, tt := range tests {

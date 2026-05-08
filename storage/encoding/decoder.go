@@ -2,7 +2,7 @@
 package encoding
 
 import (
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/format"
 )
 
@@ -23,12 +23,12 @@ func GetDecoder(encodingType format.EncodingType) (Decoder, error) {
 	case format.EncodingBSSEncoding:
 		return NewBSSDecoder(), nil
 	case format.EncodingDelta:
-		return nil, lerrors.New(lerrors.ErrNotSupported).
+		return nil, core.New(core.ErrNotSupported).
 			Op("get_decoder").
 			Context("encoding", "delta").
 			Build()
 	default:
-		return nil, lerrors.New(lerrors.ErrUnsupportedType).
+		return nil, core.New(core.ErrUnsupportedType).
 			Op("get_decoder").
 			Context("encoding", encodingType.String()).
 			Build()

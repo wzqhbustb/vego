@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
 	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/format"
 )
@@ -40,7 +39,7 @@ func (e *BitPackingEncoder) Encode(array core.Array) (*EncodedData, error) {
 	case *core.Int64Array:
 		return e.encodeInt64(arr)
 	default:
-		return nil, lerrors.New(lerrors.ErrUnsupportedType).
+		return nil, core.New(core.ErrUnsupportedType).
 			Op("bitpacking_encode").
 			Context("got_type", fmt.Sprintf("%T", array)).
 			Build()
@@ -74,7 +73,7 @@ func (e *BitPackingEncoder) encodeInt32(arr *core.Int32Array) (*EncodedData, err
 		maxVal := (uint64(1) << e.bitWidth) - 1
 		for i, v := range values {
 			if v < 0 {
-				return nil, lerrors.New(lerrors.ErrInvalidArgument).
+				return nil, core.New(core.ErrInvalidArgument).
 					Op("bitpacking_encode_int32").
 					Context("reason", "negative value not supported").
 					Context("value", v).
@@ -82,7 +81,7 @@ func (e *BitPackingEncoder) encodeInt32(arr *core.Int32Array) (*EncodedData, err
 					Build()
 			}
 			if uint64(v) > maxVal {
-				return nil, lerrors.New(lerrors.ErrInvalidArgument).
+				return nil, core.New(core.ErrInvalidArgument).
 					Op("bitpacking_encode_int32").
 					Context("reason", "value exceeds max for bitWidth").
 					Context("value", v).
@@ -137,7 +136,7 @@ func (e *BitPackingEncoder) encodeInt64(arr *core.Int64Array) (*EncodedData, err
 		maxVal := (uint64(1) << e.bitWidth) - 1
 		for i, v := range values {
 			if v < 0 {
-				return nil, lerrors.New(lerrors.ErrInvalidArgument).
+				return nil, core.New(core.ErrInvalidArgument).
 					Op("bitpacking_encode_int64").
 					Context("reason", "negative value not supported").
 					Context("value", v).
@@ -145,7 +144,7 @@ func (e *BitPackingEncoder) encodeInt64(arr *core.Int64Array) (*EncodedData, err
 					Build()
 			}
 			if uint64(v) > maxVal {
-				return nil, lerrors.New(lerrors.ErrInvalidArgument).
+				return nil, core.New(core.ErrInvalidArgument).
 					Op("bitpacking_encode_int64").
 					Context("reason", "value exceeds max for bitWidth").
 					Context("value", v).

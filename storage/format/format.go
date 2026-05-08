@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
+	"github.com/wzqhbustb/vego/core"
 )
 
 // Lance file format constants
@@ -130,7 +130,7 @@ func NewFileError(op string, err error) error {
 // ValidateMagicNumber checks if the magic number is valid
 func ValidateMagicNumber(magic uint32) error {
 	if magic != MagicNumber {
-		return lerrors.FormatInvalidMagic("", magic, MagicNumber)
+		return core.FormatInvalidMagic("", magic, MagicNumber)
 	}
 	return nil
 }
@@ -138,10 +138,10 @@ func ValidateMagicNumber(magic uint32) error {
 // ValidateVersion checks if the version is supported
 func ValidateVersion(version uint16) error {
 	if version < MinSupportedVersion {
-		return lerrors.FormatVersionMismatch("", version, MinSupportedVersion, CurrentVersion)
+		return core.FormatVersionMismatch("", version, MinSupportedVersion, CurrentVersion)
 	}
 	if version > CurrentVersion {
-		return lerrors.New(lerrors.ErrVersionMismatch).
+		return core.New(core.ErrVersionMismatch).
 			Op("validate_version").
 			Context("version", version).
 			Context("current", CurrentVersion).

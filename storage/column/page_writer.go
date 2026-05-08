@@ -3,7 +3,6 @@ package column
 import (
 	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/encoding"
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
 	"github.com/wzqhbustb/vego/storage/format"
 )
 
@@ -30,7 +29,7 @@ func NewPageWriter(factory *encoding.EncoderFactory) *PageWriter {
 // falls back to Zstd compression.
 func (w *PageWriter) WritePages(array core.Array, columnIndex int32) ([]*format.Page, error) {
 	if array == nil || array.Len() == 0 {
-		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+		return nil, core.New(core.ErrInvalidArgument).
 			Op("write_pages").
 			Context("message", "cannot write empty array").
 			Build()
@@ -50,7 +49,7 @@ func (w *PageWriter) WritePages(array core.Array, columnIndex int32) ([]*format.
 	// Step 2: Select best encoder based on statistics
 	encoder := w.factory.SelectEncoder(array.DataType(), stats)
 	if encoder == nil {
-		return nil, lerrors.New(lerrors.ErrUnsupportedType).
+		return nil, core.New(core.ErrUnsupportedType).
 			Op("select_encoder").
 			Context("data_type", array.DataType().Name()).
 			Context("message", "failed to select encoder").
@@ -60,7 +59,7 @@ func (w *PageWriter) WritePages(array core.Array, columnIndex int32) ([]*format.
 	// Step 3: Encode the array with automatic fallback
 	encodedData, err := w.encodeWithFallback(array, encoder)
 	if err != nil {
-		return nil, lerrors.EncodeFailed(encoder.Type().String(), array.DataType().Name(), err)
+		return nil, core.EncodeFailed(encoder.Type().String(), array.DataType().Name(), err)
 	}
 
 	// Step 4: Calculate uncompressed size for statistics
@@ -80,7 +79,7 @@ func (w *PageWriter) writeWithZstd(array core.Array, columnIndex int32) ([]*form
 	zstdEncoder := encoding.NewZstdEncoder(w.factory.GetCompressionLevel())
 	encodedData, err := zstdEncoder.Encode(array)
 	if err != nil {
-		return nil, lerrors.EncodeFailed("zstd", array.DataType().Name(), err)
+		return nil, core.EncodeFailed("zstd", array.DataType().Name(), err)
 	}
 
 	uncompressedSize := w.calculateUncompressedSize(array)
@@ -103,7 +102,7 @@ func (w *PageWriter) encodeWithFallback(array core.Array, encoder encoding.Encod
 		zstdEncoder := encoding.NewZstdEncoder(w.factory.GetCompressionLevel())
 		encodedData, err = zstdEncoder.Encode(array)
 		if err != nil {
-			return nil, lerrors.EncodeFailed("zstd_fallback", array.DataType().Name(), err)
+			return nil, core.EncodeFailed("zstd_fallback", array.DataType().Name(), err)
 		}
 		return encodedData, nil
 	}
@@ -132,7 +131,7 @@ func (w *PageWriter) calculateUncompressedSize(array core.Array) int {
 // if the selected encoder doesn't support the data pattern (e.g., null values).
 func (w *PageWriter) EstimatePageSize(array core.Array) (int, error) {
 	if array == nil || array.Len() == 0 {
-		return 0, lerrors.New(lerrors.ErrInvalidArgument).
+		return 0, core.New(core.ErrInvalidArgument).
 			Op("estimate_page_size").
 			Context("message", "cannot estimate empty array").
 			Build()
@@ -147,7 +146,7 @@ func (w *PageWriter) EstimatePageSize(array core.Array) (int, error) {
 	stats := encoding.ComputeStatistics(array)
 	encoder := w.factory.SelectEncoder(array.DataType(), stats)
 	if encoder == nil {
-		return 0, lerrors.New(lerrors.ErrUnsupportedType).
+		return 0, core.New(core.ErrUnsupportedType).
 			Op("select_encoder_estimate").
 			Context("data_type", array.DataType().Name()).
 			Context("message", "failed to select encoder for estimation").

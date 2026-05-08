@@ -21,7 +21,6 @@ import (
 	"bytes"
 	"encoding/binary"
 
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
 	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/format"
 )
@@ -49,7 +48,7 @@ func (e *RLEEncoder) Encode(array core.Array) (*EncodedData, error) {
 	case *core.Int64Array:
 		return e.encodeInt64(arr)
 	default:
-		return nil, lerrors.New(lerrors.ErrUnsupportedType).
+		return nil, core.New(core.ErrUnsupportedType).
 			Op("rle_encode").
 			Build()
 	}

@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
 	"github.com/wzqhbustb/vego/core"
 )
 
@@ -16,7 +15,7 @@ func NewBitPackingDecoder() *BitPackingDecoder {
 
 func (d *BitPackingDecoder) Decode(data []byte, dtype core.DataType, nullBitmap []byte, numValues int) (core.Array, error) {
 	if len(data) < 5 {
-		return nil, lerrors.New(lerrors.ErrCorruptedFile).
+		return nil, core.New(core.ErrCorruptedFile).
 			Op("bitpacking_decode").
 			Context("reason", "data too short for header").
 			Context("min_required", 5).
@@ -26,7 +25,7 @@ func (d *BitPackingDecoder) Decode(data []byte, dtype core.DataType, nullBitmap 
 
 	bitWidth := data[0]
 	if bitWidth == 0 || bitWidth > 64 {
-		return nil, lerrors.New(lerrors.ErrCorruptedFile).
+		return nil, core.New(core.ErrCorruptedFile).
 			Op("bitpacking_decode").
 			Context("reason", "invalid bitWidth in header").
 			Context("bit_width", bitWidth).
@@ -40,7 +39,7 @@ func (d *BitPackingDecoder) Decode(data []byte, dtype core.DataType, nullBitmap 
 	expectedBits := uint64(packedNumValues) * uint64(bitWidth)
 	expectedBytes := (expectedBits + 7) / 8
 	if uint64(len(packedData)) < expectedBytes {
-		return nil, lerrors.New(lerrors.ErrCorruptedFile).
+		return nil, core.New(core.ErrCorruptedFile).
 			Op("bitpacking_decode").
 			Context("reason", "data truncated").
 			Context("expected", expectedBytes).
@@ -54,7 +53,7 @@ func (d *BitPackingDecoder) Decode(data []byte, dtype core.DataType, nullBitmap 
 	case core.INT64:
 		return d.decodeInt64(packedData, int(packedNumValues), bitWidth, nullBitmap, numValues)
 	default:
-		return nil, lerrors.New(lerrors.ErrUnsupportedType).
+		return nil, core.New(core.ErrUnsupportedType).
 			Op("bitpacking_decode").
 			Context("got_type", fmt.Sprintf("%v", dtype)).
 			Build()
@@ -72,7 +71,7 @@ func (d *BitPackingDecoder) decodeInt32(data []byte, packedNumValues int, bitWid
 	// Expand with nulls: insert values back to their original positions
 	expandedValues, err := ExpandInt32(values, nullBitmap, numValues)
 	if err != nil {
-		return nil, lerrors.New(lerrors.ErrCorruptedFile).
+		return nil, core.New(core.ErrCorruptedFile).
 			Op("bitpacking_decode_int32").
 			Wrap(err).
 			Build()
@@ -92,7 +91,7 @@ func (d *BitPackingDecoder) decodeInt64(data []byte, packedNumValues int, bitWid
 	// Expand with nulls
 	expandedValues, err := ExpandInt64(values, nullBitmap, numValues)
 	if err != nil {
-		return nil, lerrors.New(lerrors.ErrCorruptedFile).
+		return nil, core.New(core.ErrCorruptedFile).
 			Op("bitpacking_decode_int64").
 			Wrap(err).
 			Build()

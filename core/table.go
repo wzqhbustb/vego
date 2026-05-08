@@ -3,7 +3,6 @@ package core
 import (
 	"fmt"
 
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
 )
 
 // Table represents a collection of RecordBatches with the same schema
@@ -19,7 +18,7 @@ func NewTable(schema *Schema, chunks []*RecordBatch) (*Table, error) {
 	// Validate all chunks have the same schema
 	for i, chunk := range chunks {
 		if !chunk.Schema().Equal(schema) {
-			return nil, lerrors.New(lerrors.ErrSchemaMismatch).
+			return nil, New(ErrSchemaMismatch).
 				Op("new_table").
 				Context("chunk_index", i).
 				Context("message", "chunk schema mismatch with table schema").
@@ -102,7 +101,7 @@ func NewTableBuilder(schema *Schema) *TableBuilder {
 // AppendBatch appends a record batch to the table
 func (b *TableBuilder) AppendBatch(batch *RecordBatch) error {
 	if !batch.Schema().Equal(b.schema) {
-		return lerrors.New(lerrors.ErrSchemaMismatch).
+		return New(ErrSchemaMismatch).
 			Op("table_builder_append_batch").
 			Context("message", "batch schema mismatch with table schema").
 			Build()

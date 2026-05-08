@@ -1,43 +1,41 @@
 package encoding
 
-import (
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
-)
+import "github.com/wzqhbustb/vego/core"
 
 var (
 	// ErrNullNotSupported indicates the encoder cannot handle null values.
 	// PageWriter should catch this and fall back to Zstd.
-	ErrNullNotSupported = lerrors.New(lerrors.ErrNullNotSupported).
-		Op("encode").
-		Build()
+	ErrNullNotSupported = core.New(core.ErrNullNotSupported).
+				Op("encode").
+				Build()
 
 	// ErrUnsupportedType indicates the encoder doesn't support this data type.
-	ErrUnsupportedType = lerrors.New(lerrors.ErrUnsupportedType).
-		Op("encode").
-		Build()
+	ErrUnsupportedType = core.New(core.ErrUnsupportedType).
+				Op("encode").
+				Build()
 
 	// ErrEmptyArray indicates the array is empty.
-	ErrEmptyArray = lerrors.New(lerrors.ErrInvalidArgument).
-		Op("encode").
-		Context("reason", "empty array").
-		Build()
+	ErrEmptyArray = core.New(core.ErrInvalidArgument).
+			Op("encode").
+			Context("reason", "empty array").
+			Build()
 
 	// ErrInvalidData indicates the encoded data is invalid or corrupted.
-	ErrInvalidData = lerrors.New(lerrors.ErrInvalidArgument).
-		Op("encode").
-		Context("reason", "invalid data").
-		Build()
+	ErrInvalidData = core.New(core.ErrInvalidArgument).
+			Op("encode").
+			Context("reason", "invalid data").
+			Build()
 
 	// ErrCorruptedNullBitmap indicates the null bitmap doesn't match the values (data corruption).
-	ErrCorruptedNullBitmap = lerrors.New(lerrors.ErrCorruptedFile).
-		Op("expand_nulls").
-		Context("reason", "null bitmap count mismatch").
-		Build()
+	ErrCorruptedNullBitmap = core.New(core.ErrCorruptedFile).
+				Op("expand_nulls").
+				Context("reason", "null bitmap count mismatch").
+				Build()
 )
 
 // EncodeError creates a structured encoding error
 func EncodeError(encoding string, op string, err error) error {
-	return lerrors.New(lerrors.ErrEncodeFailed).
+	return core.New(core.ErrEncodeFailed).
 		Op(op).
 		Context("encoding", encoding).
 		Wrap(err).
@@ -46,7 +44,7 @@ func EncodeError(encoding string, op string, err error) error {
 
 // DecodeError creates a structured decoding error
 func DecodeError(encoding string, op string, err error) error {
-	return lerrors.New(lerrors.ErrDecodeFailed).
+	return core.New(core.ErrDecodeFailed).
 		Op(op).
 		Context("encoding", encoding).
 		Wrap(err).
@@ -59,5 +57,5 @@ func IsNullUnsupportedError(err error) bool {
 	if err == nil {
 		return false
 	}
-	return lerrors.Is(err, lerrors.ErrNullNotSupported)
+	return core.Is(err, core.ErrNullNotSupported)
 }

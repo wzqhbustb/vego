@@ -8,7 +8,7 @@ import (
 	"io"
 	"time"
 
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
+	"github.com/wzqhbustb/vego/core"
 )
 
 // Footer represents the Lance file footer
@@ -21,7 +21,7 @@ type Footer struct {
 	ModifiedAt    int64             // Unix timestamp
 	Metadata      map[string]string // Additional metadata
 	Checksum      uint32            // Footer checksum
-	
+
 	// Column statistics (for Zone Map and query optimization)
 	// StatsOffset points to the position of StatisticsList in the file
 	// StatsCount is the number of column statistics (0 if not present)
@@ -53,11 +53,11 @@ func (f *Footer) Validate() error {
 		return err
 	}
 	if f.NumPages < 0 {
-		return lerrors.ValidationFailed("validate_footer", "",
+		return core.ValidationFailed("validate_footer", "",
 			fmt.Sprintf("invalid page count: %d", f.NumPages))
 	}
 	if f.NumPages != int32(len(f.PageIndexList.Indices)) {
-		return lerrors.New(lerrors.ErrMetadataError).
+		return core.New(core.ErrMetadataError).
 			Op("validate_footer").
 			Context("field", "page_count").
 			Context("declared", f.NumPages).
@@ -66,7 +66,7 @@ func (f *Footer) Validate() error {
 			Build()
 	}
 	if f.CreatedAt <= 0 {
-		return lerrors.ValidationFailed("validate_footer", "",
+		return core.ValidationFailed("validate_footer", "",
 			fmt.Sprintf("invalid created timestamp: %d", f.CreatedAt))
 	}
 	return nil
@@ -86,7 +86,7 @@ func (f *Footer) EncodedSize() int {
 		// key_len(4) + key + value_len(4) + value
 		baseSize += 4 + len(k) + 4 + len(v)
 	}
-	
+
 	// Add statistics info: StatsOffset(8) + StatsCount(4)
 	baseSize += 8 + 4
 
@@ -140,13 +140,13 @@ func (f *Footer) WriteTo(w io.Writer) (int64, error) {
 	footerBytes := buf.Bytes()
 	if len(footerBytes) > FooterSize {
 		// return 0, NewFileError("write footer", fmt.Errorf("footer too large: %d bytes (max %d)", len(footerBytes), FooterSize))
-		return 0, lerrors.New(lerrors.ErrMetadataError).
+		return 0, core.New(core.ErrMetadataError).
 			Op("write_footer").
 			Context("field", "footer").
 			Context("size", len(footerBytes)).
 			Context("max_size", FooterSize).
 			Context("message", "footer too large").
-			Severity(lerrors.SeverityFatal).
+			Severity(core.SeverityFatal).
 			Build()
 	}
 
@@ -187,13 +187,13 @@ func (f *Footer) ReadFrom(r io.Reader) (int64, error) {
 
 	// Security limits for metadata to prevent OOM from malicious files
 	const (
-		MaxMetadataKeySize   = 1024     // 1KB for key
+		MaxMetadataKeySize   = 1024      // 1KB for key
 		MaxMetadataValueSize = 64 * 1024 // 64KB for value
 		MaxMetadataCount     = 1000      // Max 1000 metadata entries
 	)
-	
+
 	if metaCount < 0 || metaCount > MaxMetadataCount {
-		return int64(n), lerrors.New(lerrors.ErrCorruptedFile).
+		return int64(n), core.New(core.ErrCorruptedFile).
 			Op("read_footer").
 			Context("field", "metadata_count").
 			Context("value", metaCount).
@@ -201,16 +201,16 @@ func (f *Footer) ReadFrom(r io.Reader) (int64, error) {
 			Context("message", "invalid metadata count").
 			Build()
 	}
-	
+
 	f.Metadata = make(map[string]string)
 	for i := int32(0); i < metaCount; i++ {
 		// Read key
 		var keyLen int32
 		binary.Read(reader, ByteOrder, &keyLen)
-		
+
 		// Validate key length
 		if keyLen < 0 || keyLen > MaxMetadataKeySize {
-			return int64(n), lerrors.New(lerrors.ErrCorruptedFile).
+			return int64(n), core.New(core.ErrCorruptedFile).
 				Op("read_footer").
 				Context("field", "metadata_key_len").
 				Context("index", i).
@@ -219,7 +219,7 @@ func (f *Footer) ReadFrom(r io.Reader) (int64, error) {
 				Context("message", "invalid metadata key length").
 				Build()
 		}
-		
+
 		keyBytes := make([]byte, keyLen)
 		if _, err := reader.Read(keyBytes); err != nil {
 			return int64(n), NewFileError("read footer metadata key", err)
@@ -229,10 +229,10 @@ func (f *Footer) ReadFrom(r io.Reader) (int64, error) {
 		// Read value
 		var valueLen int32
 		binary.Read(reader, ByteOrder, &valueLen)
-		
+
 		// Validate value length
 		if valueLen < 0 || valueLen > MaxMetadataValueSize {
-			return int64(n), lerrors.New(lerrors.ErrCorruptedFile).
+			return int64(n), core.New(core.ErrCorruptedFile).
 				Op("read_footer").
 				Context("field", "metadata_value_len").
 				Context("key", key).
@@ -241,7 +241,7 @@ func (f *Footer) ReadFrom(r io.Reader) (int64, error) {
 				Context("message", "invalid metadata value length").
 				Build()
 		}
-		
+
 		valueBytes := make([]byte, valueLen)
 		if _, err := reader.Read(valueBytes); err != nil {
 			return int64(n), NewFileError("read footer metadata value", err)
@@ -277,7 +277,7 @@ func (f *Footer) ReadFrom(r io.Reader) (int64, error) {
 
 	computed := crc32.ChecksumIEEE(dataForChecksum)
 	if computed != storedChecksum {
-		return int64(n), lerrors.FormatCorrupted("", 0,
+		return int64(n), core.FormatCorrupted("", 0,
 			fmt.Sprintf("footer checksum mismatch: computed 0x%08X vs stored 0x%08X", computed, storedChecksum))
 	}
 

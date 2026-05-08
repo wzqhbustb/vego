@@ -6,7 +6,6 @@ import (
 	"hash/fnv"
 	"io"
 	"github.com/wzqhbustb/vego/core"
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
 	"github.com/wzqhbustb/vego/storage/format"
 	"os"
 	"path/filepath"
@@ -42,7 +41,7 @@ type Reader struct {
 func NewReader(filename string) (*Reader, error) {
 	file, err := os.Open(filename)
 	if err != nil {
-		return nil, lerrors.IO("new_reader", filename, err)
+		return nil, core.IO("new_reader", filename, err)
 	}
 
 	reader := &Reader{
@@ -55,7 +54,7 @@ func NewReader(filename string) (*Reader, error) {
 	// Read header
 	if err := reader.readHeader(); err != nil {
 		file.Close()
-		return nil, lerrors.New(lerrors.ErrCorruptedFile).
+		return nil, core.New(core.ErrCorruptedFile).
 			Op("read_header").
 			Context("message", "read header failed").
 			Wrap(err).
@@ -65,7 +64,7 @@ func NewReader(filename string) (*Reader, error) {
 	// Read footer
 	if err := reader.readFooter(); err != nil {
 		file.Close()
-		return nil, lerrors.New(lerrors.ErrCorruptedFile).
+		return nil, core.New(core.ErrCorruptedFile).
 			Op("read_footer").
 			Context("message", "read footer failed").
 			Wrap(err).
@@ -116,7 +115,7 @@ func NewReaderWithAsyncIO(filename string, asyncIO *vfs.AsyncIO) (*Reader, error
 
 	// 1. 注册文件到 AsyncIO/FilePool
 	if err := asyncIO.RegisterFile(fileID, filename); err != nil {
-		return nil, lerrors.New(lerrors.ErrIO).
+		return nil, core.New(core.ErrIO).
 			Op("register_file_async").
 			Context("file_id", fileID).
 			Wrap(err).
@@ -126,7 +125,7 @@ func NewReaderWithAsyncIO(filename string, asyncIO *vfs.AsyncIO) (*Reader, error
 	// 2. 获取文件句柄（增加引用计数）
 	file, err := asyncIO.GetFile(fileID)
 	if err != nil {
-		return nil, lerrors.New(lerrors.ErrIO).
+		return nil, core.New(core.ErrIO).
 			Op("get_file_async").
 			Context("file_id", fileID).
 			Wrap(err).
@@ -146,7 +145,7 @@ func NewReaderWithAsyncIO(filename string, asyncIO *vfs.AsyncIO) (*Reader, error
 	// 读取 header/footer（使用 FilePool 的句柄）
 	if err := reader.readHeader(); err != nil {
 		asyncIO.ReleaseFile(fileID) // 清理
-		return nil, lerrors.New(lerrors.ErrCorruptedFile).
+		return nil, core.New(core.ErrCorruptedFile).
 			Op("read_header_async").
 			Context("message", "read header failed").
 			Wrap(err).
@@ -155,7 +154,7 @@ func NewReaderWithAsyncIO(filename string, asyncIO *vfs.AsyncIO) (*Reader, error
 
 	if err := reader.readFooter(); err != nil {
 		asyncIO.ReleaseFile(fileID)
-		return nil, lerrors.New(lerrors.ErrCorruptedFile).
+		return nil, core.New(core.ErrCorruptedFile).
 			Op("read_footer_async").
 			Context("message", "read footer failed").
 			Wrap(err).
@@ -217,11 +216,11 @@ func (r *Reader) readFooter() error {
 	// Read column statistics if available
 	if r.footer.StatsOffset > 0 && r.footer.StatsCount > 0 {
 		if _, err := r.file.Seek(r.footer.StatsOffset, io.SeekStart); err != nil {
-			return lerrors.IO("seek_stats", "", err)
+			return core.IO("seek_stats", "", err)
 		}
 		r.stats = &format.StatisticsList{}
 		if _, err := r.stats.ReadFrom(r.file); err != nil {
-			return lerrors.IO("read_stats", "", err)
+			return core.IO("read_stats", "", err)
 		}
 	}
 
@@ -242,7 +241,7 @@ func (r *Reader) NumRows() int64 {
 // 根据 Reader 配置自动选择同步或异步模式
 func (r *Reader) ReadRecordBatch() (*core.RecordBatch, error) {
 	if r.closed {
-		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+		return nil, core.New(core.ErrInvalidArgument).
 			Op("read_record_batch").
 			Context("message", "reader is closed").
 			Build()
@@ -268,7 +267,7 @@ func (r *Reader) ReadRecordBatch() (*core.RecordBatch, error) {
 
 	batch, err := core.NewRecordBatch(schema, int(r.header.NumRows), columns)
 	if err != nil {
-		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+		return nil, core.New(core.ErrInvalidArgument).
 			Op("create_record_batch").
 			Context("message", "create record batch failed").
 			Wrap(err).
@@ -284,7 +283,7 @@ func (r *Reader) readColumnsSync(columns []core.Array) error {
 	for colIdx := 0; colIdx < schema.NumFields(); colIdx++ {
 		column, err := r.readColumn(int32(colIdx))
 		if err != nil {
-			return lerrors.New(lerrors.ErrColumnNotFound).
+			return core.New(core.ErrColumnNotFound).
 				Op("read_columns_sync").
 				Context("column_index", colIdx).
 				Wrap(err).
@@ -312,7 +311,7 @@ func (r *Reader) readColumnsAsync(columns []core.Array) error {
 
 			column, err := r.readColumnAsync(int32(idx))
 			if err != nil {
-				errChan <- lerrors.New(lerrors.ErrColumnNotFound).
+				errChan <- core.New(core.ErrColumnNotFound).
 					Op("read_columns_async").
 					Context("column_index", idx).
 					Wrap(err).
@@ -321,7 +320,7 @@ func (r *Reader) readColumnsAsync(columns []core.Array) error {
 			}
 			// 改进：添加边界检查
 			if idx >= len(columns) {
-				errChan <- lerrors.New(lerrors.ErrInvalidArgument).
+				errChan <- core.New(core.ErrInvalidArgument).
 					Op("read_columns_async").
 					Context("column_index", idx).
 					Context("message", "column index out of bounds").
@@ -349,11 +348,11 @@ func (r *Reader) readColumnsAsync(columns []core.Array) error {
 func (r *Reader) readColumn(columnIndex int32) (core.Array, error) {
 	pageIndices := r.footer.GetColumnPages(columnIndex)
 	if len(pageIndices) == 0 {
-		return nil, lerrors.PageNotFound("", columnIndex, 0)
+		return nil, core.PageNotFound("", columnIndex, 0)
 	}
 
 	if int(columnIndex) >= r.header.Schema.NumFields() {
-		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+		return nil, core.New(core.ErrInvalidArgument).
 			Op("read_column").
 			Context("column_index", columnIndex).
 			Context("message", "column index out of range").
@@ -366,12 +365,12 @@ func (r *Reader) readColumn(columnIndex int32) (core.Array, error) {
 	for _, pageIdx := range pageIndices {
 		page, err := r.readPage(pageIdx)
 		if err != nil {
-			return nil, lerrors.IO("read_page", "", err)
+			return nil, core.IO("read_page", "", err)
 		}
 
 		array, err := r.pageReader.ReadPage(page, field.Type)
 		if err != nil {
-			return nil, lerrors.New(lerrors.ErrDecodeFailed).
+			return nil, core.New(core.ErrDecodeFailed).
 				Op("deserialize_page").
 				Wrap(err).
 				Build()
@@ -427,7 +426,7 @@ func (r *Reader) readPageAsyncWithEncoding(pageIdx format.PageIndex, encoding fo
 		return r.pageReader.ReadPageFromData(result.Data, encoding, pageIdx.NumValues, dataType)
 
 	case <-ctx.Done():
-		return nil, lerrors.New(lerrors.ErrTimeout).
+		return nil, core.New(core.ErrTimeout).
 			Op("read_page_async_with_encoding").
 			Context("message", "timeout reading page").
 			Build()
@@ -472,7 +471,7 @@ func (r *Reader) readPagesAsync(pageIndices []format.PageIndex, dataType core.Da
 			select {
 			case result := <-resultCh:
 				if result.Error != nil {
-					errChan <- lerrors.New(lerrors.ErrIO).
+					errChan <- core.New(core.ErrIO).
 						Op("read_pages_async").
 						Context("page_index", idx).
 						Wrap(result.Error).
@@ -487,7 +486,7 @@ func (r *Reader) readPagesAsync(pageIndices []format.PageIndex, dataType core.Da
 					dataType,
 				)
 				if err != nil {
-					errChan <- lerrors.New(lerrors.ErrDecodeFailed).
+					errChan <- core.New(core.ErrDecodeFailed).
 						Op("decode_page_async").
 						Context("page_index", idx).
 						Wrap(err).
@@ -498,7 +497,7 @@ func (r *Reader) readPagesAsync(pageIndices []format.PageIndex, dataType core.Da
 				arrays[idx] = array
 
 			case <-ctx.Done():
-				errChan <- lerrors.New(lerrors.ErrTimeout).
+				errChan <- core.New(core.ErrTimeout).
 					Op("read_pages_async").
 					Context("page_index", idx).
 					Context("message", "timeout reading page").
@@ -527,7 +526,7 @@ func (r *Reader) readPagesSync(pageIndices []format.PageIndex, dataType core.Dat
 	for i, pageIdx := range pageIndices {
 		page, err := r.readPage(pageIdx)
 		if err != nil {
-			return nil, lerrors.New(lerrors.ErrIO).
+			return nil, core.New(core.ErrIO).
 				Op("read_pages_sync").
 				Context("page_index", i).
 				Wrap(err).
@@ -536,7 +535,7 @@ func (r *Reader) readPagesSync(pageIndices []format.PageIndex, dataType core.Dat
 
 		array, err := r.pageReader.ReadPage(page, dataType)
 		if err != nil {
-			return nil, lerrors.New(lerrors.ErrDecodeFailed).
+			return nil, core.New(core.ErrDecodeFailed).
 				Op("deserialize_page_sync").
 				Context("page_index", i).
 				Wrap(err).
@@ -646,7 +645,7 @@ func (r *Reader) readPageAsync(pageIndex format.PageIndex) (*format.Page, error)
 	select {
 	case result := <-resultCh:
 		if result.Error != nil {
-			return nil, lerrors.New(lerrors.ErrIO).
+			return nil, core.New(core.ErrIO).
 				Op("read_page_async").
 				Wrap(result.Error).
 				Build()
@@ -655,7 +654,7 @@ func (r *Reader) readPageAsync(pageIndex format.PageIndex) (*format.Page, error)
 		// 从 result.Data 构造 Page
 		page := &format.Page{}
 		if err := page.UnmarshalBinary(result.Data); err != nil {
-			return nil, lerrors.New(lerrors.ErrCorruptedFile).
+			return nil, core.New(core.ErrCorruptedFile).
 				Op("unmarshal_page").
 				Wrap(err).
 				Build()
@@ -664,7 +663,7 @@ func (r *Reader) readPageAsync(pageIndex format.PageIndex) (*format.Page, error)
 		return page, nil
 
 	case <-ctx.Done():
-		return nil, lerrors.New(lerrors.ErrTimeout).
+		return nil, core.New(core.ErrTimeout).
 			Op("read_page_async").
 			Context("message", "async read timeout").
 			Build()
@@ -674,7 +673,7 @@ func (r *Reader) readPageAsync(pageIndex format.PageIndex) (*format.Page, error)
 // mergeArrays merges multiple arrays of the same type into one
 func (r *Reader) mergeArrays(arrays []core.Array, dataType core.DataType) (core.Array, error) {
 	if len(arrays) == 0 {
-		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+		return nil, core.New(core.ErrInvalidArgument).
 			Op("merge_arrays").
 			Context("message", "no arrays to merge").
 			Build()
@@ -696,7 +695,7 @@ func (r *Reader) mergeArrays(arrays []core.Array, dataType core.DataType) (core.
 	case core.FIXED_SIZE_LIST:
 		return r.mergeFixedSizeListArrays(arrays, dataType.(*core.FixedSizeListType))
 	default:
-		return nil, lerrors.UnsupportedType("merge_arrays", dataType.Name(), "")
+		return nil, core.UnsupportedType("merge_arrays", dataType.Name(), "")
 	}
 }
 
@@ -857,14 +856,14 @@ func (r *Reader) getFixedSizeListValues(arr *core.FixedSizeListArray, index int)
 // This enables O(1) random access when combined with RowIndex.
 func (r *Reader) ReadRowAt(rowIdx int64) ([]interface{}, error) {
 	if r.closed {
-		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+		return nil, core.New(core.ErrInvalidArgument).
 			Op("read_row_at").
 			Context("message", "reader is closed").
 			Build()
 	}
 
 	if rowIdx < 0 || rowIdx >= r.header.NumRows {
-		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+		return nil, core.New(core.ErrInvalidArgument).
 			Op("read_row_at").
 			Context("row_idx", rowIdx).
 			Context("num_rows", r.header.NumRows).
@@ -881,7 +880,7 @@ func (r *Reader) ReadRowAt(rowIdx int64) ([]interface{}, error) {
 	for colIdx := 0; colIdx < numColumns; colIdx++ {
 		value, err := r.readColumnRowAt(int32(colIdx), rowIdx)
 		if err != nil {
-			return nil, lerrors.New(lerrors.ErrIO).
+			return nil, core.New(core.ErrIO).
 				Op("read_row_at_column").
 				Context("column", colIdx).
 				Context("row", rowIdx).
@@ -898,7 +897,7 @@ func (r *Reader) ReadRowAt(rowIdx int64) ([]interface{}, error) {
 func (r *Reader) readColumnRowAt(columnIndex int32, rowIdx int64) (interface{}, error) {
 	pageIndices := r.footer.GetColumnPages(columnIndex)
 	if len(pageIndices) == 0 {
-		return nil, lerrors.PageNotFound("", columnIndex, 0)
+		return nil, core.PageNotFound("", columnIndex, 0)
 	}
 
 	// Find which page contains the row
@@ -916,7 +915,7 @@ func (r *Reader) readColumnRowAt(columnIndex int32, rowIdx int64) (interface{}, 
 	}
 	
 	if !found {
-		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+		return nil, core.New(core.ErrInvalidArgument).
 			Op("read_column_row_at").
 			Context("column", columnIndex).
 			Context("row", rowIdx).
@@ -942,7 +941,7 @@ func (r *Reader) readColumnRowAt(columnIndex int32, rowIdx int64) (interface{}, 
 	// Extract the specific row value from the page
 	localRowIdx := int(rowIdx - pageStartRow)
 	if localRowIdx < 0 || localRowIdx >= array.Len() {
-		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+		return nil, core.New(core.ErrInvalidArgument).
 			Op("read_column_row_at").
 			Context("local_row_idx", localRowIdx).
 			Context("array_len", array.Len()).
@@ -974,7 +973,7 @@ func (r *Reader) extractValueFromArray(arr core.Array, idx int, dataType core.Da
 		// Handle vector type
 		return r.getFixedSizeListValues(arr, idx), nil
 	default:
-		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+		return nil, core.New(core.ErrInvalidArgument).
 			Op("extract_value").
 			Context("type", dataType.Name()).
 			Context("message", "unsupported array type").
@@ -988,7 +987,7 @@ func (r *Reader) Close() error {
 	defer r.mu.Unlock()
 
 	if r.closed {
-		return lerrors.New(lerrors.ErrInvalidArgument).
+		return core.New(core.ErrInvalidArgument).
 			Op("close_reader").
 			Context("message", "reader already closed").
 			Build()

@@ -5,7 +5,6 @@ import (
 	"sync"
 	"unsafe"
 
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
 	"github.com/wzqhbustb/vego/core"
 
 	"github.com/klauspost/compress/zstd"
@@ -36,7 +35,7 @@ func NewZstdDecoder() (*ZstdDecoder, error) {
 // (RLE/BitPacking/BSS/Dictionary) which store null bitmap separately.
 func (d *ZstdDecoder) Decode(data []byte, dtype core.DataType, nullBitmap []byte, numValues int) (core.Array, error) {
 	if len(data) < 8 {
-		return nil, lerrors.New(lerrors.ErrCorruptedFile).
+		return nil, core.New(core.ErrCorruptedFile).
 			Op("zstd_decode").
 			Context("reason", "data too short").
 			Context("min_required", 8).
@@ -47,7 +46,7 @@ func (d *ZstdDecoder) Decode(data []byte, dtype core.DataType, nullBitmap []byte
 	// Get decoder from pool
 	decoderRaw := d.decoderPool.Get()
 	if err, ok := decoderRaw.(error); ok {
-		return nil, lerrors.New(lerrors.ErrDecodeFailed).
+		return nil, core.New(core.ErrDecodeFailed).
 			Op("zstd_decode").
 			Context("reason", "decoder pool error").
 			Wrap(err).
@@ -59,7 +58,7 @@ func (d *ZstdDecoder) Decode(data []byte, dtype core.DataType, nullBitmap []byte
 	// Decompress
 	decompressed, err := decoder.DecodeAll(data, nil)
 	if err != nil {
-		return nil, lerrors.New(lerrors.ErrDecodeFailed).
+		return nil, core.New(core.ErrDecodeFailed).
 			Op("zstd_decode").
 			Context("stage", "decompress").
 			Wrap(err).
@@ -75,7 +74,7 @@ func (d *ZstdDecoder) Decode(data []byte, dtype core.DataType, nullBitmap []byte
 // Note: bitmapLen uses uint32 (4 bytes) to support large datasets (>520k rows)
 func bytesToArray(data []byte, dtype core.DataType) (core.Array, error) {
 	if len(data) < 8 {
-		return nil, lerrors.New(lerrors.ErrCorruptedFile).
+		return nil, core.New(core.ErrCorruptedFile).
 			Op("zstd_bytes_to_array").
 			Context("reason", "data too short for header").
 			Context("min_required", 8).
@@ -98,7 +97,7 @@ func bytesToArray(data []byte, dtype core.DataType) (core.Array, error) {
 		listType := dtype.(*core.FixedSizeListType)
 		return bytesToFixedSizeListArray(data, listType, numValues)
 	default:
-		return nil, lerrors.New(lerrors.ErrUnsupportedType).
+		return nil, core.New(core.ErrUnsupportedType).
 			Op("zstd_bytes_to_array").
 			Build()
 	}
@@ -107,7 +106,7 @@ func bytesToArray(data []byte, dtype core.DataType) (core.Array, error) {
 func bytesToInt32Array(data []byte, numValues int) (core.Array, error) {
 	valueSize := 4 * numValues
 	if len(data) < 4+valueSize+4 {
-		return nil, lerrors.New(lerrors.ErrCorruptedFile).
+		return nil, core.New(core.ErrCorruptedFile).
 			Op("zstd_bytes_to_int32").
 			Context("reason", "insufficient data").
 			Context("expected", 4+valueSize+4).
@@ -128,7 +127,7 @@ func bytesToInt32Array(data []byte, numValues int) (core.Array, error) {
 	if bitmapLen > 0 {
 		bitmapStart := 4 + valueSize + 4
 		if len(data) < bitmapStart+bitmapLen {
-			return nil, lerrors.New(lerrors.ErrCorruptedFile).
+			return nil, core.New(core.ErrCorruptedFile).
 				Op("zstd_bytes_to_int32").
 				Context("reason", "insufficient data for bitmap").
 				Context("expected", bitmapStart+bitmapLen).
@@ -145,7 +144,7 @@ func bytesToInt32Array(data []byte, numValues int) (core.Array, error) {
 func bytesToInt64Array(data []byte, numValues int) (core.Array, error) {
 	valueSize := 8 * numValues
 	if len(data) < 4+valueSize+4 {
-		return nil, lerrors.New(lerrors.ErrCorruptedFile).
+		return nil, core.New(core.ErrCorruptedFile).
 			Op("zstd_bytes_to_int64").
 			Context("reason", "insufficient data").
 			Context("expected", 4+valueSize+4).
@@ -164,7 +163,7 @@ func bytesToInt64Array(data []byte, numValues int) (core.Array, error) {
 	if bitmapLen > 0 {
 		bitmapStart := 4 + valueSize + 4
 		if len(data) < bitmapStart+bitmapLen {
-			return nil, lerrors.New(lerrors.ErrCorruptedFile).
+			return nil, core.New(core.ErrCorruptedFile).
 				Op("zstd_bytes_to_int64").
 				Context("reason", "insufficient data for bitmap").
 				Context("expected", bitmapStart+bitmapLen).
@@ -253,7 +252,7 @@ func bytesToFixedSizeListArray(data []byte, listType *core.FixedSizeListType, nu
 	case core.INT64:
 		childValueSize = 8 * totalChildValues
 	default:
-		return nil, lerrors.New(lerrors.ErrUnsupportedType).
+		return nil, core.New(core.ErrUnsupportedType).
 			Op("zstd_bytes_to_fsl").
 			Context("element_type_id", elemType.ID()).
 			Build()
@@ -262,7 +261,7 @@ func bytesToFixedSizeListArray(data []byte, listType *core.FixedSizeListType, nu
 	// 检查数据是否足够
 	minSize := 4 + childValueSize + 4
 	if len(data) < minSize {
-		return nil, lerrors.New(lerrors.ErrCorruptedFile).
+		return nil, core.New(core.ErrCorruptedFile).
 			Op("zstd_bytes_to_fsl").
 			Context("reason", "insufficient data").
 			Context("expected", minSize).
@@ -296,7 +295,7 @@ func bytesToFixedSizeListArray(data []byte, listType *core.FixedSizeListType, nu
 	}
 
 	if err != nil {
-		return nil, lerrors.New(lerrors.ErrDecodeFailed).
+		return nil, core.New(core.ErrDecodeFailed).
 			Op("zstd_bytes_to_fsl").
 			Context("stage", "decode_child").
 			Wrap(err).
@@ -311,7 +310,7 @@ func bytesToFixedSizeListArray(data []byte, listType *core.FixedSizeListType, nu
 	if bitmapLen > 0 {
 		bitmapStart := bitmapLenOffset + 4
 		if len(data) < bitmapStart+bitmapLen {
-			return nil, lerrors.New(lerrors.ErrCorruptedFile).
+			return nil, core.New(core.ErrCorruptedFile).
 				Op("zstd_bytes_to_fsl").
 				Context("reason", "insufficient data for list null bitmap").
 				Context("expected", bitmapStart+bitmapLen).

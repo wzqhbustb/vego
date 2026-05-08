@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"math"
 
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
 	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/format"
 )
@@ -33,7 +32,7 @@ func (e *BSSEncoder) Encode(array core.Array) (*EncodedData, error) {
 	case *core.Float64Array:
 		return e.encodeFloat64(arr)
 	default:
-		return nil, lerrors.New(lerrors.ErrUnsupportedType).
+		return nil, core.New(core.ErrUnsupportedType).
 			Op("bss_encode").
 			Build()
 	}

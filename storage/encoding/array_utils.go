@@ -1,7 +1,6 @@
 package encoding
 
 import (
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
 	"github.com/wzqhbustb/vego/core"
 	"unsafe"
 )
@@ -24,7 +23,7 @@ func ArrayToBytes(array core.Array) ([]byte, error) {
 		// For FixedSizeListArray, recursively get bytes from child array
 		return ArrayToBytes(arr.Values())
 	default:
-		return nil, lerrors.New(lerrors.ErrUnsupportedType).
+		return nil, core.New(core.ErrUnsupportedType).
 			Op("array_to_bytes").
 			Context("array_type", "unknown").
 			Build()

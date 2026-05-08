@@ -3,7 +3,6 @@ package column
 import (
 	"fmt"
 	"github.com/wzqhbustb/vego/core"
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
 	"github.com/wzqhbustb/vego/storage/format"
 )
 
@@ -57,7 +56,7 @@ func (e *ColumnError) Error() string {
 
 // newColumnError 创建列错误（使用新的错误系统）
 func newColumnError(op, column, message string) error {
-	return lerrors.New(lerrors.ErrInvalidArgument).
+	return core.New(core.ErrInvalidArgument).
 		Op(op).
 		Context("column", column).
 		Context("message", message).
@@ -75,7 +74,7 @@ func validateArray(array core.Array, field core.Field) error {
 	}
 
 	if array.DataType().ID() != field.Type.ID() {
-		return lerrors.TypeMismatch("validate_array", field.Name,
+		return core.TypeMismatch("validate_array", field.Name,
 			field.Type.Name(), array.DataType().Name())
 	}
 

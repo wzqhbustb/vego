@@ -8,7 +8,6 @@ import (
 
 	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/encoding"
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
 	"github.com/wzqhbustb/vego/storage/format"
 )
 
@@ -168,7 +167,7 @@ func TestColumnError_Structured(t *testing.T) {
 				return
 			}
 
-			if !lerrors.Is(err, lerrors.ErrInvalidArgument) {
+			if !core.Is(err, core.ErrInvalidArgument) {
 				t.Errorf("Expected error code ErrInvalidArgument")
 			}
 
@@ -186,17 +185,17 @@ func TestColumnError_Structured(t *testing.T) {
 func TestColumnError_Context(t *testing.T) {
 	err := newColumnError("write_column", "embedding", "unsupported data type")
 
-	wrappedErr := lerrors.New(lerrors.ErrColumnNotFound).
+	wrappedErr := core.New(core.ErrColumnNotFound).
 		Op("batch_write").
 		Context("batch_id", 123).
 		Wrap(err).
 		Build()
 
-	if !lerrors.Is(wrappedErr, lerrors.ErrColumnNotFound) {
+	if !core.Is(wrappedErr, core.ErrColumnNotFound) {
 		t.Error("Wrapped error should preserve error code")
 	}
 
-	if !lerrors.Is(wrappedErr, lerrors.ErrInvalidArgument) {
+	if !core.Is(wrappedErr, core.ErrInvalidArgument) {
 		t.Error("Wrapped error should preserve original error code in chain")
 	}
 }

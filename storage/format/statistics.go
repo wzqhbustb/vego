@@ -11,7 +11,6 @@ import (
 	"io"
 	"math"
 
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
 	"github.com/wzqhbustb/vego/core"
 )
 
@@ -94,56 +93,56 @@ func (sl *StatisticsList) WriteTo(w io.Writer) (int64, error) {
 	
 	// Write header
 	if err := binary.Write(buf, binary.LittleEndian, sl.Version); err != nil {
-		return 0, lerrors.IO("write_stats_version", "", err)
+		return 0, core.IO("write_stats_version", "", err)
 	}
 	if err := binary.Write(buf, binary.LittleEndian, sl.NumColumns); err != nil {
-		return 0, lerrors.IO("write_stats_num_columns", "", err)
+		return 0, core.IO("write_stats_num_columns", "", err)
 	}
 	
 	// Write each column statistics
 	for i := range sl.Stats {
 		stats := &sl.Stats[i]
 		if err := binary.Write(buf, binary.LittleEndian, stats.Version); err != nil {
-			return 0, lerrors.IO("write_stats_col_version", "", err)
+			return 0, core.IO("write_stats_col_version", "", err)
 		}
 		if err := binary.Write(buf, binary.LittleEndian, stats.ColumnIndex); err != nil {
-			return 0, lerrors.IO("write_stats_col_index", "", err)
+			return 0, core.IO("write_stats_col_index", "", err)
 		}
 		if err := binary.Write(buf, binary.LittleEndian, stats.NullCount); err != nil {
-			return 0, lerrors.IO("write_stats_null_count", "", err)
+			return 0, core.IO("write_stats_null_count", "", err)
 		}
 		if err := binary.Write(buf, binary.LittleEndian, stats.TypeID); err != nil {
-			return 0, lerrors.IO("write_stats_type_id", "", err)
+			return 0, core.IO("write_stats_type_id", "", err)
 		}
 		if err := binary.Write(buf, binary.LittleEndian, stats.HasMinMax); err != nil {
-			return 0, lerrors.IO("write_stats_has_minmax", "", err)
+			return 0, core.IO("write_stats_has_minmax", "", err)
 		}
 		
 		if stats.HasMinMax {
 			// Write Min value (length-prefixed)
 			if err := binary.Write(buf, binary.LittleEndian, uint32(len(stats.MinValue))); err != nil {
-				return 0, lerrors.IO("write_stats_min_len", "", err)
+				return 0, core.IO("write_stats_min_len", "", err)
 			}
 			if _, err := buf.Write(stats.MinValue); err != nil {
-				return 0, lerrors.IO("write_stats_min_value", "", err)
+				return 0, core.IO("write_stats_min_value", "", err)
 			}
 			
 			// Write Max value (length-prefixed)
 			if err := binary.Write(buf, binary.LittleEndian, uint32(len(stats.MaxValue))); err != nil {
-				return 0, lerrors.IO("write_stats_max_len", "", err)
+				return 0, core.IO("write_stats_max_len", "", err)
 			}
 			if _, err := buf.Write(stats.MaxValue); err != nil {
-				return 0, lerrors.IO("write_stats_max_value", "", err)
+				return 0, core.IO("write_stats_max_value", "", err)
 			}
 		}
 		
 		// Write distinct count if available
 		if err := binary.Write(buf, binary.LittleEndian, stats.HasDistinctCount); err != nil {
-			return 0, lerrors.IO("write_stats_has_distinct", "", err)
+			return 0, core.IO("write_stats_has_distinct", "", err)
 		}
 		if stats.HasDistinctCount {
 			if err := binary.Write(buf, binary.LittleEndian, stats.DistinctCount); err != nil {
-				return 0, lerrors.IO("write_stats_distinct_count", "", err)
+				return 0, core.IO("write_stats_distinct_count", "", err)
 			}
 		}
 	}
@@ -152,7 +151,7 @@ func (sl *StatisticsList) WriteTo(w io.Writer) (int64, error) {
 	data := buf.Bytes()
 	checksum := crc32.ChecksumIEEE(data)
 	if err := binary.Write(buf, binary.LittleEndian, checksum); err != nil {
-		return 0, lerrors.IO("write_stats_checksum", "", err)
+		return 0, core.IO("write_stats_checksum", "", err)
 	}
 	
 	n, err := w.Write(buf.Bytes())
@@ -202,7 +201,7 @@ func (sl *StatisticsList) ReadFrom(r io.Reader) (int64, error) {
 	// Validate NumColumns to prevent OOM from malicious/corrupted data
 	const MaxColumns = 10000 // Reasonable upper limit for column count
 	if sl.NumColumns > MaxColumns {
-		return tr.total, lerrors.New(lerrors.ErrCorruptedFile).
+		return tr.total, core.New(core.ErrCorruptedFile).
 			Op("read_stats").
 			Context("field", "num_columns").
 			Context("value", sl.NumColumns).
@@ -239,7 +238,7 @@ func (sl *StatisticsList) ReadFrom(r io.Reader) (int64, error) {
 			
 			// Validate minLen to prevent OOM
 			if minLen > MaxStatsValueSize {
-				return tr.total, lerrors.New(lerrors.ErrCorruptedFile).
+				return tr.total, core.New(core.ErrCorruptedFile).
 					Op("read_stats").
 					Context("field", "min_value_len").
 					Context("value", minLen).
@@ -261,7 +260,7 @@ func (sl *StatisticsList) ReadFrom(r io.Reader) (int64, error) {
 			
 			// Validate maxLen to prevent OOM
 			if maxLen > MaxStatsValueSize {
-				return tr.total, lerrors.New(lerrors.ErrCorruptedFile).
+				return tr.total, core.New(core.ErrCorruptedFile).
 					Op("read_stats").
 					Context("field", "max_value_len").
 					Context("value", maxLen).
@@ -293,13 +292,13 @@ func (sl *StatisticsList) ReadFrom(r io.Reader) (int64, error) {
 	// Read and verify CRC32 checksum
 	var storedChecksum uint32
 	if err := binary.Read(r, binary.LittleEndian, &storedChecksum); err != nil {
-		return tr.total, lerrors.IO("read_stats_checksum", "", err)
+		return tr.total, core.IO("read_stats_checksum", "", err)
 	}
 	
 	// Calculate CRC on all data read (excluding the checksum itself)
 	computed := crc32.ChecksumIEEE(tr.buf)
 	if computed != storedChecksum {
-		return tr.total, lerrors.New(lerrors.ErrCorruptedFile).
+		return tr.total, core.New(core.ErrCorruptedFile).
 			Op("read_stats").
 			Context("field", "checksum").
 			Context("computed", computed).
@@ -733,7 +732,7 @@ func minMaxFloat64Slice(values []float64) (float64, float64) {
 // Validate checks if the statistics are valid.
 func (cs *ColumnStatistics) Validate() error {
 	if cs.Version != 1 {
-		return lerrors.New(lerrors.ErrInvalidArgument).
+		return core.New(core.ErrInvalidArgument).
 			Op("validate_column_stats").
 			Context("version", cs.Version).
 			Context("expected", 1).
@@ -742,7 +741,7 @@ func (cs *ColumnStatistics) Validate() error {
 	
 	// Validate TypeID is within valid range
 	if cs.TypeID > StatsTypeBinary {
-		return lerrors.New(lerrors.ErrInvalidArgument).
+		return core.New(core.ErrInvalidArgument).
 			Op("validate_column_stats").
 			Context("type_id", cs.TypeID).
 			Context("max_allowed", StatsTypeBinary).
@@ -752,7 +751,7 @@ func (cs *ColumnStatistics) Validate() error {
 	
 	// Validate ColumnIndex
 	if cs.ColumnIndex < 0 {
-		return lerrors.New(lerrors.ErrInvalidArgument).
+		return core.New(core.ErrInvalidArgument).
 			Op("validate_column_stats").
 			Context("column_index", cs.ColumnIndex).
 			Context("message", "column index must be non-negative").
@@ -831,7 +830,7 @@ func (cs *ColumnStatistics) Merge(other *ColumnStatistics) error {
 	// Both have min/max, need to compare and update
 	// Use TypeID for explicit type matching (safer than byte length inference)
 	if cs.TypeID != other.TypeID {
-		return lerrors.New(lerrors.ErrInvalidArgument).
+		return core.New(core.ErrInvalidArgument).
 			Op("merge_column_stats").
 			Context("message", "type mismatch between statistics").
 			Context("expected_type", cs.TypeID).

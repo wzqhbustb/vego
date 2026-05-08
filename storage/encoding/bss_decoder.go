@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"math"
 
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
 	"github.com/wzqhbustb/vego/core"
 )
 
@@ -16,7 +15,7 @@ func NewBSSDecoder() *BSSDecoder {
 
 func (d *BSSDecoder) Decode(data []byte, dtype core.DataType, nullBitmap []byte, numValues int) (core.Array, error) {
 	if len(data) < 4 {
-		return nil, lerrors.New(lerrors.ErrCorruptedFile).
+		return nil, core.New(core.ErrCorruptedFile).
 			Op("bss_decode").
 			Context("reason", "data too short for header").
 			Context("min_required", 4).
@@ -34,7 +33,7 @@ func (d *BSSDecoder) Decode(data []byte, dtype core.DataType, nullBitmap []byte,
 	case core.FLOAT64:
 		return d.decodeFloat64(data[headerSize:], packedNumValues, nullBitmap, numValues)
 	default:
-		return nil, lerrors.New(lerrors.ErrUnsupportedType).
+		return nil, core.New(core.ErrUnsupportedType).
 			Op("bss_decode").
 			Build()
 	}
@@ -45,7 +44,7 @@ func (d *BSSDecoder) decodeFloat32(data []byte, packedNumValues int, nullBitmap 
 	// Each stream has packedNumValues bytes
 	expectedSize := packedNumValues * 4
 	if len(data) < expectedSize {
-		return nil, lerrors.New(lerrors.ErrCorruptedFile).
+		return nil, core.New(core.ErrCorruptedFile).
 			Op("bss_decode_float32").
 			Context("reason", "insufficient data").
 			Context("expected", expectedSize).
@@ -67,7 +66,7 @@ func (d *BSSDecoder) decodeFloat32(data []byte, packedNumValues int, nullBitmap 
 	if nullBitmap != nil && numValues > 0 {
 		expandedValues, err := ExpandFloat32(values, nullBitmap, numValues)
 		if err != nil {
-			return nil, lerrors.New(lerrors.ErrCorruptedFile).
+			return nil, core.New(core.ErrCorruptedFile).
 				Op("bss_decode_float32").
 				Wrap(err).
 				Build()
@@ -82,7 +81,7 @@ func (d *BSSDecoder) decodeFloat32(data []byte, packedNumValues int, nullBitmap 
 func (d *BSSDecoder) decodeFloat64(data []byte, packedNumValues int, nullBitmap []byte, numValues int) (core.Array, error) {
 	expectedSize := packedNumValues * 8
 	if len(data) < expectedSize {
-		return nil, lerrors.New(lerrors.ErrCorruptedFile).
+		return nil, core.New(core.ErrCorruptedFile).
 			Op("bss_decode_float64").
 			Context("reason", "insufficient data").
 			Context("expected", expectedSize).
@@ -107,7 +106,7 @@ func (d *BSSDecoder) decodeFloat64(data []byte, packedNumValues int, nullBitmap 
 	if nullBitmap != nil && numValues > 0 {
 		expandedValues, err := ExpandFloat64(values, nullBitmap, numValues)
 		if err != nil {
-			return nil, lerrors.New(lerrors.ErrCorruptedFile).
+			return nil, core.New(core.ErrCorruptedFile).
 				Op("bss_decode_float64").
 				Wrap(err).
 				Build()

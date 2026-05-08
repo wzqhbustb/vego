@@ -6,7 +6,6 @@ import (
 	"github.com/wzqhbustb/vego/core"
 	time "time"
 
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
 )
 
 // Stat represents different types of statistics we can compute on data blocks
@@ -635,14 +634,14 @@ func (s *Statistics) GetCardinalityRatio() float64 {
 // Validate checks the consistency of computed statistics
 func (s *Statistics) Validate() error {
 	if s == nil {
-		return lerrors.New(lerrors.ErrInvalidArgument).
+		return core.New(core.ErrInvalidArgument).
 			Op("statistics_validate").
 			Context("reason", "statistics is nil").
 			Build()
 	}
 
 	if s.NumValues < 0 {
-		return lerrors.New(lerrors.ErrInvalidArgument).
+		return core.New(core.ErrInvalidArgument).
 			Op("statistics_validate").
 			Context("reason", "invalid NumValues").
 			Context("value", s.NumValues).
@@ -650,7 +649,7 @@ func (s *Statistics) Validate() error {
 	}
 
 	if s.NullCount != nil && *s.NullCount < 0 {
-		return lerrors.New(lerrors.ErrInvalidArgument).
+		return core.New(core.ErrInvalidArgument).
 			Op("statistics_validate").
 			Context("reason", "invalid NullCount").
 			Context("value", *s.NullCount).
@@ -658,7 +657,7 @@ func (s *Statistics) Validate() error {
 	}
 
 	if s.NullCount != nil && *s.NullCount > s.NumValues {
-		return lerrors.New(lerrors.ErrInvalidArgument).
+		return core.New(core.ErrInvalidArgument).
 			Op("statistics_validate").
 			Context("reason", "NullCount exceeds NumValues").
 			Context("null_count", *s.NullCount).
@@ -670,7 +669,7 @@ func (s *Statistics) Validate() error {
 		// Note: Due to HyperLogLog estimation error, cardinality might slightly exceed NumValues
 		// Only flag as error if it's significantly wrong (> 2x)
 		if *s.Cardinality > uint64(s.NumValues)*2 {
-			return lerrors.New(lerrors.ErrInvalidArgument).
+			return core.New(core.ErrInvalidArgument).
 				Op("statistics_validate").
 				Context("reason", "Cardinality significantly exceeds NumValues").
 				Context("cardinality", *s.Cardinality).
@@ -680,7 +679,7 @@ func (s *Statistics) Validate() error {
 	}
 
 	if s.RunCount != nil && *s.RunCount > uint64(s.NumValues) {
-		return lerrors.New(lerrors.ErrInvalidArgument).
+		return core.New(core.ErrInvalidArgument).
 			Op("statistics_validate").
 			Context("reason", "RunCount exceeds NumValues").
 			Context("run_count", *s.RunCount).
@@ -692,7 +691,7 @@ func (s *Statistics) Validate() error {
 		// Sanity check: data size should be reasonable relative to number of values
 		maxExpectedSize := uint64(s.NumValues) * 16 // Assume max 16 bytes per value
 		if *s.DataSize > maxExpectedSize {
-			return lerrors.New(lerrors.ErrInvalidArgument).
+			return core.New(core.ErrInvalidArgument).
 				Op("statistics_validate").
 				Context("reason", "DataSize seems too large for NumValues").
 				Context("data_size", *s.DataSize).

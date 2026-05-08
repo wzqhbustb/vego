@@ -5,7 +5,6 @@ import (
 	"io"
 	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/encoding"
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
 	"github.com/wzqhbustb/vego/storage/format"
 	"os"
 )
@@ -37,7 +36,7 @@ type Writer struct {
 func NewWriter(filename string, schema *core.Schema, factory *encoding.EncoderFactory) (*Writer, error) {
 	file, err := os.Create(filename)
 	if err != nil {
-		return nil, lerrors.IO("new_writer", filename, err)
+		return nil, core.IO("new_writer", filename, err)
 	}
 
 	if factory == nil {
@@ -57,7 +56,7 @@ func NewWriter(filename string, schema *core.Schema, factory *encoding.EncoderFa
 
 	if err := writer.writeHeaderWithPadding(); err != nil {
 		file.Close()
-		return nil, lerrors.New(lerrors.ErrIO).
+		return nil, core.New(core.ErrIO).
 			Op("write_initial_header").
 			Wrap(err).
 			Build()
@@ -74,7 +73,7 @@ func (w *Writer) writeHeaderWithPadding() error {
 	headerBuf := new(bytes.Buffer)
 	_, err := w.header.WriteTo(headerBuf)
 	if err != nil {
-		return lerrors.New(lerrors.ErrIO).
+		return core.New(core.ErrIO).
 			Op("serialize_header").
 			Wrap(err).
 			Build()
@@ -85,7 +84,7 @@ func (w *Writer) writeHeaderWithPadding() error {
 
 	// Check if header fits in reserved space
 	if headerLen > HeaderReservedSize {
-		return lerrors.New(lerrors.ErrMetadataError).
+		return core.New(core.ErrMetadataError).
 			Op("write_header_with_padding").
 			Context("header_size", headerLen).
 			Context("reserved_size", HeaderReservedSize).
@@ -95,7 +94,7 @@ func (w *Writer) writeHeaderWithPadding() error {
 
 	// Write header data
 	if _, err := w.file.Write(headerData); err != nil {
-		return lerrors.IO("write_header_data", "", err)
+		return core.IO("write_header_data", "", err)
 	}
 
 	// Write padding to fill reserved space
@@ -103,7 +102,7 @@ func (w *Writer) writeHeaderWithPadding() error {
 	if paddingSize > 0 {
 		padding := make([]byte, paddingSize)
 		if _, err := w.file.Write(padding); err != nil {
-			return lerrors.IO("write_header_padding", "", err)
+			return core.IO("write_header_padding", "", err)
 		}
 	}
 
@@ -113,14 +112,14 @@ func (w *Writer) writeHeaderWithPadding() error {
 // WriteRecordBatch writes a RecordBatch to the file
 func (w *Writer) WriteRecordBatch(batch *core.RecordBatch) error {
 	if w.closed {
-		return lerrors.New(lerrors.ErrInvalidArgument).
+		return core.New(core.ErrInvalidArgument).
 			Op("write_record_batch").
 			Context("message", "writer is closed").
 			Build()
 	}
 
 	if batch == nil {
-		return lerrors.New(lerrors.ErrInvalidArgument).
+		return core.New(core.ErrInvalidArgument).
 			Op("write_record_batch").
 			Context("message", "batch is nil").
 			Build()
@@ -128,7 +127,7 @@ func (w *Writer) WriteRecordBatch(batch *core.RecordBatch) error {
 
 	// Validate schema matches
 	if !w.header.Schema.Equal(batch.Schema()) {
-		return lerrors.New(lerrors.ErrSchemaMismatch).
+		return core.New(core.ErrSchemaMismatch).
 			Op("write_record_batch").
 			Context("message", "schema mismatch").
 			Build()
@@ -143,7 +142,7 @@ func (w *Writer) WriteRecordBatch(batch *core.RecordBatch) error {
 		field := batch.Schema().Field(colIdx)
 
 		if err := validateArray(column, field); err != nil {
-			return lerrors.New(lerrors.ErrInvalidArgument).
+			return core.New(core.ErrInvalidArgument).
 				Op("write_record_batch").
 				Context("column_index", colIdx).
 				Context("column_name", field.Name).
@@ -157,7 +156,7 @@ func (w *Writer) WriteRecordBatch(batch *core.RecordBatch) error {
 			batchStats := format.ComputeColumnStatistics(column, int32(colIdx))
 			if existingStats := w.columnStats.GetColumnStats(int32(colIdx)); existingStats != nil {
 				if err := existingStats.Merge(batchStats); err != nil {
-					return lerrors.New(lerrors.ErrInvalidArgument).
+					return core.New(core.ErrInvalidArgument).
 						Op("accumulate_stats").
 						Context("column_index", colIdx).
 						Context("column_name", field.Name).
@@ -168,7 +167,7 @@ func (w *Writer) WriteRecordBatch(batch *core.RecordBatch) error {
 		}
 
 		if err := w.writeColumn(int32(colIdx), column); err != nil {
-			return lerrors.New(lerrors.ErrIO).
+			return core.New(core.ErrIO).
 				Op("write_record_batch").
 				Context("column_index", colIdx).
 				Context("column_name", field.Name).
@@ -186,7 +185,7 @@ func (w *Writer) writeColumn(columnIndex int32, array core.Array) error {
 	// Convert array to pages
 	pages, err := w.pageWriter.WritePages(array, columnIndex)
 	if err != nil {
-		return lerrors.New(lerrors.ErrEncodeFailed).
+		return core.New(core.ErrEncodeFailed).
 			Op("write_column").
 			Context("message", "create pages failed").
 			Wrap(err).
@@ -201,7 +200,7 @@ func (w *Writer) writeColumn(columnIndex int32, array core.Array) error {
 		// Write page to file
 		n, err := page.WriteTo(w.file)
 		if err != nil {
-			return lerrors.IO("write_page", "", err)
+			return core.IO("write_page", "", err)
 		}
 
 		// Update position
@@ -225,7 +224,7 @@ func (w *Writer) writeColumn(columnIndex int32, array core.Array) error {
 // Close finalizes the file by writing header and footer
 func (w *Writer) Close() error {
 	if w.closed {
-		return lerrors.New(lerrors.ErrInvalidArgument).
+		return core.New(core.ErrInvalidArgument).
 			Op("close_writer").
 			Context("message", "writer already closed").
 			Build()
@@ -244,30 +243,30 @@ func (w *Writer) Close() error {
 		
 		// Seek to stats position and write
 		if _, err := w.file.Seek(w.currentPos, io.SeekStart); err != nil {
-			return lerrors.IO("seek_stats", "", err)
+			return core.IO("seek_stats", "", err)
 		}
 		
 		n, err := w.columnStats.WriteTo(w.file)
 		if err != nil {
-			return lerrors.IO("write_stats", "", err)
+			return core.IO("write_stats", "", err)
 		}
 		w.currentPos += n
 	}
 
 	// Write footer at current position (after stats)
 	if _, err := w.file.Seek(w.currentPos, io.SeekStart); err != nil {
-		return lerrors.IO("seek_footer", "", err)
+		return core.IO("seek_footer", "", err)
 	}
 
 	if _, err := w.footer.WriteTo(w.file); err != nil {
-		return lerrors.IO("write_footer", "", err)
+		return core.IO("write_footer", "", err)
 	}
 
 	// Update header with final NumRows
 	// Serialize to buffer first to check size
 	headerBuf := new(bytes.Buffer)
 	if _, err := w.header.WriteTo(headerBuf); err != nil {
-		return lerrors.New(lerrors.ErrIO).
+		return core.New(core.ErrIO).
 			Op("serialize_final_header").
 			Wrap(err).
 			Build()
@@ -278,7 +277,7 @@ func (w *Writer) Close() error {
 
 	// Verify header still fits in reserved space
 	if headerLen > HeaderReservedSize {
-		return lerrors.New(lerrors.ErrMetadataError).
+		return core.New(core.ErrMetadataError).
 			Op("close_writer").
 			Context("header_size", headerLen).
 			Context("reserved_size", HeaderReservedSize).
@@ -288,22 +287,22 @@ func (w *Writer) Close() error {
 
 	// Seek back to beginning and rewrite header
 	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
-		return lerrors.IO("seek_header", "", err)
+		return core.IO("seek_header", "", err)
 	}
 
 	// Write updated header (no need to write padding again, it's already there)
 	if _, err := w.file.Write(headerData); err != nil {
-		return lerrors.IO("rewrite_header", "", err)
+		return core.IO("rewrite_header", "", err)
 	}
 
 	// Sync file to ensure data is written to disk
 	if err := w.file.Sync(); err != nil {
-		return lerrors.IO("sync_file", "", err)
+		return core.IO("sync_file", "", err)
 	}
 
 	// Close file
 	if err := w.file.Close(); err != nil {
-		return lerrors.IO("close_file", "", err)
+		return core.IO("close_file", "", err)
 	}
 
 	return nil

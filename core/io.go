@@ -1,5 +1,5 @@
 // langgraphdemogo/lance/errors/io.go
-package errors
+package core
 
 import (
 	"os"

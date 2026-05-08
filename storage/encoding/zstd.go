@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"sync"
 
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
 	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/format"
 
@@ -59,7 +58,7 @@ func (e *ZstdEncoder) Encode(array core.Array) (*EncodedData, error) {
 	// 将 Array 转换为字节（包含 values 和 null bitmap）
 	data, err := arrayToBytesWithNull(array)
 	if err != nil {
-		return nil, lerrors.New(lerrors.ErrEncodeFailed).
+		return nil, core.New(core.ErrEncodeFailed).
 			Op("zstd_encode").
 			Context("stage", "array_to_bytes").
 			Wrap(err).

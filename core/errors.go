@@ -1,5 +1,5 @@
 // langgraphdemogo/lance/errors/errors.go
-package errors
+package core
 
 import (
 	"errors"

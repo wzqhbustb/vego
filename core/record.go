@@ -3,7 +3,6 @@ package core
 import (
 	"fmt"
 
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
 )
 
 // RecordBatch represents a collection of equal-length arrays (a "table slice")
@@ -17,7 +16,7 @@ type RecordBatch struct {
 // NewRecordBatch creates a new record batch
 func NewRecordBatch(schema *Schema, numRows int, columns []Array) (*RecordBatch, error) {
 	if schema.NumFields() != len(columns) {
-		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+		return nil, New(ErrInvalidArgument).
 			Op("new_record_batch").
 			Context("schema_fields", schema.NumFields()).
 			Context("column_count", len(columns)).
@@ -27,7 +26,7 @@ func NewRecordBatch(schema *Schema, numRows int, columns []Array) (*RecordBatch,
 
 	for i, col := range columns {
 		if col.Len() != numRows {
-			return nil, lerrors.New(lerrors.ErrInvalidArgument).
+			return nil, New(ErrInvalidArgument).
 				Op("new_record_batch").
 				Context("column_index", i).
 				Context("column_rows", col.Len()).
@@ -38,7 +37,7 @@ func NewRecordBatch(schema *Schema, numRows int, columns []Array) (*RecordBatch,
 
 		field := schema.Field(i)
 		if col.DataType().ID() != field.Type.ID() {
-			return nil, lerrors.TypeMismatch("new_record_batch", field.Name,
+			return nil, TypeMismatch("new_record_batch", field.Name,
 				field.Type.Name(), col.DataType().Name())
 		}
 	}
@@ -145,7 +144,7 @@ func (b *RecordBatchBuilder) NewBatch() (*RecordBatch, error) {
 	// Verify all builders have the same length
 	for i, builder := range b.builders {
 		if builder.Len() != numRows {
-			return nil, lerrors.New(lerrors.ErrInvalidArgument).
+			return nil, New(ErrInvalidArgument).
 				Op("record_batch_builder_new_batch").
 				Context("builder_index", i).
 				Context("builder_rows", builder.Len()).
