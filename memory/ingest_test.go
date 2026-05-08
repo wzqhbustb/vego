@@ -427,6 +427,51 @@ func TestExtractFactsWithRetryParseError(t *testing.T) {
 	}
 }
 
+func TestExtractFactsWrappedFormat(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	defer s.Close()
+
+	// LLM returns wrapped object format {"facts":[...]}
+	setupMockLLM(t, s, `{"facts":[{"content":"wrapped fact","tags":["t1"],"query_intent":false}]}`)
+
+	messages := []Message{{Role: "user", Content: "hello world"}}
+	facts, err := s.ExtractFacts(context.Background(), messages, ModeNormal)
+	if err != nil {
+		t.Fatalf("extract facts: %v", err)
+	}
+	if len(facts) != 1 {
+		t.Fatalf("expected 1 fact, got %d", len(facts))
+	}
+	if facts[0].Content != "wrapped fact" {
+		t.Errorf("content = %q, want 'wrapped fact'", facts[0].Content)
+	}
+}
+
+// TestExtractFactsTrailingGarbage verifies that a trailing quote (or other
+// garbage) after a valid JSON object does not cause a parse failure.
+// Regression test for qwen2.5 occasionally appending an extra '"'.
+func TestExtractFactsTrailingGarbage(t *testing.T) {
+	s := newTestStore(t)
+	setupMockEmbedder(t, s, 128)
+	defer s.Close()
+
+	// Valid JSON followed by an extra double-quote.
+	setupMockLLM(t, s, `{"facts":[{"content":"weather is sunny","tags":["weather"]}]}"`)
+
+	messages := []Message{{Role: "user", Content: "today is sunny"}}
+	facts, err := s.ExtractFacts(context.Background(), messages, ModeNormal)
+	if err != nil {
+		t.Fatalf("extract facts: %v", err)
+	}
+	if len(facts) != 1 {
+		t.Fatalf("expected 1 fact, got %d", len(facts))
+	}
+	if facts[0].Content != "weather is sunny" {
+		t.Errorf("content = %q, want 'weather is sunny'", facts[0].Content)
+	}
+}
+
 // ----------------------------------------------------------------------
 // Concurrent safety
 // ----------------------------------------------------------------------

@@ -366,3 +366,78 @@ func TestCompactAfterUpdate(t *testing.T) {
 
 	t.Log("Compact after update test passed")
 }
+
+// TestCompactPreservesBufferedDocuments verifies that documents sitting in
+// the write buffer (not yet flushed to disk) are not silently dropped during
+// compaction.
+func TestCompactPreservesBufferedDocuments(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "compact_buffer")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	coll, err := NewCollection("test", tmpDir, &Config{
+		Dimension: 128,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create collection: %v", err)
+	}
+	defer coll.Close()
+
+	// Insert a document (goes to buffer, not flushed)
+	doc := &Document{
+		ID:     "buffered-doc",
+		Vector: make([]float32, 128),
+		Metadata: map[string]interface{}{
+			"state": "active",
+		},
+	}
+	doc.Vector[0] = 1.0
+	if err := coll.Insert(doc); err != nil {
+		t.Fatalf("Failed to insert document: %v", err)
+	}
+
+	// Verify document is searchable before compact
+	results, err := coll.SearchWithFilter(doc.Vector, 1, &MetadataFilter{
+		Field:    "state",
+		Operator: "eq",
+		Value:    "active",
+	})
+	if err != nil {
+		t.Fatalf("Search before compact failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Document.ID != "buffered-doc" {
+		t.Fatalf("Expected 1 result before compact, got %d", len(results))
+	}
+
+	// Compact without explicit flush — the fix ensures buffer is flushed
+	// internally before compaction.
+	if err := coll.Compact(); err != nil {
+		t.Fatalf("Compact failed: %v", err)
+	}
+
+	// After compact, the document must still be searchable
+	results, err = coll.SearchWithFilter(doc.Vector, 1, &MetadataFilter{
+		Field:    "state",
+		Operator: "eq",
+		Value:    "active",
+	})
+	if err != nil {
+		t.Fatalf("Search after compact failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Document.ID != "buffered-doc" {
+		t.Fatalf("Expected 1 result after compact, got %d", len(results))
+	}
+
+	// Also verify Get still works
+	got, err := coll.Get("buffered-doc")
+	if err != nil {
+		t.Fatalf("Get after compact failed: %v", err)
+	}
+	if got.ID != "buffered-doc" {
+		t.Errorf("ID mismatch after compact: got %s", got.ID)
+	}
+
+	t.Log("Compact preserves buffered documents test passed")
+}

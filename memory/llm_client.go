@@ -23,6 +23,7 @@ type LLMConfig struct {
 	Temperature  float64
 	RoundTripper http.RoundTripper
 	Logger       *slog.Logger
+	JSONMode     string // "on" = force response_format, "off" = never send, "" = auto (send with fallback)
 }
 
 // LLMClient is an OpenAI-compatible HTTP client for LLM completions.
@@ -31,6 +32,7 @@ type LLMClient struct {
 	baseURL            string
 	model              string
 	temperature        float64
+	jsonMode           string        // "on", "off", or "" (auto)
 	http               *http.Client
 	logger             *slog.Logger
 	formatNotSupported atomic.Bool // caches 400 response_format failure
@@ -60,6 +62,7 @@ func NewLLMClient(cfg LLMConfig) *LLMClient {
 		baseURL:     strings.TrimSuffix(baseURL, "/"),
 		model:       model,
 		temperature: cfg.Temperature,
+		jsonMode:    cfg.JSONMode,
 		logger:      logger,
 		http: &http.Client{
 			Timeout:   120 * time.Second,
@@ -77,8 +80,13 @@ func (c *LLMClient) CloseIdleConnections() {
 }
 
 // CompleteJSON sends a chat completion request with system + user prompts
-// and returns the assistant's content. It forces JSON output via
-// response_format and falls back on HTTP 400 (Ollama/vLLM compatibility).
+// and returns the assistant's content.
+//
+// JSON mode behaviour depends on c.jsonMode:
+//   - "off": never sends response_format; relies on prompt instructions only.
+//   - "on":  always sends response_format: json_object (no fallback).
+//   - "auto" or "": sends response_format and falls back on HTTP 400
+//     (useful for Ollama/vLLM compatibility).
 func (c *LLMClient) CompleteJSON(ctx context.Context, system, user string) (string, error) {
 	if c == nil {
 		return "", fmt.Errorf("llm client is nil")
@@ -87,7 +95,18 @@ func (c *LLMClient) CompleteJSON(ctx context.Context, system, user string) (stri
 		return "", fmt.Errorf("context must not be nil")
 	}
 	start := time.Now()
-	content, promptTokens, completionTokens, err := c.complete(ctx, system, user, true)
+
+	useFormat := false
+	switch c.jsonMode {
+	case "on":
+		useFormat = true
+	case "off":
+		useFormat = false
+	default: // auto / ""
+		useFormat = !c.formatNotSupported.Load()
+	}
+
+	content, promptTokens, completionTokens, err := c.complete(ctx, system, user, useFormat)
 	if err != nil {
 		c.logger.Error("llm request failed",
 			"model", c.model,

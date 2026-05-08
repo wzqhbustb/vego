@@ -110,6 +110,8 @@ func TestNewConfigWithOptions(t *testing.T) {
 		WithDualChannelBonus(0.3),
 		WithVectorSimilarityWeight(0.4),
 		WithNearDupThreshold(0.85),
+		WithEmbedConcurrency(1),
+		WithFactExtractJSONMode("off"),
 	)
 	if err != nil {
 		t.Fatalf("NewConfig error: %v", err)
@@ -200,6 +202,12 @@ func TestNewConfigWithOptions(t *testing.T) {
 	if c.NearDupThreshold != 0.85 {
 		t.Errorf("NearDupThreshold: want 0.85, got %f", c.NearDupThreshold)
 	}
+	if c.EmbedConcurrency != 1 {
+		t.Errorf("EmbedConcurrency: want 1, got %d", c.EmbedConcurrency)
+	}
+	if c.FactExtractJSONMode != "off" {
+		t.Errorf("FactExtractJSONMode: want off, got %s", c.FactExtractJSONMode)
+	}
 }
 
 func TestConfigValidation(t *testing.T) {
@@ -220,7 +228,7 @@ func TestConfigValidation(t *testing.T) {
 		},
 		{
 			name:    "negative embed dims",
-			opts:    []Option{WithEmbedding("", "", "", -1)},
+			opts:    []Option{WithEmbedDims(-1)},
 			wantErr: "embed dims must be > 0, got -1",
 		},
 		{
@@ -248,6 +256,16 @@ func TestConfigValidation(t *testing.T) {
 			opts:    []Option{WithLLM("", "", "", -0.1)},
 			wantErr: "llm temperature must be in [0,2], got -0.100000",
 		},
+		{
+			name:    "negative embed concurrency",
+			opts:    []Option{WithEmbedConcurrency(-1)},
+			wantErr: "embed concurrency must be >= 0, got -1",
+		},
+		{
+			name:    "invalid json mode",
+			opts:    []Option{WithFactExtractJSONMode("auto")},
+			wantErr: "fact extract json mode must be '', 'on', or 'off', got \"auto\"",
+		},
 	}
 
 	for _, tc := range cases {
@@ -266,6 +284,7 @@ func TestConfigValidation(t *testing.T) {
 func TestConfigToLLMConfig(t *testing.T) {
 	c, _ := NewConfig(
 		WithLLM("sk-abc", "http://ollama.local/v1", "qwen2.5", 0.0),
+		WithFactExtractJSONMode("on"),
 	)
 	lc := c.ToLLMConfig()
 	if lc.APIKey != "sk-abc" {
@@ -280,12 +299,16 @@ func TestConfigToLLMConfig(t *testing.T) {
 	if lc.Temperature != 0.0 {
 		t.Errorf("Temperature: want 0.0, got %f", lc.Temperature)
 	}
+	if lc.JSONMode != "on" {
+		t.Errorf("JSONMode: want on, got %s", lc.JSONMode)
+	}
 }
 
 func TestConfigToEmbedConfig(t *testing.T) {
 	c, _ := NewConfig(
 		WithDimension(768),
 		WithEmbedding("sk-emb", "http://local.embed/v1", "m3e", 768),
+		WithEmbedConcurrency(1),
 	)
 	ec := c.ToEmbedConfig()
 	if ec.APIKey != "sk-emb" {
@@ -299,6 +322,9 @@ func TestConfigToEmbedConfig(t *testing.T) {
 	}
 	if ec.Dims != 768 {
 		t.Errorf("Dims: want 768, got %d", ec.Dims)
+	}
+	if ec.Concurrency != 1 {
+		t.Errorf("Concurrency: want 1, got %d", ec.Concurrency)
 	}
 }
 

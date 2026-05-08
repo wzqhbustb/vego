@@ -647,12 +647,26 @@ func (s *DocumentStorage) GetAllValidDocuments() ([]*Document, error) {
 		return nil, err
 	}
 
-	// Filter out deleted documents
-	validDocs := make([]*Document, 0, len(docs))
+	// Include buffered documents (not yet flushed to disk)
+	for _, bufDoc := range s.writeBuffer {
+		docs = append(docs, bufDoc)
+	}
+
+	// Filter out deleted documents.  Deduplicate by ID so that a
+	// buffered update overwrites its on-disk predecessor.
+	seen := make(map[string]*Document, len(docs))
 	for _, doc := range docs {
-		if !s.isDeletedLocked(doc.ID) {
-			validDocs = append(validDocs, doc)
+		if s.isDeletedLocked(doc.ID) {
+			continue
 		}
+		if existing, ok := seen[doc.ID]; !ok || doc.Timestamp.After(existing.Timestamp) {
+			seen[doc.ID] = doc
+		}
+	}
+
+	validDocs := make([]*Document, 0, len(seen))
+	for _, doc := range seen {
+		validDocs = append(validDocs, doc)
 	}
 
 	return validDocs, nil
