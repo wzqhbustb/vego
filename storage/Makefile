@@ -9,6 +9,7 @@ LANCE_PKG := $(MODULE_NAME)
 PACKAGES := \
 	github.com/wzqhbustb/vego/core \
 	github.com/wzqhbustb/vego/vfs \
+	$(MODULE_NAME)/catalog \
 	$(MODULE_NAME)/column \
 	$(MODULE_NAME)/encoding \
 	$(MODULE_NAME)/format
@@ -74,6 +75,10 @@ test-core:
 .PHONY: test-vfs
 test-vfs:
 	@cd $(MODULE_ROOT) && go test github.com/wzqhbustb/vego/vfs -v
+
+.PHONY: test-catalog
+test-catalog:
+	@cd $(MODULE_ROOT) && go test $(LANCE_PKG)/catalog -v
 
 .PHONY: test-column
 test-column:
@@ -307,12 +312,12 @@ help:
 	@echo "  make cover         - Quick coverage summary"
 	@echo ""
 	@echo "Single Package Tests:"
-	@echo "  make test-arrow    - Test arrow package"
+	@echo "  make test-core     - Test core package"
+	@echo "  make test-vfs      - Test vfs package"
+	@echo "  make test-catalog  - Test catalog package"
 	@echo "  make test-column   - Test column package"
 	@echo "  make test-encoding - Test encoding package"
 	@echo "  make test-format   - Test format package"
-	@echo "  make test-io       - Test io package"
-	@echo "  make test-errors   - Test errors package"
 	@echo ""
 	@echo "Basic Benchmarks:"
 	@echo "  make bench         - Run all benchmarks (quick)"
