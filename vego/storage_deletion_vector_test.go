@@ -305,7 +305,7 @@ func TestDocumentStorageEmptyDeletionVectorFile(t *testing.T) {
 	}
 	defer storage2.Close()
 
-	if !storage2.deletionVector.IsEmpty() {
+	if !storage2.snapshot.DeletionStore.IsEmpty() {
 		t.Error("DV should be empty when no DV file exists")
 	}
 }

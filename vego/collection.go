@@ -11,6 +11,7 @@ import (
 	"time"
 
 	hnsw "github.com/wzqhbustb/vego/index"
+	"github.com/wzqhbustb/vego/storage/catalog"
 )
 
 // Collection represents a collection of documents with vector search capability
@@ -26,8 +27,7 @@ type Collection struct {
 	storage *DocumentStorage
 
 	// Document ID -> HNSW node ID mapping
-	docToNode map[string]int
-	nodeToDoc map[int]string
+	idMapping *catalog.IDMapping
 
 	mu     sync.RWMutex
 	config *Config
@@ -89,8 +89,7 @@ func NewCollection(name, path string, config *Config) (*Collection, error) {
 		name:             name,
 		path:             path,
 		dimension:        config.Dimension,
-		docToNode:        make(map[string]int),
-		nodeToDoc:        make(map[int]string),
+		idMapping:        catalog.NewIDMapping(),
 		config:           config,
 		compactStopCh:    make(chan struct{}),
 		compactTriggerCh: make(chan struct{}, 1), // Buffered to avoid blocking
@@ -155,7 +154,7 @@ func (c *Collection) InsertContext(ctx context.Context, doc *Document) error {
 	}
 
 	// Check if document already exists
-	if _, exists := c.docToNode[doc.ID]; exists {
+	if _, exists := c.idMapping.Map(doc.ID); exists {
 		return wrapError("InsertContext", c.name, doc.ID, ErrDuplicateID)
 	}
 
@@ -175,8 +174,7 @@ func (c *Collection) InsertContext(ctx context.Context, doc *Document) error {
 	}
 
 	// Update mappings
-	c.docToNode[doc.ID] = nodeID
-	c.nodeToDoc[nodeID] = doc.ID
+	c.idMapping.Put(doc.ID, nodeID)
 
 	// Update timestamp
 	doc.Timestamp = time.Now()
@@ -211,7 +209,7 @@ func (c *Collection) InsertBatchContext(ctx context.Context, docs []*Document) e
 		if err := doc.Validate(c.dimension); err != nil {
 			return wrapError("InsertBatchContext", c.name, doc.ID, ErrValidationFailed)
 		}
-		if _, exists := c.docToNode[doc.ID]; exists {
+		if _, exists := c.idMapping.Map(doc.ID); exists {
 			return wrapError("InsertBatchContext", c.name, doc.ID, ErrDuplicateID)
 		}
 	}
@@ -229,8 +227,7 @@ func (c *Collection) InsertBatchContext(ctx context.Context, docs []*Document) e
 		if err != nil {
 			return wrapError("InsertBatchContext", c.name, doc.ID, err)
 		}
-		c.docToNode[doc.ID] = nodeID
-		c.nodeToDoc[nodeID] = doc.ID
+		c.idMapping.Put(doc.ID, nodeID)
 		doc.Timestamp = time.Now()
 	}
 
@@ -307,7 +304,7 @@ func (c *Collection) DeleteBatchContext(ctx context.Context, ids []string) error
 		}
 
 		// Check if document exists
-		_, exists := c.docToNode[id]
+		_, exists := c.idMapping.Map(id)
 		if !exists {
 			continue // Skip non-existent documents
 		}
@@ -321,7 +318,7 @@ func (c *Collection) DeleteBatchContext(ctx context.Context, ids []string) error
 
 		// Remove from docToNode (document is no longer accessible via ID)
 		// nodeToDoc is kept for search to filter out deleted nodes
-		delete(c.docToNode, id)
+		c.idMapping.Delete(id)
 	}
 
 	return lastErr
@@ -466,7 +463,7 @@ func (c *Collection) DeleteContext(ctx context.Context, id string) error {
 	}
 
 	// Check if document exists
-	_, exists := c.docToNode[id]
+	_, exists := c.idMapping.Map(id)
 	if !exists {
 		return wrapError("DeleteContext", c.name, id, ErrDocumentNotFound)
 	}
@@ -479,7 +476,7 @@ func (c *Collection) DeleteContext(ctx context.Context, id string) error {
 
 	// Remove from docToNode (document is no longer accessible via ID)
 	// nodeToDoc is kept for search to filter out deleted nodes
-	delete(c.docToNode, id)
+	c.idMapping.Delete(id)
 
 	return nil
 }
@@ -509,11 +506,10 @@ func (c *Collection) UpdateContext(ctx context.Context, doc *Document) error {
 	default:
 	}
 
-	oldNodeID, exists := c.docToNode[doc.ID]
+	_, exists := c.idMapping.Map(doc.ID)
 	if !exists {
 		return wrapError("UpdateContext", c.name, doc.ID, ErrDocumentNotFound)
 	}
-	_ = oldNodeID // Intentionally unused: preserved in nodeToDoc for concurrent search safety
 
 	// ⚠️ CRITICAL ORDERING: MarkDeleted BEFORE Insert
 	// Reason: MarkDeleted uses the current docMeta.RowIndex (old value)
@@ -534,10 +530,9 @@ func (c *Collection) UpdateContext(ctx context.Context, doc *Document) error {
 		return wrapError("UpdateContext", c.name, doc.ID, err)
 	}
 
-	// Update docToNode to point to new node
-	c.docToNode[doc.ID] = newNodeID
-	c.nodeToDoc[newNodeID] = doc.ID
-	// ⚠️ DELAYED CLEANUP: Keep nodeToDoc[oldNodeID]!
+	// Update mapping to point to new node
+	c.idMapping.Put(doc.ID, newNodeID)
+	// ⚠️ DELAYED CLEANUP: old node→doc reverse mapping is preserved
 	// Reason: Concurrent search may be using oldNodeID
 	// It will be filtered out by DV during search
 	// Full cleanup happens during Compact
@@ -555,7 +550,7 @@ func (c *Collection) Upsert(doc *Document) error {
 // UpsertContext inserts or updates a document with context support
 func (c *Collection) UpsertContext(ctx context.Context, doc *Document) error {
 	c.mu.RLock()
-	_, exists := c.docToNode[doc.ID]
+	_, exists := c.idMapping.Map(doc.ID)
 	c.mu.RUnlock()
 
 	if exists {
@@ -599,7 +594,7 @@ func (c *Collection) SearchContext(ctx context.Context, query []float32, k int, 
 	// here to compensate for a moderate deletion rate (same behavior as before
 	// the internal k*2 was moved to the caller).
 	isDeleted := func(nodeID int) bool {
-		docID, exists := c.nodeToDoc[nodeID]
+		docID, exists := c.idMapping.Reverse(nodeID)
 		if !exists {
 			return true // Orphaned node (no mapping) - treat as deleted
 		}
@@ -626,7 +621,7 @@ func (c *Collection) SearchContext(ctx context.Context, query []float32, k int, 
 		default:
 		}
 
-		docID, exists := c.nodeToDoc[hr.ID]
+		docID, exists := c.idMapping.Reverse(hr.ID)
 		if !exists {
 			log.Printf("Warning: node %d has no document mapping (orphaned)", hr.ID)
 			continue // Skip orphaned nodes
@@ -695,7 +690,7 @@ func (c *Collection) SearchWithFilterContext(ctx context.Context, query []float3
 	// single isExcluded callback. This eliminates the old expansion loop
 	// by letting HNSW search once and filter in-memory.
 	isExcluded := func(nodeID int) bool {
-		docID, exists := c.nodeToDoc[nodeID]
+		docID, exists := c.idMapping.Reverse(nodeID)
 		if !exists {
 			return true
 		}
@@ -749,7 +744,7 @@ func (c *Collection) SearchWithFilterContext(ctx context.Context, query []float3
 		default:
 		}
 
-		docID, exists := c.nodeToDoc[hr.ID]
+		docID, exists := c.idMapping.Reverse(hr.ID)
 		if !exists {
 			continue
 		}
@@ -813,7 +808,7 @@ func (c *Collection) SearchBatch(queries [][]float32, k int, opts ...SearchOptio
 func (c *Collection) Count() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return len(c.docToNode)
+	return c.idMapping.Count()
 }
 
 // CollectionStats contains collection statistics
@@ -835,11 +830,11 @@ func (c *Collection) Stats() CollectionStats {
 
 	// Count unique node IDs in mapping (all nodes ever created)
 	allNodes := make(map[int]bool)
-	for _, nodeID := range c.docToNode {
+	for _, nodeID := range c.idMapping.All() {
 		allNodes[nodeID] = true
 	}
 	totalIndexNodes := len(allNodes)
-	docCount := len(c.docToNode)
+	docCount := c.idMapping.Count()
 
 	// Get deletion stats from storage
 	deletedCount, totalCount, deletionRate := c.storage.GetDeletionStats()
@@ -919,8 +914,7 @@ func (c *Collection) Compact() error {
 
 	// Step 5: Atomic replacement of index and mappings
 	c.index = newIndex
-	c.docToNode = newDocToNode
-	c.nodeToDoc = newNodeToDoc
+	c.idMapping.Replace(newDocToNode, newNodeToDoc)
 
 	return nil
 }
@@ -1150,8 +1144,8 @@ func (c *Collection) load() error {
 
 func (c *Collection) saveMappings(path string) error {
 	data := map[string]interface{}{
-		"docToNode": c.docToNode,
-		"nodeToDoc": c.nodeToDoc,
+		"docToNode": c.idMapping.All(),
+		"nodeToDoc": c.idMapping.AllReverse(),
 	}
 
 	bytes, err := json.MarshalIndent(data, "", "  ")
@@ -1177,11 +1171,14 @@ func (c *Collection) loadMappings(path string) error {
 		return ErrIndexCorrupted
 	}
 
+	newDocToNode := make(map[string]int)
+	newNodeToDoc := make(map[int]string)
+
 	// Load docToNode
 	if docToNodeRaw, ok := mappings["docToNode"].(map[string]interface{}); ok {
 		for k, v := range docToNodeRaw {
 			if nodeID, ok := v.(float64); ok {
-				c.docToNode[k] = int(nodeID)
+				newDocToNode[k] = int(nodeID)
 			}
 		}
 	}
@@ -1191,12 +1188,13 @@ func (c *Collection) loadMappings(path string) error {
 		for k, v := range nodeToDocRaw {
 			if docID, ok := v.(string); ok {
 				if nodeID, ok := parseIntKey(k); ok {
-					c.nodeToDoc[nodeID] = docID
+					newNodeToDoc[nodeID] = docID
 				}
 			}
 		}
 	}
 
+	c.idMapping.Replace(newDocToNode, newNodeToDoc)
 	return nil
 }
 

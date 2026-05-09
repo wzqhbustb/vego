@@ -12,7 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	hnsw "github.com/wzqhbustb/vego/index"
 	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/catalog"
 	"github.com/wzqhbustb/vego/storage/column"
@@ -47,11 +46,8 @@ type DocumentStorage struct {
 	bufferSize  int
 	maxBuffer   int
 
-	// Metadata storage (separate from column storage)
-	metaStore *catalog.MetadataStore
-
-	// DeletionVector for logical deletion
-	deletionVector *hnsw.DeletionVector
+	// Snapshot manages metadata and deletion state.
+	snapshot *catalog.Snapshot
 
 	// BlockCache for page-level caching (optional, shared across storages)
 	blockCache *format.BlockCache
@@ -116,14 +112,11 @@ func NewDocumentStorage(path string, dimension int, cache ...*format.BlockCache)
 	// Clean up any stale temp files from previous crashes
 	cleanupTempFiles(path)
 
-	metaStore := catalog.NewMetadataStore(filepath.Join(path, metaFileName))
-
 	s := &DocumentStorage{
 		path:           path,
 		dimension:      dimension,
 		factory:        encoding.NewEncoderFactory(3),
-		metaStore:      metaStore,
-		deletionVector: hnsw.NewDeletionVector(),
+		snapshot:       catalog.NewSnapshot(path, format.V1_2),
 		bufferIndex:    make(map[string]int),
 		maxBuffer:      maxBufferSize,
 		version:        format.V1_2, // Default to V1.2 for RowIndex + BlockCache support
@@ -140,13 +133,7 @@ func NewDocumentStorage(path string, dimension int, cache ...*format.BlockCache)
 	}
 
 	// Try to load existing deletion vector
-	dvPath := hnsw.GetDeletionVectorPath(filepath.Join(path, dataFileName))
-	if hnsw.FileExists(dvPath) {
-		if dv, err := hnsw.Deserialize(dvPath); err == nil {
-			s.deletionVector = dv
-		}
-		// If load fails, continue with empty DV (backward compatibility)
-	}
+	s.snapshot.LoadDeletionStore()
 
 	return s, nil
 }
@@ -175,7 +162,7 @@ func (s *DocumentStorage) Put(doc *Document) error {
 	}
 
 	// Check if document already exists in metadata store
-	_, exists := s.metaStore.GetByID(doc.ID)
+	_, exists := s.snapshot.MetaStore.GetByID(doc.ID)
 
 	if exists {
 		// Update existing - remove old entry first
@@ -223,7 +210,7 @@ func (s *DocumentStorage) PutBatch(docs []*Document) error {
 			doc.Timestamp = time.Now()
 		}
 
-		_, exists := s.metaStore.GetByID(doc.ID)
+		_, exists := s.snapshot.MetaStore.GetByID(doc.ID)
 
 		if exists {
 			if err := s.deleteFromStorage(doc.ID); err != nil {
@@ -288,7 +275,7 @@ func (s *DocumentStorage) Get(id string) (*Document, error) {
 	// Otherwise, continue to fallback path (file may not exist or doesn't have RowIndex)
 
 	// Fallback: Check metadata store + full scan (V1.0 style)
-	meta, exists := s.metaStore.GetByID(id)
+	meta, exists := s.snapshot.MetaStore.GetByID(id)
 	if !exists {
 		return nil, ErrDocumentNotFound
 	}
@@ -330,7 +317,7 @@ func (s *DocumentStorage) GetMetadataOnly(id string) (map[string]interface{}, bo
 	}
 
 	// Check metadata store
-	meta, exists := s.metaStore.GetByID(id)
+	meta, exists := s.snapshot.MetaStore.GetByID(id)
 	if !exists {
 		return nil, false
 	}
@@ -368,11 +355,11 @@ func (s *DocumentStorage) CheckVisibility(id string) (map[string]interface{}, bo
 	}
 
 	// Not in buffer: check metadata store + deletion vector.
-	meta, exists := s.metaStore.GetByID(id)
+	meta, exists := s.snapshot.MetaStore.GetByID(id)
 	if !exists {
 		return nil, false
 	}
-	if s.deletionVector.IsDeleted(uint32(meta.RowIndex)) {
+	if s.snapshot.DeletionStore.IsDeleted(uint32(meta.RowIndex)) {
 		return nil, false
 	}
 	return meta.Metadata, true
@@ -420,7 +407,7 @@ func (s *DocumentStorage) Delete(id string) error {
 func (s *DocumentStorage) deleteFromStorage(id string) error {
 	idHash := catalog.HashID(id)
 
-	s.metaStore.Delete(id, idHash)
+	s.snapshot.MetaStore.Delete(id, idHash)
 
 	s.dirty = true
 
@@ -428,7 +415,7 @@ func (s *DocumentStorage) deleteFromStorage(id string) error {
 	// The deleted document will be filtered out on next read.
 	// A background compaction process could clean this up periodically.
 
-	return s.metaStore.Save()
+	return s.snapshot.MetaStore.Save()
 }
 
 // MarkDeleted marks a document as deleted using logical deletion.
@@ -461,7 +448,7 @@ func (s *DocumentStorage) MarkDeleted(id string) error {
 		return ErrDocumentNotFound
 	}
 
-	s.deletionVector.MarkDeleted(uint32(rowID))
+	s.snapshot.DeletionStore.MarkDeleted(uint32(rowID))
 	s.dirty = true
 	return nil
 }
@@ -486,7 +473,7 @@ func (s *DocumentStorage) isDeletedLocked(id string) bool {
 		return false
 	}
 
-	return s.deletionVector.IsDeleted(uint32(rowID))
+	return s.snapshot.DeletionStore.IsDeleted(uint32(rowID))
 }
 
 // IsDeletedByRowID checks if a row is deleted directly by rowID.
@@ -499,14 +486,14 @@ func (s *DocumentStorage) IsDeletedByRowID(rowID int64) bool {
 		return false
 	}
 
-	return s.deletionVector.IsDeleted(uint32(rowID))
+	return s.snapshot.DeletionStore.IsDeleted(uint32(rowID))
 }
 
 // getRowID returns the row index for a document ID.
 // The row index is stored in the document metadata and corresponds to
 // the position in the column storage file.
 func (s *DocumentStorage) getRowID(id string) (int64, bool) {
-	meta, exists := s.metaStore.GetByID(id)
+	meta, exists := s.snapshot.MetaStore.GetByID(id)
 	if !exists {
 		// Caller MUST check the bool return value; the int64 is undefined
 		// when bool is false. Returning 0 instead of -1 avoids the uint32
@@ -522,9 +509,9 @@ func (s *DocumentStorage) GetDeletionStats() (deletedCount int, totalCount int, 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	totalCount = s.metaStore.Count() + s.bufferSize
+	totalCount = s.snapshot.MetaStore.Count() + s.bufferSize
 
-	deletedCount = s.deletionVector.Count()
+	deletedCount = s.snapshot.DeletionStore.Count()
 
 	if totalCount > 0 {
 		deletionRate = float64(deletedCount) / float64(totalCount)
@@ -539,24 +526,24 @@ func (s *DocumentStorage) ClearDeletionVector() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.deletionVector.Clear()
+	s.snapshot.DeletionStore.Clear()
 	s.dirty = true
 }
 
-// saveDeletionVector persists the DeletionVector to disk.
+// saveDeletionVector persists the DeletionStore to disk.
 func (s *DocumentStorage) saveDeletionVector() error {
 	dataFile := filepath.Join(s.path, dataFileName)
-	dvPath := hnsw.GetDeletionVectorPath(dataFile)
+	dvPath := catalog.DeletionStorePath(dataFile)
 
-	if s.deletionVector.IsEmpty() {
+	if s.snapshot.DeletionStore.IsEmpty() {
 		// If DV is empty, remove the file if it exists
-		if hnsw.FileExists(dvPath) {
+		if _, err := os.Stat(dvPath); err == nil {
 			return os.Remove(dvPath)
 		}
 		return nil
 	}
 
-	return s.deletionVector.Serialize(dvPath)
+	return s.snapshot.DeletionStore.Save(dvPath)
 }
 
 // GetAllValidDocuments returns all documents that are not marked as deleted.
@@ -813,7 +800,7 @@ func (s *DocumentStorage) rewriteStorage(docs []*Document) error {
 	// The row index corresponds to the position in the written column storage
 	for i, doc := range uniqueDocs {
 		idHash := catalog.HashID(doc.ID)
-		s.metaStore.Put(doc.ID, idHash, catalog.DocMeta{
+		s.snapshot.MetaStore.Put(doc.ID, idHash, catalog.DocMeta{
 			ID:       doc.ID,
 			RowIndex: int64(i),
 			Metadata: doc.Metadata,
@@ -821,7 +808,7 @@ func (s *DocumentStorage) rewriteStorage(docs []*Document) error {
 	}
 
 	// Save metadata
-	if err := s.metaStore.Save(); err != nil {
+	if err := s.snapshot.MetaStore.Save(); err != nil {
 		return fmt.Errorf("save metadata: %w", err)
 	}
 
@@ -996,7 +983,7 @@ func (s *DocumentStorage) readAllDocuments() ([]*Document, error) {
 	timestampArray := batch.Column(2).(*core.Int64Array)
 
 	// Get metadata snapshot for lookups
-	entries := s.metaStore.AllEntries()
+	entries := s.snapshot.MetaStore.AllEntries()
 
 	// Use a map to deduplicate by hash (last write wins)
 	// This handles the case where updates create duplicate entries
@@ -1180,7 +1167,7 @@ func (s *DocumentStorage) tryReadByRowIndex(id string) (*Document, bool, error) 
 	}
 
 	// Get metadata
-	meta, exists := s.metaStore.GetByHash(idHash)
+	meta, exists := s.snapshot.MetaStore.GetByHash(idHash)
 	if !exists {
 		return nil, true, ErrDocumentNotFound
 	}
@@ -1245,7 +1232,7 @@ func (s *DocumentStorage) load() error {
 	if _, err := os.Stat(dataFile); err == nil {
 		fileExists = true
 	}
-	return s.metaStore.LoadWithRepair(
+	return s.snapshot.MetaStore.LoadWithRepair(
 		s.lookupRowIndexFromFile,
 		fileExists,
 		s.supportsRowIndex(),
@@ -1257,7 +1244,7 @@ func (s *DocumentStorage) Stats() StorageStats {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	docCount := s.metaStore.Count() + s.bufferSize
+	docCount := s.snapshot.MetaStore.Count() + s.bufferSize
 
 	var dataSize, metaSize int64
 	
@@ -1266,7 +1253,7 @@ func (s *DocumentStorage) Stats() StorageStats {
 		dataSize = info.Size()
 	}
 
-	if info, err := os.Stat(s.metaStore.Path()); err == nil {
+	if info, err := os.Stat(s.snapshot.MetaStore.Path()); err == nil {
 		metaSize = info.Size()
 	}
 	
@@ -1277,7 +1264,7 @@ func (s *DocumentStorage) Stats() StorageStats {
 	}
 
 	// Calculate deletion stats
-	deletedCount := s.deletionVector.Count()
+	deletedCount := s.snapshot.DeletionStore.Count()
 	deletionRate := 0.0
 	if docCount > 0 {
 		deletionRate = float64(deletedCount) / float64(docCount)
