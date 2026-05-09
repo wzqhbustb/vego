@@ -199,51 +199,57 @@ type Searcher interface {
 package catalog
 
 // Snapshot 是 collection 状态的唯一真相来源。
-// 它是 flush 期间唯一的 commit point — 原子更新此文件保证 crash safety。
+// 它持有当前 collection 的所有元数据组件和文件路径。
 type Snapshot struct {
-    Version      int64
-    NumRows      int64
-    Schema       *core.Schema
-    DataFile     string            // vectors.lance 路径
-    IndexFiles   []string          // HNSW 文件路径
-    DeletionFile string            // .dv 文件路径
-    CreatedAt    time.Time
-    Metadata     map[string]string
+    Path          string              // collection 目录
+    DataFile      string              // vectors.lance 路径
+    MetaFile      string              // metadata.json 路径
+    Version       format.VersionPolicy // 格式版本
+    MetaStore     *MetadataStore      // doc 元数据（ID、RowIndex、Metadata）
+    DeletionStore *DeletionStore      // 软删除状态
 }
 
-// 事务协议，保证 crash-safe 写入。
-func (s *Snapshot) BeginTransaction() string               // 返回临时目录路径
-func (s *Snapshot) CommitTransaction(txnDir string) error  // 原子提交
-func (s *Snapshot) AbortTransaction(txnDir string)         // 失败时清理
-func (s *Snapshot) RecoverFromCrash() error                // 启动时清理孤儿 txn 目录
+// 事务协议（预留接口，当前未实现）。
+// Phase 6 WAL + MVCC 时接入。
+func (s *Snapshot) BeginTransaction() string
+func (s *Snapshot) CommitTransaction(txnDir string) error
+func (s *Snapshot) AbortTransaction(txnDir string)
+func (s *Snapshot) RecoverFromCrash() error
 
-// IDMapping 管理 docID <-> nodeID <-> rowID 映射。
-type IDMapping interface {
-    DocToNode(docID string) (nodeID int, ok bool)
-    NodeToDoc(nodeID int) (docID string, ok bool)
-    NodeToRow(nodeID int) (rowID uint32, ok bool)
-    Put(docID string, nodeID int)
-    Delete(docID string)
-    AllMappings() map[string]int
-    io.WriterTo    // WriteTo(w io.Writer) (int64, error)
-    io.ReaderFrom  // ReadFrom(r io.Reader) (int64, error)
+// MetadataStore 管理 doc 元数据（ID、RowIndex、Metadata map）。
+// 从 vego/storage.go 的 metadataStore 提取。
+type MetadataStore struct {
+    entries  map[int64]DocMeta
+    idToHash map[string]int64
 }
+func (s *MetadataStore) GetByID(id string) (DocMeta, bool)
+func (s *MetadataStore) Put(id string, hash int64, meta DocMeta)
+func (s *MetadataStore) Delete(id string, hash int64)
+func (s *MetadataStore) Save() error
+func (s *MetadataStore) LoadWithRepair(...) error
 
-// DeletionStore 管理内存中的软删除状态。
-// 持久化由 API 层控制（方案 A）。
-// DeletionStore 不决定何时或写到哪里 —
-// 它只提供序列化能力。
-type DeletionStore interface {
-    MarkDeleted(rowID uint32)
-    IsDeleted(rowID uint32) bool
-    Count() int
-    io.WriterTo    // WriteTo(w io.Writer) (int64, error) — 全量快照
-    io.ReaderFrom  // ReadFrom(r io.Reader) (int64, error)
-    // FlushDelta 仅写入上次 flush 后的增量变更（可选优化）。
-    // 如果未实现（返回 nil），API 层回退到 WriteTo。
-    // 为 Phase 6 WAL 集成设计。
-    FlushDelta(w io.Writer) error
+// IDMapping 管理 docID <-> nodeID 双向映射。
+// 延迟抽象：当前为具体 struct；消费者（vego/）在需要时可定义 interface。
+type IDMapping struct {
+    docToNode map[string]int
+    nodeToDoc map[int]string
 }
+func (m *IDMapping) Map(docID string) (nodeID int, ok bool)
+func (m *IDMapping) Reverse(nodeID int) (docID string, ok bool)
+func (m *IDMapping) Put(docID string, nodeID int)
+func (m *IDMapping) Delete(docID string)
+func (m *IDMapping) All() map[string]int
+func (m *IDMapping) Replace(docToNode map[string]int, nodeToDoc map[int]string)
+
+// DeletionStore 管理内存中的软删除状态（roaring bitmap）。
+// 独立于 index/ 包，使用相同的 .del 文件格式保证兼容。
+// 延迟抽象：当前为具体 struct；消费者可后续定义 interface。
+type DeletionStore struct { /* roaring bitmap */ }
+func (ds *DeletionStore) MarkDeleted(rowID uint32)
+func (ds *DeletionStore) IsDeleted(rowID uint32) bool
+func (ds *DeletionStore) Count() int
+func (ds *DeletionStore) Save(path string) error
+func (ds *DeletionStore) Load(path string) error
 ```
 
 **为什么需要这个子包：**
@@ -287,8 +293,7 @@ package vego
 type Collection struct {
     index    *index.HNSWIndex           // 索引引擎（具体类型）
     snapshot *catalog.Snapshot          // collection 状态元数据
-    ids      catalog.IDMapping          // ID 映射
-    dv       catalog.DeletionStore      // 删除管理
+    idMapping *catalog.IDMapping        // ID 映射（具体类型）
     writer   column.ColumnWriter        // 数据写入
     reader   column.ColumnReader        // 数据读取
     buffer   *WriteBuffer              // 写缓冲（编排策略）
@@ -401,7 +406,8 @@ func (c *Collection) flush() error {
 | 原职责 | 新归属 |
 |---|---|
 | writeBuffer + flush 策略 | 留在 API 层（`vego/buffer.go`） |
-| metaStore（ID 映射） | `storage/catalog/id_mapping.go` |
+| metaStore（doc 元数据：ID/RowIndex/Metadata） | `storage/catalog/metadata.go` |
+| docToNode/nodeToDoc 映射 | `storage/catalog/id_mapping.go` |
 | deletionVector 管理 | `storage/catalog/deletion_store.go` |
 | cachedRowIndex | `storage/column/reader.go` 内部 |
 | version（格式版本） | `storage/format/version.go` |
