@@ -849,6 +849,7 @@ func (s *DocumentStorage) writeColumnStorage(docs []*Document) error {
 // doWriteColumnStorage performs the actual write operation to the specified file.
 func (s *DocumentStorage) doWriteColumnStorage(filePath string, schema *core.Schema, docs []*Document) error {
 	// Use RowIndexWriter for V1.1+ format support
+	var writer column.IndexedBatchWriter
 	writer, err := column.NewRowIndexWriter(filePath, schema, s.version, s.factory)
 	if err != nil {
 		return fmt.Errorf("create row index writer: %w", err)
@@ -941,7 +942,7 @@ func (s *DocumentStorage) readAllDocuments() ([]*Document, error) {
 	dataFile := filepath.Join(s.path, dataFileName)
 	
 	// Use BlockCache-aware reader if cache is configured
-	var reader *column.Reader
+	var reader column.BatchReader
 	var err error
 	if s.blockCache != nil {
 		reader, err = column.NewReaderWithCache(dataFile, s.blockCache)
@@ -1059,7 +1060,7 @@ func (s *DocumentStorage) ensureRowIndex() {
 		return
 	}
 
-	var reader *column.RowIndexReader
+	var reader column.IndexedBatchReader
 	var err error
 	if s.blockCache != nil {
 		reader, err = column.NewRowIndexReaderWithCache(dataFile, s.blockCache)
@@ -1115,7 +1116,7 @@ func (s *DocumentStorage) tryReadByRowIndex(id string) (*Document, bool, error) 
 	// File open + footer read is microseconds; the expensive
 	// LoadRowIndex is avoided via the cached RowIndex above.
 	dataFile := filepath.Join(s.path, dataFileName)
-	var reader *column.RowIndexReader
+	var reader column.IndexedBatchReader
 	var err error
 	if s.blockCache != nil {
 		reader, err = column.NewRowIndexReaderWithCache(dataFile, s.blockCache)
@@ -1184,7 +1185,7 @@ func (s *DocumentStorage) lookupRowIndexFromFile(id string) int64 {
 	}
 
 	// Open RowIndexReader
-	var reader *column.RowIndexReader
+	var reader column.IndexedBatchReader
 	var err error
 	if s.blockCache != nil {
 		reader, err = column.NewRowIndexReaderWithCache(dataFile, s.blockCache)

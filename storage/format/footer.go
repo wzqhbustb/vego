@@ -221,7 +221,7 @@ func (f *Footer) ReadFrom(r io.Reader) (int64, error) {
 		}
 
 		keyBytes := make([]byte, keyLen)
-		if _, err := reader.Read(keyBytes); err != nil {
+		if _, err := io.ReadFull(reader, keyBytes); err != nil {
 			return int64(n), NewFileError("read footer metadata key", err)
 		}
 		key := string(keyBytes)
@@ -243,7 +243,7 @@ func (f *Footer) ReadFrom(r io.Reader) (int64, error) {
 		}
 
 		valueBytes := make([]byte, valueLen)
-		if _, err := reader.Read(valueBytes); err != nil {
+		if _, err := io.ReadFull(reader, valueBytes); err != nil {
 			return int64(n), NewFileError("read footer metadata value", err)
 		}
 		value := string(valueBytes)

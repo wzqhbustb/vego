@@ -54,6 +54,7 @@ func saveHNSWIndex(idx *hnsw.HNSWIndex, baseDir string) error {
 }
 
 func writeRecordBatch(filename string, batch *core.RecordBatch) error {
+	var writer column.BatchWriter
 	writer, err := column.NewWriter(filename, batch.Schema(), defaultEncoderFactory())
 	if err != nil {
 		return fmt.Errorf("create writer failed: %w", err)
@@ -117,6 +118,7 @@ func loadHNSWIndex(baseDir string) (*hnsw.HNSWIndex, error) {
 }
 
 func readRecordBatch(filename string) (*core.RecordBatch, error) {
+	var reader column.BatchReader
 	reader, err := column.NewReader(filename)
 	if err != nil {
 		return nil, fmt.Errorf("create reader failed: %w", err)

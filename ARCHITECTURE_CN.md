@@ -62,7 +62,7 @@ vego/
 ├── index/               # 第 3-A 层：索引引擎（HNSW）
 ├── storage/             # 第 3-B 层：存储引擎
 │   ├── catalog/         #   元数据管理（Snapshot、IDMapping、DeletionStore）
-│   ├── column/          #   列式读写（ColumnWriter、ColumnReader）
+│   ├── column/          #   列式读写（BatchWriter、BatchReader、IndexedBatchWriter、IndexedBatchReader）
 │   ├── encoding/        #   自适应编码（ZSTD、RLE、BitPacking、BSS、Dictionary）
 │   └── format/          #   文件结构（Header、Footer、PageIndex、BlockCache）
 ├── vfs/                 # 第 2 层：I/O 操作（同步/异步文件访问）
@@ -75,7 +75,6 @@ vego/
 
 ```
 memory/  ──→  vego/  ──→  index/            ──→  core/
-    └────────→  index/   (现状；将在 Step 2 消除)
                      ──→  storage/catalog/   ──→  core/, vfs/
                      ──→  storage/column/    ──→  storage/encoding/, storage/format/,
                                                   core/, vfs/
@@ -93,9 +92,9 @@ memory/  ──→  vego/  ──→  index/            ──→  core/
 - `storage/column/` → `storage/encoding/` → `storage/format/` → `core/` 是单向依赖链。
 - `core/` 和 `vfs/` 是独立的顶层包 — 索引引擎和存储引擎的共享基础设施。
 
-**现状偏离 — `memory/` → `index/`：**
+**`memory/` → `index/` 解耦（已在 Step 4 完成）：**
 
-`memory/` 当前直接 import 了 `index/`。该依赖本质上是间接的 — `memory/` 使用的 `index/` 类型应通过 `vego/` 重新导出。消除路径：确保 `memory/` 只引用 `vego/` 暴露的公开类型，不直接引用 `index/` 的内部类型。将在 Step 2 中一并解决。
+`memory/` 包已不再直接 import `index/`。距离函数和 sentinel error 通过 `vego/` 重导出（`vego/distance.go`、`vego/errors.go`）。
 
 ---
 
@@ -103,7 +102,7 @@ memory/  ──→  vego/  ──→  index/            ──→  core/
 
 ### 4.1 第 1 层：基础层（core/）
 
-> **当前位置：** `storage/arrow/`。将在迁移 Step 0 中提升为顶层 `core/`。
+> **位置：** 顶层 `core/`（原 `storage/arrow/`，已在 Step 0 提升）。
 
 纯内存数据表示。零外部依赖。
 
@@ -113,11 +112,11 @@ memory/  ──→  vego/  ──→  index/            ──→  core/
 
 ### 4.2 第 2 层：IO 层（vfs/）
 
-> **当前位置：** `storage/io/`。将在迁移 Step 0 中提升为顶层 `vfs/`。
+> **位置：** 顶层 `vfs/`（原 `storage/io/`，已在 Step 0 提升）。
 
 磁盘访问的共享基础设施。提供同步和异步文件操作。
 
-> **当前实现：** `storage/io/file_pool.go`。Step 0 原样提升至 `vfs/`，Step 3 修复。
+> **实现：** `vfs/file_pool.go`。
 
 ```go
 package vfs
@@ -130,8 +129,8 @@ type FileHandle interface {
 }
 
 type FilePool struct {
-    // 当前实现在 storage/io/file_pool.go。
-    // 计划修复（Step 3）：
+    // 实现在 vfs/file_pool.go。
+    // 已修复（Step 3）：
     //   - 将 sync.Mutex 替换为 sync.RWMutex
     //   - 删除重复的 Get/GetFile 方法
     //   - 修复 partial read 处理
@@ -264,15 +263,32 @@ func (ds *DeletionStore) Load(path string) error
 ```go
 package column
 
-type ColumnWriter interface {
+type BatchWriter interface {
     WriteRecordBatch(batch *core.RecordBatch) error
     Close() error
 }
 
-type ColumnReader interface {
+type BatchReader interface {
     ReadRecordBatch() (*core.RecordBatch, error)
-    ReadRow(rowIndex int) (*core.RecordBatch, error)  // 通过 RowIndex 实现 O(1) 读取
+    Schema() *core.Schema
+    NumRows() int64
     Close() error
+}
+
+type IndexedBatchWriter interface {
+    BatchWriter
+    AddRowID(docID string, rowIndex int64) error
+    SetBlockSize(blockSize int32)
+}
+
+type IndexedBatchReader interface {
+    BatchReader
+    HasRowIndex() bool
+    GetVersion() format.VersionPolicy
+    LoadRowIndex() error
+    GetRowIndex() *format.RowIndex
+    LookupRowID(docID string) (int64, error)
+    ReadRowAt(rowIdx int64) ([]interface{}, error)
 }
 ```
 
@@ -295,8 +311,8 @@ type Collection struct {
     index    *index.HNSWIndex           // 索引引擎（具体类型）
     snapshot *catalog.Snapshot          // collection 状态元数据
     idMapping *catalog.IDMapping        // ID 映射（具体类型）
-    writer   column.ColumnWriter        // 数据写入
-    reader   column.ColumnReader        // 数据读取
+    writer   column.IndexedBatchWriter  // 数据写入（含 RowIndex）
+    reader   column.IndexedBatchReader  // 数据读取（含 RowIndex）
     buffer   *WriteBuffer              // 写缓冲（编排策略）
     config   *Config
     dirty   bool                     // 跟踪未提交的变更
@@ -539,25 +555,23 @@ func (c *Collection) flush() error {
 
 重构分 4 步渐进式执行。每步保持测试全绿，可独立合并。
 
-### Step 0：提升 `core/` 和 `vfs/` 为顶层包
+### Step 0：提升 `core/` 和 `vfs/` 为顶层包 ✅ 已完成
 
-- 将 `storage/arrow/` → 顶层 `core/`。包名从 `arrow` 变为 `core`。
-- 将 `storage/io/` → 顶层 `vfs/`。包名从 `io` 变为 `vfs`。
-- 更新所有类型引用：`arrow.Schema` → `core.Schema`、`arrow.Array` → `core.Array` 等。
-- `index/` 和 `storage/` 都依赖这两个包，因此它们不能放在 `storage/` 内部。
-- **影响面：** ~4 个包，~15 个文件。编译器会捕获所有遗漏。
-- **风险：低** — 纯重构（包重命名 + 类型引用更新），无行为变更。
+- ✅ 将 `storage/arrow/` → 顶层 `core/`。包名从 `arrow` 变为 `core`。
+- ✅ 将 `storage/io/` → 顶层 `vfs/`。包名从 `io` 变为 `vfs`。
+- ✅ 更新所有类型引用：`arrow.Schema` → `core.Schema`、`arrow.Array` → `core.Array` 等。
+- **风险：低** — 纯重构，无行为变更。
 
-### Step 1：抽出 `storage/catalog/`
+### Step 1：抽出 `storage/catalog/` ✅ 已完成
 
-- 从 `vego/storage.go` 中剥离 Snapshot（collection 状态元数据）、IDMapping 和 DeletionStore 到 `storage/catalog/`。
-- 将 metadataStore 逻辑（version、schema、文件路径）迁入 `catalog.Snapshot`。
-- `vego/storage.go` 改为调用 catalog 接口，不再直接管理状态。
+- ✅ 从 `vego/storage.go` 中剥离 Snapshot、IDMapping 和 DeletionStore 到 `storage/catalog/`。
+- ✅ 将 metadataStore 逻辑迁入 `catalog.Snapshot`。
+- ✅ `vego/storage.go` 改为调用 catalog 接口，不再直接管理状态。
 - **风险：低** — 纯重构，无行为变更。
 
 ### Step 2：索引引擎剥离持久化 ✅ 已完成
 
-> **前置条件：** 必须先完成 Step 0 — `index/storage.go` 当前 import 了 `storage/arrow/` 和 `storage/column/`，需要先变为 `core/` 才能移除。
+> **前置条件：** 已完成 Step 0 — `index/storage.go` 已删除。
 
 - 为 `*index.HNSWIndex` 新增 `MarshalNodes` / `MarshalConnections` / `MarshalMetadata` 方法，以及 `UnmarshalNodes` / `UnmarshalConnections` / `UnmarshalMetadata` 函数。
 - 移除 `index/storage.go`（直接写 Lance 文件的代码 + 对 `storage/column/` 和 `storage/encoding/` 的非法 import）。
@@ -570,7 +584,7 @@ func (c *Collection) flush() error {
 - FilePool：将 Mutex 替换为 RWMutex。
 - 删除重复的 Get/GetFile 方法。
 - 修复 partial read 处理。
-- 在 `storage/column/` 中正式化 `ColumnWriter` / `ColumnReader` 接口。
+- ✅ 在 `storage/column/` 中正式化 `BatchWriter` / `BatchReader` / `IndexedBatchWriter` / `IndexedBatchReader` 接口（Step 3）。
 - **风险：低** — 定向修复。
 
 ---

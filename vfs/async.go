@@ -241,9 +241,10 @@ func (a *AsyncIO) GetRegisteredFilePath(fileID string) (string, error) {
 }
 
 func (a *AsyncIO) GetFile(fileID string) (*os.File, error) {
-	return a.filePool.GetFile(fileID)
+	return a.filePool.Get(fileID)
 }
 
 func (a *AsyncIO) ReleaseFile(fileID string) error {
-	return a.filePool.ReleaseFile(fileID)
+	a.filePool.Put(fileID, nil)
+	return nil
 }

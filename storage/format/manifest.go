@@ -238,7 +238,7 @@ func (m *Manifest) ReadFrom(r io.Reader) (int64, error) {
 // Helper functions
 func readByte(r io.Reader) (byte, error) {
 	buf := make([]byte, 1)
-	_, err := r.Read(buf)
+	_, err := io.ReadFull(r, buf)
 	return buf[0], err
 }
 

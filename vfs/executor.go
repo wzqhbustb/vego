@@ -149,6 +149,8 @@ func (e *Executor) doRead(file *os.File, req *IORequest) IOResult {
 	// 从池中获取缓冲区
 	buf := getBuffer(req.Size)
 
+	// ReadAt guarantees full read or error on regular files (POSIX pread semantics).
+	// If VFS is extended to network backends (Phase 5), add retry loop here.
 	n, err := file.ReadAt(buf, req.Offset)
 
 	// 处理错误情况

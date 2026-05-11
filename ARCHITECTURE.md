@@ -64,7 +64,7 @@ vego/
 ├── index/               # Layer 3-A: Index Engine (HNSW)
 ├── storage/             # Layer 3-B: Storage Engine
 │   ├── catalog/         #   Metadata management (Snapshot, IDMapping, DeletionStore)
-│   ├── column/          #   Columnar read/write (ColumnWriter, ColumnReader)
+│   ├── column/          #   Columnar read/write (BatchWriter, BatchReader, IndexedBatchWriter, IndexedBatchReader)
 │   ├── encoding/        #   Adaptive encoding (ZSTD, RLE, BitPacking, BSS, Dictionary)
 │   └── format/          #   File structure (Header, Footer, PageIndex, BlockCache)
 ├── vfs/                 # Layer 2: I/O operations (sync/async file access)
@@ -77,7 +77,6 @@ vego/
 
 ```
 memory/  ──→  vego/  ──→  index/            ──→  core/
-    └────────→  index/   (current state; will be removed in Step 2)
                      ──→  storage/catalog/   ──→  core/, vfs/
                      ──→  storage/column/    ──→  storage/encoding/, storage/format/,
                                                   core/, vfs/
@@ -95,9 +94,9 @@ memory/  ──→  vego/  ──→  index/            ──→  core/
 - `storage/column/` → `storage/encoding/` → `storage/format/` → `core/` is a unidirectional dependency chain.
 - `core/` and `vfs/` are independent top-level packages — shared infrastructure for both index and storage engines.
 
-**Current deviation — `memory/` → `index/`:**
+**`memory/` → `index/` decoupling (completed in Step 4):**
 
-The `memory/` package currently imports `index/` directly. This dependency is indirect in nature — `memory/` uses `index/` types that should be re-exported through `vego/`. Elimination path: ensure `memory/` only references public types exposed by `vego/`, never internal `index/` types directly. This will be resolved as part of Step 2.
+The `memory/` package no longer imports `index/` directly. Distance functions and sentinel errors are re-exported through `vego/` (`vego/distance.go`, `vego/errors.go`).
 
 ---
 
@@ -105,7 +104,7 @@ The `memory/` package currently imports `index/` directly. This dependency is in
 
 ### 4.1 Layer 1: Foundation (core/)
 
-> **Current location:** `storage/arrow/`. Will be promoted to top-level `core/` in Migration Step 0.
+> **Location:** Top-level `core/` (formerly `storage/arrow/`, promoted in Step 0).
 
 Pure in-memory data representation. Zero external dependencies.
 
@@ -115,11 +114,11 @@ Design: Custom Arrow implementation without CGO. Zero-copy semantics propagate u
 
 ### 4.2 Layer 2: I/O Layer (vfs/)
 
-> **Current location:** `storage/io/`. Will be promoted to top-level `vfs/` in Migration Step 0.
+> **Location:** Top-level `vfs/` (formerly `storage/io/`, promoted in Step 0).
 
 Shared infrastructure for disk access. Provides synchronous and asynchronous file operations.
 
-> **Current implementation:** `storage/io/file_pool.go`. Will be promoted to `vfs/` as-is in Step 0, then fixed in Step 3.
+> **Implementation:** `vfs/file_pool.go`.
 
 ```go
 package vfs
@@ -132,8 +131,8 @@ type FileHandle interface {
 }
 
 type FilePool struct {
-    // Current implementation exists in storage/io/file_pool.go.
-    // Planned fixes (Step 3):
+    // Implementation is in vfs/file_pool.go.
+    // Fixed in Step 3:
     //   - Replace sync.Mutex with sync.RWMutex
     //   - Remove duplicate Get/GetFile methods
     //   - Fix partial read handling
@@ -262,15 +261,32 @@ type DeletionStore interface {
 ```go
 package column
 
-type ColumnWriter interface {
+type BatchWriter interface {
     WriteRecordBatch(batch *core.RecordBatch) error
     Close() error
 }
 
-type ColumnReader interface {
+type BatchReader interface {
     ReadRecordBatch() (*core.RecordBatch, error)
-    ReadRow(rowIndex int) (*core.RecordBatch, error)  // O(1) via RowIndex
+    Schema() *core.Schema
+    NumRows() int64
     Close() error
+}
+
+type IndexedBatchWriter interface {
+    BatchWriter
+    AddRowID(docID string, rowIndex int64) error
+    SetBlockSize(blockSize int32)
+}
+
+type IndexedBatchReader interface {
+    BatchReader
+    HasRowIndex() bool
+    GetVersion() format.VersionPolicy
+    LoadRowIndex() error
+    GetRowIndex() *format.RowIndex
+    LookupRowID(docID string) (int64, error)
+    ReadRowAt(rowIdx int64) ([]interface{}, error)
 }
 ```
 
@@ -294,8 +310,8 @@ type Collection struct {
     snapshot *catalog.Snapshot          // Collection state metadata
     ids      catalog.IDMapping          // ID mapping
     dv       catalog.DeletionStore      // Deletion management
-    writer   column.ColumnWriter        // Data write
-    reader   column.ColumnReader        // Data read
+    writer   column.IndexedBatchWriter  // Data write (with RowIndex)
+    reader   column.IndexedBatchReader  // Data read (with RowIndex)
     buffer   *WriteBuffer              // Write buffer (orchestration strategy)
     config   *Config
     dirty    bool                       // Tracks uncommitted changes
@@ -555,7 +571,7 @@ The refactoring is executed in 4 incremental steps. Each step keeps all tests gr
 
 ### Step 2: Index engine drops persistence ✅ Completed
 
-> **Prerequisite:** Step 0 must be completed first — `index/storage.go` currently imports `storage/arrow/` and `storage/column/`, which must become `core/` before removal.
+> **Prerequisite:** Step 0 completed — `index/storage.go` has been removed.
 
 - Add `MarshalNodes` / `MarshalConnections` / `MarshalMetadata` to `*index.HNSWIndex`, plus `UnmarshalNodes` / `UnmarshalConnections` / `UnmarshalMetadata`.
 - Remove `index/storage.go` (direct Lance file writes + illegal imports of `storage/column/` and `storage/encoding/`).
@@ -568,7 +584,7 @@ The refactoring is executed in 4 incremental steps. Each step keeps all tests gr
 - FilePool: replace Mutex with RWMutex.
 - Remove duplicate Get/GetFile methods.
 - Fix partial read handling.
-- Formalize `ColumnWriter` / `ColumnReader` interfaces in `storage/column/`.
+- ✅ Formalize `BatchWriter` / `BatchReader` / `IndexedBatchWriter` / `IndexedBatchReader` interfaces in `storage/column/` (Step 3).
 - **Risk: Low** — targeted fixes.
 
 ---
