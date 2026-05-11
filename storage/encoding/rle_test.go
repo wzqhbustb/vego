@@ -3,7 +3,7 @@ package encoding
 import (
 	"testing"
 
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/format"
 )
 
@@ -23,7 +23,7 @@ func TestRLEEncoder_Encode_Int32(t *testing.T) {
 	for i := range values {
 		values[i] = int32(i / 100) // 0,0,0...,1,1,1...,2,2,2...
 	}
-	array := arrow.NewInt32Array(values, nil)
+	array := core.NewInt32Array(values, nil)
 
 	encoded, err := encoder.Encode(array)
 	if err != nil {
@@ -35,12 +35,12 @@ func TestRLEEncoder_Encode_Int32(t *testing.T) {
 	}
 
 	// 解码验证
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32(), nil, encoded.NumValues)
+	decoded, err := decoder.Decode(encoded.Data, core.PrimInt32(), nil, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
 
-	result := decoded.(*arrow.Int32Array)
+	result := decoded.(*core.Int32Array)
 	if result.Len() != len(values) {
 		t.Errorf("Expected %d values, got %d", len(values), result.Len())
 	}
@@ -62,19 +62,19 @@ func TestRLEEncoder_Encode_Int64(t *testing.T) {
 	for i := range values {
 		values[i] = int64(i / 50)
 	}
-	array := arrow.NewInt64Array(values, nil)
+	array := core.NewInt64Array(values, nil)
 
 	encoded, err := encoder.Encode(array)
 	if err != nil {
 		t.Fatalf("Encode failed: %v", err)
 	}
 
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt64(), nil, encoded.NumValues)
+	decoded, err := decoder.Decode(encoded.Data, core.PrimInt64(), nil, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
 
-	result := decoded.(*arrow.Int64Array)
+	result := decoded.(*core.Int64Array)
 	for i, expected := range values {
 		if result.Value(i) != expected {
 			t.Errorf("Value mismatch at %d", i)
@@ -87,7 +87,7 @@ func TestRLEEncoder_WithNulls(t *testing.T) {
 	encoder := NewRLEEncoder()
 	decoder := NewRLEDecoder()
 
-	builder := arrow.NewInt32Builder()
+	builder := core.NewInt32Builder()
 	for i := 0; i < 10; i++ {
 		if i%2 == 0 {
 			builder.Append(int32(i))
@@ -110,12 +110,12 @@ func TestRLEEncoder_WithNulls(t *testing.T) {
 	}
 
 	// 解码并验证
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32(), encoded.NullBitmap, encoded.NumValues)
+	decoded, err := decoder.Decode(encoded.Data, core.PrimInt32(), encoded.NullBitmap, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
 
-	result := decoded.(*arrow.Int32Array)
+	result := decoded.(*core.Int32Array)
 	if result.Len() != 10 {
 		t.Fatalf("Expected 10 values, got %d", result.Len())
 	}
@@ -141,7 +141,7 @@ func TestRLEEncoder_UnsupportedType(t *testing.T) {
 	encoder := NewRLEEncoder()
 
 	values := []float32{1.0, 2.0, 3.0}
-	array := arrow.NewFloat32Array(values, nil)
+	array := core.NewFloat32Array(values, nil)
 
 	_, err := encoder.Encode(array)
 	if err == nil {
@@ -153,7 +153,7 @@ func TestRLEEncoder_EmptyArray(t *testing.T) {
 	encoder := NewRLEEncoder()
 
 	values := []int32{}
-	array := arrow.NewInt32Array(values, nil)
+	array := core.NewInt32Array(values, nil)
 
 	_, err := encoder.Encode(array)
 	if err != ErrEmptyArray {
@@ -164,13 +164,13 @@ func TestRLEEncoder_EmptyArray(t *testing.T) {
 func TestRLEEncoder_SupportsType(t *testing.T) {
 	encoder := NewRLEEncoder()
 
-	if !encoder.SupportsType(arrow.PrimInt32()) {
+	if !encoder.SupportsType(core.PrimInt32()) {
 		t.Error("Should support Int32")
 	}
-	if !encoder.SupportsType(arrow.PrimInt64()) {
+	if !encoder.SupportsType(core.PrimInt64()) {
 		t.Error("Should support Int64")
 	}
-	if encoder.SupportsType(arrow.PrimFloat32()) {
+	if encoder.SupportsType(core.PrimFloat32()) {
 		t.Error("Should not support Float32")
 	}
 }
@@ -182,7 +182,7 @@ func TestRLEEncoder_EstimateSize(t *testing.T) {
 	for i := range values {
 		values[i] = int32(i / 10) // 10 runs
 	}
-	array := arrow.NewInt32Array(values, nil)
+	array := core.NewInt32Array(values, nil)
 
 	estimated := encoder.EstimateSize(array)
 	// Should be reasonable
@@ -200,7 +200,7 @@ func TestRLEEncoder_SingleRun(t *testing.T) {
 	for i := range values {
 		values[i] = 42
 	}
-	array := arrow.NewInt32Array(values, nil)
+	array := core.NewInt32Array(values, nil)
 
 	encoded, err := encoder.Encode(array)
 	if err != nil {
@@ -212,12 +212,12 @@ func TestRLEEncoder_SingleRun(t *testing.T) {
 		t.Logf("Single run compression: %d bytes for 1000 values", len(encoded.Data))
 	}
 
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimInt32(), nil, encoded.NumValues)
+	decoded, err := decoder.Decode(encoded.Data, core.PrimInt32(), nil, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
 
-	result := decoded.(*arrow.Int32Array)
+	result := decoded.(*core.Int32Array)
 	if result.Len() != 1000 {
 		t.Errorf("Expected 1000 values, got %d", result.Len())
 	}
@@ -235,7 +235,7 @@ func BenchmarkRLEEncoder_Encode(b *testing.B) {
 	for i := range values {
 		values[i] = int32(i / 100)
 	}
-	array := arrow.NewInt32Array(values, nil)
+	array := core.NewInt32Array(values, nil)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -249,13 +249,13 @@ func BenchmarkRLEDecoder_Decode(b *testing.B) {
 	for i := range values {
 		values[i] = int32(i / 100)
 	}
-	array := arrow.NewInt32Array(values, nil)
+	array := core.NewInt32Array(values, nil)
 	encoded, _ := encoder.Encode(array)
 
 	decoder := NewRLEDecoder()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		decoder.Decode(encoded.Data, arrow.PrimInt32(), nil, encoded.NumValues)
+		decoder.Decode(encoded.Data, core.PrimInt32(), nil, encoded.NumValues)
 	}
 }

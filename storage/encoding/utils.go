@@ -1,16 +1,16 @@
 package encoding
 
-import "github.com/wzqhbustb/vego/storage/arrow"
+import "github.com/wzqhbustb/vego/core"
 
-func GetValueSize(typeID arrow.TypeID) int {
+func GetValueSize(typeID core.TypeID) int {
 	switch typeID {
-	// case arrow.INT8, arrow.UINT8:
+	// case core.INT8, core.UINT8:
 	// return 1
-	// case arrow.INT16, arrow.UINT16:
+	// case core.INT16, core.UINT16:
 	// return 2
-	case arrow.INT32 /** arrow.UINT32, **/, arrow.FLOAT32:
+	case core.INT32 /** core.UINT32, **/, core.FLOAT32:
 		return 4
-	case arrow.INT64 /** arrow.UINT64, **/, arrow.FLOAT64:
+	case core.INT64 /** core.UINT64, **/, core.FLOAT64:
 		return 8
 	default:
 		return 8

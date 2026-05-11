@@ -2,10 +2,8 @@ package vego
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"log"
 	"os"
 	"path/filepath"
@@ -14,8 +12,8 @@ import (
 	"syscall"
 	"time"
 
-	hnsw "github.com/wzqhbustb/vego/index"
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
+	"github.com/wzqhbustb/vego/storage/catalog"
 	"github.com/wzqhbustb/vego/storage/column"
 	"github.com/wzqhbustb/vego/storage/encoding"
 	"github.com/wzqhbustb/vego/storage/format"
@@ -31,23 +29,6 @@ const (
 	// defaultCompactionThreshold is the deletion rate threshold for automatic compaction
 	defaultCompactionThreshold = 0.3
 )
-
-// docMeta stores metadata for a document (not stored in column storage)
-type docMeta struct {
-	ID       string                 `json:"id"`
-	RowIndex int64                  `json:"row_index"` // Row position in column storage (-1 = unset, >= 0 = valid)
-	Metadata map[string]interface{} `json:"metadata"`
-}
-
-// metadataStore is the in-memory and on-disk metadata storage
-type metadataStore struct {
-	// idHash -> docMeta
-	entries map[int64]docMeta
-	// string ID -> idHash (for quick lookup)
-	idToHash map[string]int64
-	path     string
-	mu       sync.RWMutex
-}
 
 // DocumentStorage handles persistence of documents using columnar storage.
 // Vectors are stored in Lance format for efficient access,
@@ -65,11 +46,8 @@ type DocumentStorage struct {
 	bufferSize  int
 	maxBuffer   int
 
-	// Metadata storage (separate from column storage)
-	metaStore *metadataStore
-
-	// DeletionVector for logical deletion
-	deletionVector *hnsw.DeletionVector
+	// Snapshot manages metadata and deletion state.
+	snapshot *catalog.Snapshot
 
 	// BlockCache for page-level caching (optional, shared across storages)
 	blockCache *format.BlockCache
@@ -134,18 +112,11 @@ func NewDocumentStorage(path string, dimension int, cache ...*format.BlockCache)
 	// Clean up any stale temp files from previous crashes
 	cleanupTempFiles(path)
 
-	metaStore := &metadataStore{
-		entries:  make(map[int64]docMeta),
-		idToHash: make(map[string]int64),
-		path:     filepath.Join(path, metaFileName),
-	}
-
 	s := &DocumentStorage{
 		path:           path,
 		dimension:      dimension,
 		factory:        encoding.NewEncoderFactory(3),
-		metaStore:      metaStore,
-		deletionVector: hnsw.NewDeletionVector(),
+		snapshot:       catalog.NewSnapshot(path, format.V1_2),
 		bufferIndex:    make(map[string]int),
 		maxBuffer:      maxBufferSize,
 		version:        format.V1_2, // Default to V1.2 for RowIndex + BlockCache support
@@ -162,31 +133,14 @@ func NewDocumentStorage(path string, dimension int, cache ...*format.BlockCache)
 	}
 
 	// Try to load existing deletion vector
-	dvPath := hnsw.GetDeletionVectorPath(filepath.Join(path, dataFileName))
-	if hnsw.FileExists(dvPath) {
-		if dv, err := hnsw.Deserialize(dvPath); err == nil {
-			s.deletionVector = dv
-		}
-		// If load fails, continue with empty DV (backward compatibility)
-	}
+	s.snapshot.LoadDeletionStore()
 
 	return s, nil
 }
 
-// hashID converts a string ID to int64 hash for column storage
-func hashID(id string) int64 {
-	h := fnv.New64a()
-	h.Write([]byte(id))
-	return int64(h.Sum64())
-}
-
-// createSchema creates the Arrow schema for vector storage
-func (s *DocumentStorage) createSchema() *arrow.Schema {
-	return arrow.NewSchema([]arrow.Field{
-		{Name: "id_hash", Type: arrow.PrimInt64(), Nullable: false},
-		{Name: "vector", Type: arrow.VectorType(s.dimension), Nullable: false},
-		{Name: "timestamp", Type: arrow.PrimInt64(), Nullable: false},
-	}, nil)
+// createSchema creates the Arrow schema for vector storage.
+func (s *DocumentStorage) createSchema() *core.Schema {
+	return s.snapshot.Schema(s.dimension)
 }
 
 // Put stores a single document.
@@ -204,9 +158,7 @@ func (s *DocumentStorage) Put(doc *Document) error {
 	}
 
 	// Check if document already exists in metadata store
-	s.metaStore.mu.RLock()
-	_, exists := s.metaStore.idToHash[doc.ID]
-	s.metaStore.mu.RUnlock()
+	_, exists := s.snapshot.MetaStore.GetByID(doc.ID)
 
 	if exists {
 		// Update existing - remove old entry first
@@ -254,9 +206,7 @@ func (s *DocumentStorage) PutBatch(docs []*Document) error {
 			doc.Timestamp = time.Now()
 		}
 
-		s.metaStore.mu.RLock()
-		_, exists := s.metaStore.idToHash[doc.ID]
-		s.metaStore.mu.RUnlock()
+		_, exists := s.snapshot.MetaStore.GetByID(doc.ID)
 
 		if exists {
 			if err := s.deleteFromStorage(doc.ID); err != nil {
@@ -321,14 +271,11 @@ func (s *DocumentStorage) Get(id string) (*Document, error) {
 	// Otherwise, continue to fallback path (file may not exist or doesn't have RowIndex)
 
 	// Fallback: Check metadata store + full scan (V1.0 style)
-	s.metaStore.mu.RLock()
-	idHash, exists := s.metaStore.idToHash[id]
+	meta, exists := s.snapshot.MetaStore.GetByID(id)
 	if !exists {
-		s.metaStore.mu.RUnlock()
 		return nil, ErrDocumentNotFound
 	}
-	meta := s.metaStore.entries[idHash]
-	s.metaStore.mu.RUnlock()
+	idHash := catalog.HashID(id)
 
 	// Read vector from column storage
 	vector, timestamp, err := s.readVectorByHash(idHash)
@@ -366,14 +313,7 @@ func (s *DocumentStorage) GetMetadataOnly(id string) (map[string]interface{}, bo
 	}
 
 	// Check metadata store
-	s.metaStore.mu.RLock()
-	defer s.metaStore.mu.RUnlock()
-
-	hash, exists := s.metaStore.idToHash[id]
-	if !exists {
-		return nil, false
-	}
-	meta, exists := s.metaStore.entries[hash]
+	meta, exists := s.snapshot.MetaStore.GetByID(id)
 	if !exists {
 		return nil, false
 	}
@@ -411,18 +351,11 @@ func (s *DocumentStorage) CheckVisibility(id string) (map[string]interface{}, bo
 	}
 
 	// Not in buffer: check metadata store + deletion vector.
-	s.metaStore.mu.RLock()
-	defer s.metaStore.mu.RUnlock()
-
-	hash, exists := s.metaStore.idToHash[id]
+	meta, exists := s.snapshot.MetaStore.GetByID(id)
 	if !exists {
 		return nil, false
 	}
-	meta, exists := s.metaStore.entries[hash]
-	if !exists {
-		return nil, false
-	}
-	if s.deletionVector.IsDeleted(uint32(meta.RowIndex)) {
+	if s.snapshot.DeletionStore.IsDeleted(uint32(meta.RowIndex)) {
 		return nil, false
 	}
 	return meta.Metadata, true
@@ -468,12 +401,9 @@ func (s *DocumentStorage) Delete(id string) error {
 
 // deleteFromStorage removes a document from storage.
 func (s *DocumentStorage) deleteFromStorage(id string) error {
-	idHash := hashID(id)
+	idHash := catalog.HashID(id)
 
-	s.metaStore.mu.Lock()
-	delete(s.metaStore.entries, idHash)
-	delete(s.metaStore.idToHash, id)
-	s.metaStore.mu.Unlock()
+	s.snapshot.MetaStore.Delete(id, idHash)
 
 	s.dirty = true
 
@@ -481,7 +411,7 @@ func (s *DocumentStorage) deleteFromStorage(id string) error {
 	// The deleted document will be filtered out on next read.
 	// A background compaction process could clean this up periodically.
 
-	return s.saveMetadata()
+	return s.snapshot.MetaStore.Save()
 }
 
 // MarkDeleted marks a document as deleted using logical deletion.
@@ -514,7 +444,7 @@ func (s *DocumentStorage) MarkDeleted(id string) error {
 		return ErrDocumentNotFound
 	}
 
-	s.deletionVector.MarkDeleted(uint32(rowID))
+	s.snapshot.DeletionStore.MarkDeleted(uint32(rowID))
 	s.dirty = true
 	return nil
 }
@@ -539,7 +469,7 @@ func (s *DocumentStorage) isDeletedLocked(id string) bool {
 		return false
 	}
 
-	return s.deletionVector.IsDeleted(uint32(rowID))
+	return s.snapshot.DeletionStore.IsDeleted(uint32(rowID))
 }
 
 // IsDeletedByRowID checks if a row is deleted directly by rowID.
@@ -552,19 +482,14 @@ func (s *DocumentStorage) IsDeletedByRowID(rowID int64) bool {
 		return false
 	}
 
-	return s.deletionVector.IsDeleted(uint32(rowID))
+	return s.snapshot.DeletionStore.IsDeleted(uint32(rowID))
 }
 
 // getRowID returns the row index for a document ID.
 // The row index is stored in the document metadata and corresponds to
 // the position in the column storage file.
 func (s *DocumentStorage) getRowID(id string) (int64, bool) {
-	idHash := hashID(id)
-
-	s.metaStore.mu.RLock()
-	defer s.metaStore.mu.RUnlock()
-
-	meta, exists := s.metaStore.entries[idHash]
+	meta, exists := s.snapshot.MetaStore.GetByID(id)
 	if !exists {
 		// Caller MUST check the bool return value; the int64 is undefined
 		// when bool is false. Returning 0 instead of -1 avoids the uint32
@@ -580,11 +505,9 @@ func (s *DocumentStorage) GetDeletionStats() (deletedCount int, totalCount int, 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	s.metaStore.mu.RLock()
-	totalCount = len(s.metaStore.idToHash) + s.bufferSize
-	s.metaStore.mu.RUnlock()
+	totalCount = s.snapshot.MetaStore.Count() + s.bufferSize
 
-	deletedCount = s.deletionVector.Count()
+	deletedCount = s.snapshot.DeletionStore.Count()
 
 	if totalCount > 0 {
 		deletionRate = float64(deletedCount) / float64(totalCount)
@@ -599,24 +522,13 @@ func (s *DocumentStorage) ClearDeletionVector() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.deletionVector.Clear()
+	s.snapshot.DeletionStore.Clear()
 	s.dirty = true
 }
 
-// saveDeletionVector persists the DeletionVector to disk.
+// saveDeletionVector persists the DeletionStore to disk.
 func (s *DocumentStorage) saveDeletionVector() error {
-	dataFile := filepath.Join(s.path, dataFileName)
-	dvPath := hnsw.GetDeletionVectorPath(dataFile)
-
-	if s.deletionVector.IsEmpty() {
-		// If DV is empty, remove the file if it exists
-		if hnsw.FileExists(dvPath) {
-			return os.Remove(dvPath)
-		}
-		return nil
-	}
-
-	return s.deletionVector.Serialize(dvPath)
+	return s.snapshot.SaveDeletionStore()
 }
 
 // GetAllValidDocuments returns all documents that are not marked as deleted.
@@ -871,20 +783,17 @@ func (s *DocumentStorage) rewriteStorage(docs []*Document) error {
 
 	// Update metadata store with row indices
 	// The row index corresponds to the position in the written column storage
-	s.metaStore.mu.Lock()
 	for i, doc := range uniqueDocs {
-		idHash := hashID(doc.ID)
-		s.metaStore.entries[idHash] = docMeta{
+		idHash := catalog.HashID(doc.ID)
+		s.snapshot.MetaStore.Put(doc.ID, idHash, catalog.DocMeta{
 			ID:       doc.ID,
 			RowIndex: int64(i),
 			Metadata: doc.Metadata,
-		}
-		s.metaStore.idToHash[doc.ID] = idHash
+		})
 	}
-	s.metaStore.mu.Unlock()
 
 	// Save metadata
-	if err := s.saveMetadata(); err != nil {
+	if err := s.snapshot.MetaStore.Save(); err != nil {
 		return fmt.Errorf("save metadata: %w", err)
 	}
 
@@ -938,8 +847,9 @@ func (s *DocumentStorage) writeColumnStorage(docs []*Document) error {
 }
 
 // doWriteColumnStorage performs the actual write operation to the specified file.
-func (s *DocumentStorage) doWriteColumnStorage(filePath string, schema *arrow.Schema, docs []*Document) error {
+func (s *DocumentStorage) doWriteColumnStorage(filePath string, schema *core.Schema, docs []*Document) error {
 	// Use RowIndexWriter for V1.1+ format support
+	var writer column.IndexedBatchWriter
 	writer, err := column.NewRowIndexWriter(filePath, schema, s.version, s.factory)
 	if err != nil {
 		return fmt.Errorf("create row index writer: %w", err)
@@ -951,15 +861,15 @@ func (s *DocumentStorage) doWriteColumnStorage(filePath string, schema *arrow.Sc
 	}
 
 	// Build arrays
-	idBuilder := arrow.NewInt64Builder()
-	vectorBuilder := arrow.NewFixedSizeListBuilder(
-		arrow.FixedSizeListOf(arrow.PrimFloat32(), s.dimension).(*arrow.FixedSizeListType),
+	idBuilder := core.NewInt64Builder()
+	vectorBuilder := core.NewFixedSizeListBuilder(
+		core.FixedSizeListOf(core.PrimFloat32(), s.dimension).(*core.FixedSizeListType),
 	)
-	timestampBuilder := arrow.NewInt64Builder()
+	timestampBuilder := core.NewInt64Builder()
 
 	// Populate builders
 	for _, doc := range docs {
-		idBuilder.Append(hashID(doc.ID))
+		idBuilder.Append(catalog.HashID(doc.ID))
 		vectorBuilder.AppendValues(doc.Vector)
 		timestampBuilder.Append(doc.Timestamp.UnixNano())
 	}
@@ -970,7 +880,7 @@ func (s *DocumentStorage) doWriteColumnStorage(filePath string, schema *arrow.Sc
 	timestampArray := timestampBuilder.NewArray()
 
 	// Create record batch
-	batch, err := arrow.NewRecordBatch(schema, len(docs), []arrow.Array{
+	batch, err := core.NewRecordBatch(schema, len(docs), []core.Array{
 		idArray, vectorArray, timestampArray,
 	})
 	if err != nil {
@@ -1032,7 +942,7 @@ func (s *DocumentStorage) readAllDocuments() ([]*Document, error) {
 	dataFile := filepath.Join(s.path, dataFileName)
 	
 	// Use BlockCache-aware reader if cache is configured
-	var reader *column.Reader
+	var reader column.BatchReader
 	var err error
 	if s.blockCache != nil {
 		reader, err = column.NewReaderWithCache(dataFile, s.blockCache)
@@ -1054,24 +964,23 @@ func (s *DocumentStorage) readAllDocuments() ([]*Document, error) {
 	}
 
 	// Extract columns
-	idHashArray := batch.Column(0).(*arrow.Int64Array)
-	vectorArray := batch.Column(1).(*arrow.FixedSizeListArray)
-	timestampArray := batch.Column(2).(*arrow.Int64Array)
+	idHashArray := batch.Column(0).(*core.Int64Array)
+	vectorArray := batch.Column(1).(*core.FixedSizeListArray)
+	timestampArray := batch.Column(2).(*core.Int64Array)
 
-	// Get metadata
-	s.metaStore.mu.RLock()
-	defer s.metaStore.mu.RUnlock()
+	// Get metadata snapshot for lookups
+	entries := s.snapshot.MetaStore.AllEntries()
 
 	// Use a map to deduplicate by hash (last write wins)
 	// This handles the case where updates create duplicate entries
 	docMap := make(map[int64]*Document)
-	vectorValues := vectorArray.Values().(*arrow.Float32Array).Values()
+	vectorValues := vectorArray.Values().(*core.Float32Array).Values()
 
 	for i := 0; i < batch.NumRows(); i++ {
 		idHash := idHashArray.Value(i)
 		
 		// Skip if not in metadata (deleted)
-		meta, exists := s.metaStore.entries[idHash]
+		meta, exists := entries[idHash]
 		if !exists {
 			continue
 		}
@@ -1111,7 +1020,7 @@ func (s *DocumentStorage) readVectorByHash(idHash int64) ([]float32, int64, erro
 	// Find the most recent version for this hash
 	var latestDoc *Document
 	for _, doc := range docs {
-		if hashID(doc.ID) == idHash {
+		if catalog.HashID(doc.ID) == idHash {
 			if latestDoc == nil || doc.Timestamp.After(latestDoc.Timestamp) {
 				latestDoc = doc
 			}
@@ -1151,7 +1060,7 @@ func (s *DocumentStorage) ensureRowIndex() {
 		return
 	}
 
-	var reader *column.RowIndexReader
+	var reader column.IndexedBatchReader
 	var err error
 	if s.blockCache != nil {
 		reader, err = column.NewRowIndexReaderWithCache(dataFile, s.blockCache)
@@ -1207,7 +1116,7 @@ func (s *DocumentStorage) tryReadByRowIndex(id string) (*Document, bool, error) 
 	// File open + footer read is microseconds; the expensive
 	// LoadRowIndex is avoided via the cached RowIndex above.
 	dataFile := filepath.Join(s.path, dataFileName)
-	var reader *column.RowIndexReader
+	var reader column.IndexedBatchReader
 	var err error
 	if s.blockCache != nil {
 		reader, err = column.NewRowIndexReaderWithCache(dataFile, s.blockCache)
@@ -1244,9 +1153,7 @@ func (s *DocumentStorage) tryReadByRowIndex(id string) (*Document, bool, error) 
 	}
 
 	// Get metadata
-	s.metaStore.mu.RLock()
-	meta, exists := s.metaStore.entries[idHash]
-	s.metaStore.mu.RUnlock()
+	meta, exists := s.snapshot.MetaStore.GetByHash(idHash)
 	if !exists {
 		return nil, true, ErrDocumentNotFound
 	}
@@ -1260,33 +1167,6 @@ func (s *DocumentStorage) tryReadByRowIndex(id string) (*Document, bool, error) 
 }
 
 
-
-// saveMetadata saves the metadata store to disk.
-func (s *DocumentStorage) saveMetadata() error {
-	s.metaStore.mu.RLock()
-	data := struct {
-		Entries  map[int64]docMeta `json:"entries"`
-		IDToHash map[string]int64  `json:"id_to_hash"`
-	}{
-		Entries:  s.metaStore.entries,
-		IDToHash: s.metaStore.idToHash,
-	}
-	s.metaStore.mu.RUnlock()
-
-	file, err := os.Create(s.metaStore.path)
-	if err != nil {
-		return fmt.Errorf("create metadata file: %w", err)
-	}
-	defer file.Close()
-
-	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(data); err != nil {
-		return fmt.Errorf("encode metadata: %w", err)
-	}
-
-	return nil
-}
 
 // lookupRowIndexFromFile looks up the row index for a document ID from the data file.
 // This is used for backward compatibility when loading old metadata without RowIndex.
@@ -1305,7 +1185,7 @@ func (s *DocumentStorage) lookupRowIndexFromFile(id string) int64 {
 	}
 
 	// Open RowIndexReader
-	var reader *column.RowIndexReader
+	var reader column.IndexedBatchReader
 	var err error
 	if s.blockCache != nil {
 		reader, err = column.NewRowIndexReaderWithCache(dataFile, s.blockCache)
@@ -1331,75 +1211,18 @@ func (s *DocumentStorage) lookupRowIndexFromFile(id string) int64 {
 	return rowIdx
 }
 
-// loadMetadata loads the metadata store from disk.
-func (s *DocumentStorage) loadMetadata() error {
-	_, err := os.Stat(s.metaStore.path)
-	if os.IsNotExist(err) {
-		// No existing metadata, start fresh
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-
-	data, err := os.ReadFile(s.metaStore.path)
-	if err != nil {
-		return fmt.Errorf("read metadata file: %w", err)
-	}
-
-	var stored struct {
-		Entries  map[int64]docMeta `json:"entries"`
-		IDToHash map[string]int64  `json:"id_to_hash"`
-	}
-
-	if err := json.Unmarshal(data, &stored); err != nil {
-		return fmt.Errorf("decode metadata: %w", err)
-	}
-
-	s.metaStore.mu.Lock()
-	s.metaStore.entries = stored.Entries
-	s.metaStore.idToHash = stored.IDToHash
-	if s.metaStore.entries == nil {
-		s.metaStore.entries = make(map[int64]docMeta)
-	}
-	if s.metaStore.idToHash == nil {
-		s.metaStore.idToHash = make(map[string]int64)
-	}
-
-	// Backward compatibility: Rebuild RowIndex from RowIndex file for old data
-	// - New data uses -1 to indicate unset RowIndex
-	// - Old data might have RowIndex=0 (JSON default) which could be unset or valid
-	// We need to lookup the actual row index from the data file
+// load loads existing data.
+func (s *DocumentStorage) load() error {
 	dataFile := filepath.Join(s.path, dataFileName)
 	fileExists := false
 	if _, err := os.Stat(dataFile); err == nil {
 		fileExists = true
 	}
-	supportsRowIndex := s.supportsRowIndex()
-
-	for idHash, meta := range s.metaStore.entries {
-		// If RowIndex < 0 (unset) or == 0 (possibly old data), try to rebuild
-		if meta.RowIndex < 0 || meta.RowIndex == 0 {
-			if rowIdx := s.lookupRowIndexFromFile(meta.ID); rowIdx >= 0 {
-				meta.RowIndex = rowIdx
-				s.metaStore.entries[idHash] = meta
-			} else if meta.RowIndex < 0 {
-				// Only log warning for new format (RowIndex=-1) that failed to rebuild
-				// Old format (RowIndex=0) might be valid data at row 0, don't warn
-				if fileExists && supportsRowIndex {
-					log.Printf("[vego] Warning: Document %s has unset RowIndex but not found in RowIndex file", meta.ID)
-				}
-			}
-		}
-	}
-	s.metaStore.mu.Unlock()
-
-	return nil
-}
-
-// load loads existing data.
-func (s *DocumentStorage) load() error {
-	return s.loadMetadata()
+	return s.snapshot.MetaStore.LoadWithRepair(
+		s.lookupRowIndexFromFile,
+		fileExists,
+		s.supportsRowIndex(),
+	)
 }
 
 // Stats returns statistics about the storage.
@@ -1407,9 +1230,7 @@ func (s *DocumentStorage) Stats() StorageStats {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	s.metaStore.mu.RLock()
-	docCount := len(s.metaStore.idToHash) + s.bufferSize
-	s.metaStore.mu.RUnlock()
+	docCount := s.snapshot.MetaStore.Count() + s.bufferSize
 
 	var dataSize, metaSize int64
 	
@@ -1418,18 +1239,15 @@ func (s *DocumentStorage) Stats() StorageStats {
 		dataSize = info.Size()
 	}
 
-	if info, err := os.Stat(s.metaStore.path); err == nil {
+	if info, err := os.Stat(s.snapshot.MetaStore.Path()); err == nil {
 		metaSize = info.Size()
 	}
 	
 	// Get file format version
-	formatVersion := s.version.String() // Default to configured version
-	if fileVer, err := s.getFileVersion(); err == nil {
-		formatVersion = fileVer.String()
-	}
+	formatVersion := s.snapshot.FormatVersion(s.getFileVersion)
 
 	// Calculate deletion stats
-	deletedCount := s.deletionVector.Count()
+	deletedCount := s.snapshot.DeletionStore.Count()
 	deletionRate := 0.0
 	if docCount > 0 {
 		deletionRate = float64(deletedCount) / float64(docCount)

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/column"
 	"github.com/wzqhbustb/vego/storage/format"
 )
@@ -241,20 +241,20 @@ func BenchmarkScalability(b *testing.B) {
 }
 
 // Helper functions for benchmarks
-func createTestSchema(dim int) *arrow.Schema {
-	return arrow.NewSchema([]arrow.Field{
-		{Name: "id_hash", Type: arrow.PrimInt64(), Nullable: false},
-		{Name: "vector", Type: arrow.VectorType(dim), Nullable: false},
-		{Name: "timestamp", Type: arrow.PrimInt64(), Nullable: false},
+func createTestSchema(dim int) *core.Schema {
+	return core.NewSchema([]core.Field{
+		{Name: "id_hash", Type: core.PrimInt64(), Nullable: false},
+		{Name: "vector", Type: core.VectorType(dim), Nullable: false},
+		{Name: "timestamp", Type: core.PrimInt64(), Nullable: false},
 	}, nil)
 }
 
 func writeTestData(writer *column.RowIndexWriter, count, dim int) {
-	idBuilder := arrow.NewInt64Builder()
-	vectorBuilder := arrow.NewFixedSizeListBuilder(
-		arrow.FixedSizeListOf(arrow.PrimFloat32(), dim).(*arrow.FixedSizeListType),
+	idBuilder := core.NewInt64Builder()
+	vectorBuilder := core.NewFixedSizeListBuilder(
+		core.FixedSizeListOf(core.PrimFloat32(), dim).(*core.FixedSizeListType),
 	)
-	timestampBuilder := arrow.NewInt64Builder()
+	timestampBuilder := core.NewInt64Builder()
 	
 	for i := 0; i < count; i++ {
 		idBuilder.Append(int64(i))
@@ -263,7 +263,7 @@ func writeTestData(writer *column.RowIndexWriter, count, dim int) {
 	}
 	
 	schema := createTestSchema(dim)
-	batch, _ := arrow.NewRecordBatch(schema, count, []arrow.Array{
+	batch, _ := core.NewRecordBatch(schema, count, []core.Array{
 		idBuilder.NewArray(),
 		vectorBuilder.NewArray(),
 		timestampBuilder.NewArray(),

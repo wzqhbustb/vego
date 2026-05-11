@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/format"
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
 )
 
 // RowIndexReader extends Reader with RowIndex support for V1.1+ files
@@ -42,10 +42,10 @@ func NewRowIndexReader(filename string) (*RowIndexReader, error) {
 	}
 
 	return &RowIndexReader{
-		Reader:     reader,
-		version:    version,
+		Reader:      reader,
+		version:     version,
 		hasRowIndex: hasRowIndex,
-		blockSize:  blockSize,
+		blockSize:   blockSize,
 	}, nil
 }
 
@@ -126,7 +126,7 @@ func (r *RowIndexReader) LoadRowIndex() error {
 
 	// Check if file has RowIndex
 	if !r.hasRowIndex {
-		return lerrors.New(lerrors.ErrInvalidArgument).
+		return core.New(core.ErrInvalidArgument).
 			Op("load_rowindex").
 			Context("message", "file does not contain RowIndex").
 			Build()
@@ -135,7 +135,7 @@ func (r *RowIndexReader) LoadRowIndex() error {
 	// Get RowIndex info from footer
 	offset, size, checksum, ok := r.footer.GetRowIndexInfo()
 	if !ok {
-		return lerrors.New(lerrors.ErrCorruptedFile).
+		return core.New(core.ErrCorruptedFile).
 			Op("load_rowindex").
 			Context("message", "RowIndex info not found in footer metadata").
 			Build()
@@ -161,7 +161,7 @@ func (r *RowIndexReader) LoadRowIndex() error {
 
 	// Seek to RowIndex Page position
 	if _, err := r.file.Seek(offset, io.SeekStart); err != nil {
-		return lerrors.New(lerrors.ErrIO).
+		return core.New(core.ErrIO).
 			Op("seek_rowindex").
 			Wrap(err).
 			Build()
@@ -170,7 +170,7 @@ func (r *RowIndexReader) LoadRowIndex() error {
 	// Read the page
 	page := &format.Page{}
 	if _, err := page.ReadFrom(r.file); err != nil {
-		return lerrors.New(lerrors.ErrIO).
+		return core.New(core.ErrIO).
 			Op("read_rowindex_page").
 			Wrap(err).
 			Build()
@@ -178,7 +178,7 @@ func (r *RowIndexReader) LoadRowIndex() error {
 
 	// Verify page type
 	if page.Type != format.PageTypeIndex {
-		return lerrors.New(lerrors.ErrCorruptedFile).
+		return core.New(core.ErrCorruptedFile).
 			Op("load_rowindex").
 			Context("page_type", page.Type).
 			Context("expected", format.PageTypeIndex).
@@ -189,7 +189,7 @@ func (r *RowIndexReader) LoadRowIndex() error {
 	// Verify size (declared_size includes page header, actual = header + CompressedSize)
 	expectedSize := format.PageHeaderSize + page.CompressedSize
 	if int32(size) != int32(expectedSize) {
-		return lerrors.New(lerrors.ErrCorruptedFile).
+		return core.New(core.ErrCorruptedFile).
 			Op("load_rowindex").
 			Context("declared_size", size).
 			Context("actual_size", expectedSize).
@@ -201,7 +201,7 @@ func (r *RowIndexReader) LoadRowIndex() error {
 
 	// Verify checksum
 	if checksum != 0 && page.Checksum != checksum {
-		return lerrors.New(lerrors.ErrCorruptedFile).
+		return core.New(core.ErrCorruptedFile).
 			Op("load_rowindex").
 			Context("declared_checksum", checksum).
 			Context("actual_checksum", page.Checksum).
@@ -212,7 +212,7 @@ func (r *RowIndexReader) LoadRowIndex() error {
 	// Parse RowIndex from page data
 	ri, err := format.RowIndexFromPage(page)
 	if err != nil {
-		return lerrors.New(lerrors.ErrDecodeFailed).
+		return core.New(core.ErrDecodeFailed).
 			Op("parse_rowindex").
 			Wrap(err).
 			Build()
@@ -251,7 +251,7 @@ func (r *RowIndexReader) LookupRowID(docID string) (int64, error) {
 	// Check if file has RowIndex capability
 	if !r.hasRowIndex {
 		// For V1.0 files without RowIndex, return error
-		return -1, lerrors.New(lerrors.ErrInvalidArgument).
+		return -1, core.New(core.ErrInvalidArgument).
 			Op("lookup_rowid").
 			Context("version", r.version.String()).
 			Context("message", "file does not support RowIndex (V1.0 format)").
@@ -268,7 +268,7 @@ func (r *RowIndexReader) LookupRowID(docID string) (int64, error) {
 	// Lookup
 	rowIdx := r.rowIndex.Lookup(docID)
 	if rowIdx == -1 {
-		return -1, lerrors.New(lerrors.ErrInvalidArgument).
+		return -1, core.New(core.ErrInvalidArgument).
 			Op("lookup_rowid").
 			Context("doc_id", docID).
 			Context("message", "document ID not found in RowIndex").
@@ -296,7 +296,7 @@ func (r *RowIndexReader) GetRowIndex() *format.RowIndex {
 // RowIndexStats returns statistics about the RowIndex
 func (r *RowIndexReader) RowIndexStats() (format.RowIndexStats, error) {
 	if !r.hasRowIndex {
-		return format.RowIndexStats{}, lerrors.New(lerrors.ErrInvalidArgument).
+		return format.RowIndexStats{}, core.New(core.ErrInvalidArgument).
 			Op("rowindex_stats").
 			Context("message", "file does not contain RowIndex").
 			Build()

@@ -7,7 +7,7 @@ import (
 	"io"
 	"time"
 
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
+	"github.com/wzqhbustb/vego/core"
 )
 
 // Manifest manages versioning and transaction metadata for Lance files
@@ -54,11 +54,11 @@ func (m *Manifest) Commit() {
 // Validate validates the manifest
 func (m *Manifest) Validate() error {
 	if m.Version < 0 {
-		return lerrors.ValidationFailed("validate_manifest", "",
+		return core.ValidationFailed("validate_manifest", "",
 			fmt.Sprintf("invalid version: %d", m.Version))
 	}
 	if m.ParentVersion >= m.Version {
-		return lerrors.New(lerrors.ErrInvalidArgument).
+		return core.New(core.ErrInvalidArgument).
 			Op("validate_manifest").
 			Context("field", "parent_version").
 			Context("parent", m.ParentVersion).
@@ -67,7 +67,7 @@ func (m *Manifest) Validate() error {
 			Build()
 	}
 	if m.Timestamp <= 0 {
-		return lerrors.ValidationFailed("validate_manifest", "",
+		return core.ValidationFailed("validate_manifest", "",
 			fmt.Sprintf("invalid timestamp: %d", m.Timestamp))
 	}
 	return nil
@@ -238,7 +238,7 @@ func (m *Manifest) ReadFrom(r io.Reader) (int64, error) {
 // Helper functions
 func readByte(r io.Reader) (byte, error) {
 	buf := make([]byte, 1)
-	_, err := r.Read(buf)
+	_, err := io.ReadFull(r, buf)
 	return buf[0], err
 }
 

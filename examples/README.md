@@ -149,12 +149,15 @@ results, err := index.Search(query, 10, 400)
 
 ### Persistence
 
-```go
-// Save
-err := index.SaveToLance("./my_index")
+Use the `vego` collection API for automatic persistence:
 
-// Load
-loadedIndex, err := hnsw.LoadHNSWFromLance("./my_index")
+```go
+// Open database (loads existing collections)
+db, err := vego.Open("./my_db")
+coll, _ := db.Collection("embeddings")
+
+// Data is auto-saved on Close
+db.Close()
 ```
 
 ## Performance Tips

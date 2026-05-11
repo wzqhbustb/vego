@@ -3,31 +3,31 @@ package encoding
 import (
 	"testing"
 
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/format"
 )
 
-func createInt32Array(values []int32) *arrow.Int32Array {
-	return arrow.NewInt32Array(values, nil)
+func createInt32Array(values []int32) *core.Int32Array {
+	return core.NewInt32Array(values, nil)
 }
 
-func createInt64Array(values []int64) *arrow.Int64Array {
-	return arrow.NewInt64Array(values, nil)
+func createInt64Array(values []int64) *core.Int64Array {
+	return core.NewInt64Array(values, nil)
 }
 
-func createFloat32Array(values []float32) *arrow.Float32Array {
-	return arrow.NewFloat32Array(values, nil)
+func createFloat32Array(values []float32) *core.Float32Array {
+	return core.NewFloat32Array(values, nil)
 }
 
-func createFloat64Array(values []float64) *arrow.Float64Array {
-	return arrow.NewFloat64Array(values, nil)
+func createFloat64Array(values []float64) *core.Float64Array {
+	return core.NewFloat64Array(values, nil)
 }
 
 func TestEncoderFactory_SelectEncoder_NilStatistics(t *testing.T) {
 	factory := NewEncoderFactory(3)
 
 	// nil statistics should return Zstd
-	encoder := factory.SelectEncoder(arrow.PrimInt32(), nil)
+	encoder := factory.SelectEncoder(core.PrimInt32(), nil)
 	if encoder == nil {
 		t.Fatal("Expected encoder, got nil")
 	}
@@ -44,7 +44,7 @@ func TestEncoderFactory_SelectEncoder_SmallData(t *testing.T) {
 	arr := createInt32Array(smallData)
 	stats := ComputeStatistics(arr)
 
-	encoder := factory.SelectEncoder(arrow.PrimInt32(), stats)
+	encoder := factory.SelectEncoder(core.PrimInt32(), stats)
 	if encoder.Type() != format.EncodingZstd {
 		t.Errorf("Expected Zstd for small data, got %v", encoder.Type())
 	}
@@ -61,7 +61,7 @@ func TestEncoderFactory_SelectEncoder_Int32_Narrow(t *testing.T) {
 	arr := createInt32Array(values)
 	stats := ComputeStatistics(arr)
 
-	encoder := factory.SelectEncoder(arrow.PrimInt32(), stats)
+	encoder := factory.SelectEncoder(core.PrimInt32(), stats)
 	// Note: May vary based on thresholds
 	t.Logf("Selected encoder for narrow int32: %v", encoder.Type())
 }
@@ -77,7 +77,7 @@ func TestEncoderFactory_SelectEncoder_Int32_RLE(t *testing.T) {
 	arr := createInt32Array(values)
 	stats := ComputeStatistics(arr)
 
-	encoder := factory.SelectEncoder(arrow.PrimInt32(), stats)
+	encoder := factory.SelectEncoder(core.PrimInt32(), stats)
 	t.Logf("Run ratio: %.4f", stats.GetRunRatio())
 	t.Logf("Selected encoder for run-heavy data: %v", encoder.Type())
 }
@@ -93,7 +93,7 @@ func TestEncoderFactory_SelectEncoder_Int32_Dictionary(t *testing.T) {
 	arr := createInt32Array(values)
 	stats := ComputeStatistics(arr)
 
-	encoder := factory.SelectEncoder(arrow.PrimInt32(), stats)
+	encoder := factory.SelectEncoder(core.PrimInt32(), stats)
 	t.Logf("Cardinality ratio: %.4f", stats.GetCardinalityRatio())
 	t.Logf("Selected encoder for low cardinality: %v", encoder.Type())
 }
@@ -109,7 +109,7 @@ func TestEncoderFactory_SelectEncoder_Int32_Wide(t *testing.T) {
 	arr := createInt32Array(values)
 	stats := ComputeStatistics(arr)
 
-	encoder := factory.SelectEncoder(arrow.PrimInt32(), stats)
+	encoder := factory.SelectEncoder(core.PrimInt32(), stats)
 	// Should fallback to Zstd
 	if encoder.Type() != format.EncodingZstd {
 		t.Logf("Expected Zstd for wide int32, got %v", encoder.Type())
@@ -127,7 +127,7 @@ func TestEncoderFactory_SelectEncoder_Float32_BSS(t *testing.T) {
 	arr := createFloat32Array(values)
 	stats := ComputeStatistics(arr)
 
-	encoder := factory.SelectEncoder(arrow.PrimFloat32(), stats)
+	encoder := factory.SelectEncoder(core.PrimFloat32(), stats)
 	t.Logf("Average entropy: %.2f", stats.GetAverageEntropy())
 	t.Logf("Selected encoder for float32: %v", encoder.Type())
 }
@@ -150,7 +150,7 @@ func TestEncoderFactory_SelectEncoder_CustomConfig(t *testing.T) {
 	arr := createInt32Array(values)
 	stats := ComputeStatistics(arr)
 
-	encoder := factory.SelectEncoder(arrow.PrimInt32(), stats)
+	encoder := factory.SelectEncoder(core.PrimInt32(), stats)
 	t.Logf("With custom config, selected: %v", encoder.Type())
 }
 
@@ -161,7 +161,7 @@ func TestEncoderFactory_SelectEncoder_NilConfig(t *testing.T) {
 	arr := createInt32Array(values)
 	stats := ComputeStatistics(arr)
 
-	encoder := factory.SelectEncoder(arrow.PrimInt32(), stats)
+	encoder := factory.SelectEncoder(core.PrimInt32(), stats)
 	if encoder.Type() != format.EncodingZstd {
 		t.Errorf("Expected Zstd with default config for small data, got %v", encoder.Type())
 	}
@@ -185,7 +185,7 @@ func TestEncoderFactory_E2E_Int32(t *testing.T) {
 			arr := createInt32Array(tc.values)
 			stats := ComputeStatistics(arr)
 
-			encoder := factory.SelectEncoder(arrow.PrimInt32(), stats)
+			encoder := factory.SelectEncoder(core.PrimInt32(), stats)
 
 			encoded, err := encoder.Encode(arr)
 			if err != nil {
@@ -210,7 +210,7 @@ func BenchmarkEncoderFactory_SelectEncoder(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		factory.SelectEncoder(arrow.PrimInt32(), stats)
+		factory.SelectEncoder(core.PrimInt32(), stats)
 	}
 }
 
@@ -222,7 +222,7 @@ func BenchmarkEncoderFactory_Encode(b *testing.B) {
 	}
 	arr := createInt32Array(values)
 	stats := ComputeStatistics(arr)
-	encoder := factory.SelectEncoder(arrow.PrimInt32(), stats)
+	encoder := factory.SelectEncoder(core.PrimInt32(), stats)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

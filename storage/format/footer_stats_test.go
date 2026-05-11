@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 )
 
 // TestFooterStatsRoundTrip verifies that Footer with statistics fields
@@ -309,12 +309,12 @@ func TestStatisticsRoundTripWithMerge(t *testing.T) {
 	
 	// Simulate writing two batches
 	// Batch 1: col0=[1,2], col1=[10.5, 20.5]
-	batch1Stats0 := ComputeColumnStatistics(arrow.NewInt32Array([]int32{1, 2}, nil), 0)
-	batch1Stats1 := ComputeColumnStatistics(arrow.NewFloat32Array([]float32{10.5, 20.5}, nil), 1)
+	batch1Stats0 := ComputeColumnStatistics(core.NewInt32Array([]int32{1, 2}, nil), 0)
+	batch1Stats1 := ComputeColumnStatistics(core.NewFloat32Array([]float32{10.5, 20.5}, nil), 1)
 	
 	// Batch 2: col0=[5,6], col1=[30.5, 40.5]
-	batch2Stats0 := ComputeColumnStatistics(arrow.NewInt32Array([]int32{5, 6}, nil), 0)
-	batch2Stats1 := ComputeColumnStatistics(arrow.NewFloat32Array([]float32{30.5, 40.5}, nil), 1)
+	batch2Stats0 := ComputeColumnStatistics(core.NewInt32Array([]int32{5, 6}, nil), 0)
+	batch2Stats1 := ComputeColumnStatistics(core.NewFloat32Array([]float32{30.5, 40.5}, nil), 1)
 	
 	// Merge batch 1
 	if err := sl.Stats[0].Merge(batch1Stats0); err != nil {

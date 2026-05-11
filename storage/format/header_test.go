@@ -4,22 +4,21 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"github.com/wzqhbustb/vego/storage/arrow"
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
+	"github.com/wzqhbustb/vego/core"
 	"strings"
 	"testing"
 )
 
 // assertErrorCode 检查错误是否为指定的错误码
-func assertErrorCode(t *testing.T, err error, code lerrors.ErrorCode, msg string) {
+func assertErrorCode(t *testing.T, err error, code core.ErrorCode, msg string) {
 	t.Helper()
 	if err == nil {
 		t.Errorf("%s: expected error, got nil", msg)
 		return
 	}
-	if !lerrors.Is(err, code) {
+	if !core.Is(err, code) {
 		t.Errorf("%s: expected error code %v, got %v (err=%v)",
-			msg, code, lerrors.GetCode(err), err)
+			msg, code, core.GetCode(err), err)
 	}
 }
 
@@ -38,7 +37,7 @@ func assertErrorContains(t *testing.T, err error, substr string, msg string) {
 // TestHeaderSerializationRoundtrip tests basic header write/read roundtrip
 func TestHeaderSerializationRoundtrip(t *testing.T) {
 	// Create a schema with various field types
-	schema := arrow.SchemaForVectors(768)
+	schema := core.SchemaForVectors(768)
 
 	// Create header
 	original := NewHeader(schema, 1000)
@@ -141,7 +140,7 @@ func TestHeaderWithDifferentVectorDimensions(t *testing.T) {
 
 	for _, dim := range dimensions {
 		t.Run(fmt.Sprintf("dim_%d", dim), func(t *testing.T) {
-			schema := arrow.SchemaForVectors(dim)
+			schema := core.SchemaForVectors(dim)
 			header := NewHeader(schema, 500)
 
 			buf := new(bytes.Buffer)
@@ -158,11 +157,11 @@ func TestHeaderWithDifferentVectorDimensions(t *testing.T) {
 
 			// Verify vector field type
 			vectorField := deserialized.Schema.Field(1) // "vector" is second field
-			if vectorField.Type.ID() != arrow.FIXED_SIZE_LIST {
+			if vectorField.Type.ID() != core.FIXED_SIZE_LIST {
 				t.Errorf("Vector field type mismatch: got %v, want FIXED_SIZE_LIST", vectorField.Type.ID())
 			}
 
-			listType, ok := vectorField.Type.(*arrow.FixedSizeListType)
+			listType, ok := vectorField.Type.(*core.FixedSizeListType)
 			if !ok {
 				t.Fatal("Failed to cast vector type to FixedSizeListType")
 			}
@@ -177,11 +176,11 @@ func TestHeaderWithDifferentVectorDimensions(t *testing.T) {
 // TestHeaderWithCustomSchema tests serialization with custom schema
 func TestHeaderWithCustomSchema(t *testing.T) {
 	// Create custom schema with various types
-	fields := []arrow.Field{
-		arrow.NewField("id", arrow.PrimInt32(), false),
-		arrow.NewField("score", arrow.PrimFloat64(), true), // nullable
-		arrow.NewField("name", arrow.PrimString(), false),
-		arrow.NewField("embedding", arrow.VectorType(512), false),
+	fields := []core.Field{
+		core.NewField("id", core.PrimInt32(), false),
+		core.NewField("score", core.PrimFloat64(), true), // nullable
+		core.NewField("name", core.PrimString(), false),
+		core.NewField("embedding", core.VectorType(512), false),
 	}
 
 	metadata := map[string]string{
@@ -190,7 +189,7 @@ func TestHeaderWithCustomSchema(t *testing.T) {
 		"author":      "test",
 	}
 
-	schema := arrow.NewSchema(fields, metadata)
+	schema := core.NewSchema(fields, metadata)
 	header := NewHeader(schema, 2000)
 
 	buf := new(bytes.Buffer)
@@ -228,7 +227,7 @@ func TestHeaderValidation(t *testing.T) {
 		name        string
 		modify      func(*Header)
 		wantErr     string            // 向后兼容：检查错误消息子串
-		wantErrCode lerrors.ErrorCode // 新的：检查错误码
+		wantErrCode core.ErrorCode // 新的：检查错误码
 	}{
 		{
 			name: "invalid magic",
@@ -236,7 +235,7 @@ func TestHeaderValidation(t *testing.T) {
 				h.Magic = 0xDEADBEEF
 			},
 			wantErr:     "invalid magic number",
-			wantErrCode: lerrors.ErrInvalidMagic,
+			wantErrCode: core.ErrInvalidMagic,
 		},
 		{
 			name: "nil schema",
@@ -244,7 +243,7 @@ func TestHeaderValidation(t *testing.T) {
 				h.Schema = nil
 			},
 			wantErr:     "schema is nil",
-			wantErrCode: lerrors.ErrInvalidArgument,
+			wantErrCode: core.ErrInvalidArgument,
 		},
 		{
 			name: "negative row count",
@@ -252,7 +251,7 @@ func TestHeaderValidation(t *testing.T) {
 				h.NumRows = -100
 			},
 			wantErr:     "invalid row count",
-			wantErrCode: lerrors.ErrInvalidArgument,
+			wantErrCode: core.ErrInvalidArgument,
 		},
 		{
 			name: "column count mismatch",
@@ -260,7 +259,7 @@ func TestHeaderValidation(t *testing.T) {
 				h.NumColumns = 999
 			},
 			wantErr:     "column count mismatch",
-			wantErrCode: lerrors.ErrSchemaMismatch,
+			wantErrCode: core.ErrSchemaMismatch,
 		},
 		{
 			name: "invalid page size",
@@ -268,13 +267,13 @@ func TestHeaderValidation(t *testing.T) {
 				h.PageSize = -1
 			},
 			wantErr:     "invalid page size",
-			wantErrCode: lerrors.ErrInvalidArgument,
+			wantErrCode: core.ErrInvalidArgument,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			schema := arrow.SchemaForVectors(768)
+			schema := core.SchemaForVectors(768)
 			header := NewHeader(schema, 1000)
 			tt.modify(header)
 
@@ -296,7 +295,7 @@ func TestHeaderValidation(t *testing.T) {
 
 // TestHeaderFlags tests flag operations
 func TestHeaderFlags(t *testing.T) {
-	schema := arrow.SchemaForVectors(768)
+	schema := core.SchemaForVectors(768)
 	header := NewHeader(schema, 1000)
 
 	// Initially no flags
@@ -346,10 +345,10 @@ func TestHeaderFlags(t *testing.T) {
 
 // TestSchemaWithSpecialCharacters tests JSON escaping
 func TestSchemaWithSpecialCharacters(t *testing.T) {
-	fields := []arrow.Field{
-		arrow.NewField(`field"with"quotes`, arrow.PrimInt32(), false),
-		arrow.NewField(`field\with\backslash`, arrow.PrimFloat32(), false),
-		arrow.NewField("field\nwith\nnewline", arrow.PrimString(), false),
+	fields := []core.Field{
+		core.NewField(`field"with"quotes`, core.PrimInt32(), false),
+		core.NewField(`field\with\backslash`, core.PrimFloat32(), false),
+		core.NewField("field\nwith\nnewline", core.PrimString(), false),
 	}
 
 	metadata := map[string]string{
@@ -357,7 +356,7 @@ func TestSchemaWithSpecialCharacters(t *testing.T) {
 		`key\backslash`: `value\backslash`,
 	}
 
-	schema := arrow.NewSchema(fields, metadata)
+	schema := core.NewSchema(fields, metadata)
 	header := NewHeader(schema, 100)
 
 	buf := new(bytes.Buffer)
@@ -394,14 +393,14 @@ func TestSchemaWithSpecialCharacters(t *testing.T) {
 func TestMaxSchemaSize(t *testing.T) {
 	// Create schema with many fields to exceed 1MB limit
 	// Each field JSON is ~90 bytes, need >11500 fields to exceed 1MB
-	fields := make([]arrow.Field, 15000)
+	fields := make([]core.Field, 15000)
 	for i := 0; i < 15000; i++ {
 		// Each field name is long to increase JSON size
 		name := fmt.Sprintf("very_long_field_name_to_increase_json_size_with_extra_padding_%d", i)
-		fields[i] = arrow.NewField(name, arrow.PrimInt32(), false)
+		fields[i] = core.NewField(name, core.PrimInt32(), false)
 	}
 
-	schema := arrow.NewSchema(fields, nil)
+	schema := core.NewSchema(fields, nil)
 	header := NewHeader(schema, 1000)
 
 	buf := new(bytes.Buffer)
@@ -412,7 +411,7 @@ func TestMaxSchemaSize(t *testing.T) {
 	}
 
 	// 检查错误码而不是字符串
-	assertErrorCode(t, err, lerrors.ErrMetadataError, "TestMaxSchemaSize")
+	assertErrorCode(t, err, core.ErrMetadataError, "TestMaxSchemaSize")
 	// 也可以检查包含特定上下文信息
 	if !strings.Contains(err.Error(), "schema too large") &&
 		!strings.Contains(err.Error(), "schema") {
@@ -422,7 +421,7 @@ func TestMaxSchemaSize(t *testing.T) {
 
 // TestInvalidSchemaLength tests malicious schema length
 func TestInvalidSchemaLength(t *testing.T) {
-	schema := arrow.SchemaForVectors(768)
+	schema := core.SchemaForVectors(768)
 	header := NewHeader(schema, 1000)
 
 	buf := new(bytes.Buffer)
@@ -444,7 +443,7 @@ func TestInvalidSchemaLength(t *testing.T) {
 	}
 
 	// 检查错误码
-	assertErrorCode(t, err, lerrors.ErrMetadataError, "TestInvalidSchemaLength")
+	assertErrorCode(t, err, core.ErrMetadataError, "TestInvalidSchemaLength")
 }
 
 // TestVectorDimensionLimit tests max vector dimension
@@ -453,14 +452,14 @@ func TestVectorDimensionLimit(t *testing.T) {
 		name      string
 		dimension int
 		wantError bool
-		errCode   lerrors.ErrorCode // 新的：期望的错误码
+		errCode   core.ErrorCode // 新的：期望的错误码
 	}{
 		{"valid small", 128, false, 0},
 		{"valid large", 10000, false, 0},
 		{"valid max", 100000, false, 0},
-		{"invalid too large", 100001, true, lerrors.ErrInvalidArgument},
-		{"invalid negative", -1, true, lerrors.ErrInvalidArgument},
-		{"invalid zero", 0, true, lerrors.ErrInvalidArgument},
+		{"invalid too large", 100001, true, core.ErrInvalidArgument},
+		{"invalid negative", -1, true, core.ErrInvalidArgument},
+		{"invalid zero", 0, true, core.ErrInvalidArgument},
 	}
 
 	for _, tt := range tests {
@@ -492,17 +491,17 @@ func TestVectorDimensionLimit(t *testing.T) {
 
 // TestAllDataTypes tests serialization of all supported data types
 func TestAllDataTypes(t *testing.T) {
-	fields := []arrow.Field{
-		arrow.NewField("int32_field", arrow.PrimInt32(), false),
-		arrow.NewField("int64_field", arrow.PrimInt64(), false),
-		arrow.NewField("float32_field", arrow.PrimFloat32(), false),
-		arrow.NewField("float64_field", arrow.PrimFloat64(), false),
-		arrow.NewField("binary_field", arrow.PrimBinary(), false),
-		arrow.NewField("string_field", arrow.PrimString(), false),
-		arrow.NewField("vector_field", arrow.FixedSizeListOf(arrow.PrimFloat32(), 768), false),
+	fields := []core.Field{
+		core.NewField("int32_field", core.PrimInt32(), false),
+		core.NewField("int64_field", core.PrimInt64(), false),
+		core.NewField("float32_field", core.PrimFloat32(), false),
+		core.NewField("float64_field", core.PrimFloat64(), false),
+		core.NewField("binary_field", core.PrimBinary(), false),
+		core.NewField("string_field", core.PrimString(), false),
+		core.NewField("vector_field", core.FixedSizeListOf(core.PrimFloat32(), 768), false),
 	}
 
-	schema := arrow.NewSchema(fields, nil)
+	schema := core.NewSchema(fields, nil)
 	header := NewHeader(schema, 1000)
 
 	buf := new(bytes.Buffer)
@@ -518,14 +517,14 @@ func TestAllDataTypes(t *testing.T) {
 	}
 
 	// Verify all types
-	expectedTypes := []arrow.TypeID{
-		arrow.INT32,
-		arrow.INT64,
-		arrow.FLOAT32,
-		arrow.FLOAT64,
-		arrow.BINARY,
-		arrow.STRING,
-		arrow.FIXED_SIZE_LIST,
+	expectedTypes := []core.TypeID{
+		core.INT32,
+		core.INT64,
+		core.FLOAT32,
+		core.FLOAT64,
+		core.BINARY,
+		core.STRING,
+		core.FIXED_SIZE_LIST,
 	}
 
 	for i, expected := range expectedTypes {

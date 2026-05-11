@@ -1,7 +1,7 @@
 package encoding
 
 import (
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/format"
 )
 
@@ -65,7 +65,7 @@ func NewEncoderFactoryWithConfig(compressionLevel int, config *EncoderConfig) *E
 }
 
 // SelectEncoder selects the best encoder based on data type and statistics
-func (f *EncoderFactory) SelectEncoder(dtype arrow.DataType, stats *Statistics) Encoder {
+func (f *EncoderFactory) SelectEncoder(dtype core.DataType, stats *Statistics) Encoder {
 	// P0: nil 检查
 	if stats == nil {
 		return NewZstdEncoder(f.compressionLevel)
@@ -77,11 +77,11 @@ func (f *EncoderFactory) SelectEncoder(dtype arrow.DataType, stats *Statistics) 
 	}
 
 	switch dtype.ID() {
-	case arrow.INT32, arrow.INT64:
+	case core.INT32, core.INT64:
 		return f.selectIntegerEncoder(dtype, stats)
-	case arrow.FLOAT32, arrow.FLOAT64:
+	case core.FLOAT32, core.FLOAT64:
 		return f.selectFloatEncoder(dtype, stats)
-	case arrow.FIXED_SIZE_LIST:
+	case core.FIXED_SIZE_LIST:
 		return f.selectFixedSizeListEncoder(dtype, stats)
 	default:
 		return NewZstdEncoder(f.compressionLevel)
@@ -90,7 +90,7 @@ func (f *EncoderFactory) SelectEncoder(dtype arrow.DataType, stats *Statistics) 
 
 // selectIntegerEncoder selects encoder for integer types
 // 优先级：RLE (极低 run ratio) > Dictionary (极低基数 <10%) > BitPacking > Dictionary (中等基数) > RLE (中等) > Zstd
-func (f *EncoderFactory) selectIntegerEncoder(dtype arrow.DataType, stats *Statistics) Encoder {
+func (f *EncoderFactory) selectIntegerEncoder(dtype core.DataType, stats *Statistics) Encoder {
 	maxBitWidth := stats.GetMaxBitWidth()
 	runRatio := stats.GetRunRatio()
 	cardRatio := stats.GetCardinalityRatio()
@@ -130,7 +130,7 @@ func (f *EncoderFactory) selectIntegerEncoder(dtype arrow.DataType, stats *Stati
 }
 
 // selectFloatEncoder selects encoder for float types
-func (f *EncoderFactory) selectFloatEncoder(dtype arrow.DataType, stats *Statistics) Encoder {
+func (f *EncoderFactory) selectFloatEncoder(dtype core.DataType, stats *Statistics) Encoder {
 	// Check if BSS encoding is beneficial (low byte entropy)
 	if stats.GetAverageEntropy() < f.config.BSSEntropyThreshold {
 		// BSS + Zstd combination
@@ -144,14 +144,14 @@ func (f *EncoderFactory) selectFloatEncoder(dtype arrow.DataType, stats *Statist
 }
 
 // selectFixedSizeListEncoder handles vector types
-func (f *EncoderFactory) selectFixedSizeListEncoder(dtype arrow.DataType, stats *Statistics) Encoder {
-	fslType := dtype.(*arrow.FixedSizeListType)
+func (f *EncoderFactory) selectFixedSizeListEncoder(dtype core.DataType, stats *Statistics) Encoder {
+	fslType := dtype.(*core.FixedSizeListType)
 	elemType := fslType.Elem()
 
 	switch elemType.ID() {
-	case arrow.FLOAT32, arrow.FLOAT64:
+	case core.FLOAT32, core.FLOAT64:
 		return f.selectFloatEncoder(elemType, stats)
-	case arrow.INT32, arrow.INT64:
+	case core.INT32, core.INT64:
 		return f.selectIntegerEncoder(elemType, stats)
 	default:
 		return NewZstdEncoder(f.compressionLevel)
@@ -206,7 +206,7 @@ func (e *CombinedEncoder) Type() format.EncodingType {
 }
 
 // Encode applies all encoders in sequence
-func (e *CombinedEncoder) Encode(array arrow.Array) (*EncodedData, error) {
+func (e *CombinedEncoder) Encode(array core.Array) (*EncodedData, error) {
 	current := array
 	var result *EncodedData
 	var err error
@@ -248,7 +248,7 @@ func (e *CombinedEncoder) Encode(array arrow.Array) (*EncodedData, error) {
 
 // EstimateSize estimates the size after all encodings.
 // Returns the estimate from the last encoder in the chain (typically the actual output size).
-func (e *CombinedEncoder) EstimateSize(array arrow.Array) int {
+func (e *CombinedEncoder) EstimateSize(array core.Array) int {
 	if len(e.encoders) == 0 {
 		return array.Len() * GetValueSize(array.DataType().ID())
 	}
@@ -257,7 +257,7 @@ func (e *CombinedEncoder) EstimateSize(array arrow.Array) int {
 }
 
 // SupportsType checks if all encoders in the chain support the given type
-func (e *CombinedEncoder) SupportsType(dtype arrow.DataType) bool {
+func (e *CombinedEncoder) SupportsType(dtype core.DataType) bool {
 	for _, encoder := range e.encoders {
 		if !encoder.SupportsType(dtype) {
 			return false

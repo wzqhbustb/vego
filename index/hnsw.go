@@ -198,6 +198,22 @@ func (h *HNSWIndex) SearchWithDV(query []float32, k int, ef int, isDeleted func(
 	return filtered, nil
 }
 
+// SetEntryPoint sets the entry point for a loaded index.
+// Must be called before UnmarshalNodes when restoring from disk.
+func (h *HNSWIndex) SetEntryPoint(ep int32) {
+	h.globalLock.Lock()
+	defer h.globalLock.Unlock()
+	h.entryPoint = ep
+}
+
+// SetMaxLevel sets the maximum level for a loaded index.
+// Must be called before UnmarshalNodes when restoring from disk.
+func (h *HNSWIndex) SetMaxLevel(ml int32) {
+	h.globalLock.Lock()
+	defer h.globalLock.Unlock()
+	h.maxLevel = ml
+}
+
 // Len returns the number of nodes in the HNSW index.
 func (h *HNSWIndex) Len() int {
 	h.globalLock.RLock()

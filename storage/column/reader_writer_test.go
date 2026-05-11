@@ -2,7 +2,7 @@ package column
 
 import (
 	"fmt"
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/encoding" // [NEW] 导入 encoding 包
 	"github.com/wzqhbustb/vego/storage/format"
 	"os"
@@ -55,7 +55,7 @@ func TestPageWriterReader_Int32Array(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Build array
-			builder := arrow.NewInt32Builder()
+			builder := core.NewInt32Builder()
 			defer builder.Release()
 
 			for i, v := range tt.values {
@@ -80,7 +80,7 @@ func TestPageWriterReader_Int32Array(t *testing.T) {
 
 			// Read from page
 			reader := NewPageReader()
-			resultArray, err := reader.ReadPage(pages[0], arrow.PrimInt32())
+			resultArray, err := reader.ReadPage(pages[0], core.PrimInt32())
 			if err != nil {
 				t.Fatalf("ReadPage failed: %v", err)
 			}
@@ -94,7 +94,7 @@ func TestPageWriterReader_Int32Array(t *testing.T) {
 }
 
 func TestPageWriterReader_Int64Array(t *testing.T) {
-	builder := arrow.NewInt64Builder()
+	builder := core.NewInt64Builder()
 	defer builder.Release()
 
 	values := []int64{100, 200, 300, 400, 500}
@@ -119,7 +119,7 @@ func TestPageWriterReader_Int64Array(t *testing.T) {
 	}
 
 	reader := NewPageReader()
-	resultArray, err := reader.ReadPage(pages[0], arrow.PrimInt64())
+	resultArray, err := reader.ReadPage(pages[0], core.PrimInt64())
 	if err != nil {
 		t.Fatalf("ReadPage failed: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestPageWriterReader_Int64Array(t *testing.T) {
 }
 
 func TestPageWriterReader_Float32Array(t *testing.T) {
-	builder := arrow.NewFloat32Builder()
+	builder := core.NewFloat32Builder()
 	defer builder.Release()
 
 	values := []float32{1.1, 2.2, 3.3, 4.4, 5.5}
@@ -149,7 +149,7 @@ func TestPageWriterReader_Float32Array(t *testing.T) {
 	}
 
 	reader := NewPageReader()
-	resultArray, err := reader.ReadPage(pages[0], arrow.PrimFloat32())
+	resultArray, err := reader.ReadPage(pages[0], core.PrimFloat32())
 	if err != nil {
 		t.Fatalf("ReadPage failed: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestPageWriterReader_Float32Array(t *testing.T) {
 }
 
 func TestPageWriterReader_Float64Array(t *testing.T) {
-	builder := arrow.NewFloat64Builder()
+	builder := core.NewFloat64Builder()
 	defer builder.Release()
 
 	values := []float64{1.111, 2.222, 3.333}
@@ -185,7 +185,7 @@ func TestPageWriterReader_Float64Array(t *testing.T) {
 	}
 
 	reader := NewPageReader()
-	resultArray, err := reader.ReadPage(pages[0], arrow.PrimFloat64())
+	resultArray, err := reader.ReadPage(pages[0], core.PrimFloat64())
 	if err != nil {
 		t.Fatalf("ReadPage failed: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestPageWriterReader_FixedSizeListArray(t *testing.T) {
 	numVectors := 3
 
 	// Build child array (768 * 3 = 2304 float32 values)
-	childBuilder := arrow.NewFloat32Builder()
+	childBuilder := core.NewFloat32Builder()
 	defer childBuilder.Release()
 
 	for i := 0; i < numVectors*dim; i++ {
@@ -210,8 +210,8 @@ func TestPageWriterReader_FixedSizeListArray(t *testing.T) {
 	childArray := childBuilder.NewArray()
 
 	// Create FixedSizeList array
-	listType := arrow.FixedSizeListOf(arrow.PrimFloat32(), dim)
-	originalArray := arrow.NewFixedSizeListArray(listType.(*arrow.FixedSizeListType), childArray, nil)
+	listType := core.FixedSizeListOf(core.PrimFloat32(), dim)
+	originalArray := core.NewFixedSizeListArray(listType.(*core.FixedSizeListType), childArray, nil)
 
 	// Roundtrip
 	// [MODIFIED] 使用 defaultEncoderFactory()
@@ -237,7 +237,7 @@ func TestPageWriterReader_FixedSizeListArray_WithNulls(t *testing.T) {
 	numVectors := 5
 
 	// Build child array
-	childBuilder := arrow.NewFloat32Builder()
+	childBuilder := core.NewFloat32Builder()
 	defer childBuilder.Release()
 
 	for i := 0; i < numVectors*dim; i++ {
@@ -246,14 +246,14 @@ func TestPageWriterReader_FixedSizeListArray_WithNulls(t *testing.T) {
 	childArray := childBuilder.NewArray()
 
 	// Create null bitmap
-	nullBitmap := arrow.NewBitmap(numVectors)
+	nullBitmap := core.NewBitmap(numVectors)
 	nullBitmap.Set(0) // valid
 	nullBitmap.Set(2) // valid
 	nullBitmap.Set(4) // valid
 	// indices 1, 3 are null
 
-	listType := arrow.FixedSizeListOf(arrow.PrimFloat32(), dim)
-	originalArray := arrow.NewFixedSizeListArray(listType.(*arrow.FixedSizeListType), childArray, nullBitmap)
+	listType := core.FixedSizeListOf(core.PrimFloat32(), dim)
+	originalArray := core.NewFixedSizeListArray(listType.(*core.FixedSizeListType), childArray, nullBitmap)
 
 	// Roundtrip
 	// [MODIFIED] 使用 defaultEncoderFactory()
@@ -283,14 +283,14 @@ func TestWriterReader_SingleRecordBatch(t *testing.T) {
 	filename := filepath.Join(tmpDir, "test.lance")
 
 	// Create schema
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "id", Type: arrow.PrimInt32(), Nullable: false},
-		{Name: "value", Type: arrow.PrimFloat32(), Nullable: true},
+	schema := core.NewSchema([]core.Field{
+		{Name: "id", Type: core.PrimInt32(), Nullable: false},
+		{Name: "value", Type: core.PrimFloat32(), Nullable: true},
 	}, nil)
 
 	// Build data
-	idBuilder := arrow.NewInt32Builder()
-	valueBuilder := arrow.NewFloat32Builder()
+	idBuilder := core.NewInt32Builder()
+	valueBuilder := core.NewFloat32Builder()
 	defer idBuilder.Release()
 	defer valueBuilder.Release()
 
@@ -306,7 +306,7 @@ func TestWriterReader_SingleRecordBatch(t *testing.T) {
 	idArray := idBuilder.NewArray()
 	valueArray := valueBuilder.NewArray()
 
-	batch, err := arrow.NewRecordBatch(schema, 100, []arrow.Array{idArray, valueArray})
+	batch, err := core.NewRecordBatch(schema, 100, []core.Array{idArray, valueArray})
 	if err != nil {
 		t.Fatalf("NewRecordBatch failed: %v", err)
 	}
@@ -366,8 +366,8 @@ func TestWriterReader_MultipleRecordBatches(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_multi.lance")
 
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "counter", Type: arrow.PrimInt64(), Nullable: false},
+	schema := core.NewSchema([]core.Field{
+		{Name: "counter", Type: core.PrimInt64(), Nullable: false},
 	}, nil)
 
 	// Write
@@ -382,7 +382,7 @@ func TestWriterReader_MultipleRecordBatches(t *testing.T) {
 
 	// Write 5 batches
 	for batchNum := 0; batchNum < 5; batchNum++ {
-		builder := arrow.NewInt64Builder()
+		builder := core.NewInt64Builder()
 		for i := 0; i < 50; i++ {
 			val := int64(batchNum*50 + i)
 			builder.Append(val)
@@ -391,7 +391,7 @@ func TestWriterReader_MultipleRecordBatches(t *testing.T) {
 		array := builder.NewArray()
 		builder.Release()
 
-		batch, err := arrow.NewRecordBatch(schema, 50, []arrow.Array{array})
+		batch, err := core.NewRecordBatch(schema, 50, []core.Array{array})
 		if err != nil {
 			t.Fatalf("NewRecordBatch failed: %v", err)
 		}
@@ -424,7 +424,7 @@ func TestWriterReader_MultipleRecordBatches(t *testing.T) {
 	}
 
 	// Verify all values
-	resultArray := resultBatch.Column(0).(*arrow.Int64Array)
+	resultArray := resultBatch.Column(0).(*core.Int64Array)
 	for i, expected := range allValues {
 		if resultArray.Value(i) != expected {
 			t.Errorf("value mismatch at index %d: expected %d, got %d", i, expected, resultArray.Value(i))
@@ -438,16 +438,16 @@ func TestWriterReader_VectorColumn(t *testing.T) {
 
 	// Create schema with 768-dim vectors
 	dim := 768
-	listType := arrow.FixedSizeListOf(arrow.PrimFloat32(), dim)
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "vector_id", Type: arrow.PrimInt32(), Nullable: false},
+	listType := core.FixedSizeListOf(core.PrimFloat32(), dim)
+	schema := core.NewSchema([]core.Field{
+		{Name: "vector_id", Type: core.PrimInt32(), Nullable: false},
 		{Name: "embedding", Type: listType, Nullable: false},
 	}, nil)
 
 	// Build data
 	numVectors := 10
-	idBuilder := arrow.NewInt32Builder()
-	childBuilder := arrow.NewFloat32Builder()
+	idBuilder := core.NewInt32Builder()
+	childBuilder := core.NewFloat32Builder()
 	defer idBuilder.Release()
 	defer childBuilder.Release()
 
@@ -460,9 +460,9 @@ func TestWriterReader_VectorColumn(t *testing.T) {
 
 	idArray := idBuilder.NewArray()
 	childArray := childBuilder.NewArray()
-	vectorArray := arrow.NewFixedSizeListArray(listType.(*arrow.FixedSizeListType), childArray, nil)
+	vectorArray := core.NewFixedSizeListArray(listType.(*core.FixedSizeListType), childArray, nil)
 
-	batch, err := arrow.NewRecordBatch(schema, numVectors, []arrow.Array{idArray, vectorArray})
+	batch, err := core.NewRecordBatch(schema, numVectors, []core.Array{idArray, vectorArray})
 	if err != nil {
 		t.Fatalf("NewRecordBatch failed: %v", err)
 	}
@@ -513,8 +513,8 @@ func TestWriterReader_MultiPageColumn(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_multipage.lance")
 
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "data", Type: arrow.PrimInt32(), Nullable: false},
+	schema := core.NewSchema([]core.Field{
+		{Name: "data", Type: core.PrimInt32(), Nullable: false},
 	}, nil)
 
 	// [MODIFIED] 使用 defaultEncoderFactory()
@@ -526,7 +526,7 @@ func TestWriterReader_MultiPageColumn(t *testing.T) {
 	// Write 3 batches (will create 3 pages)
 	var allValues []int32
 	for batchNum := 0; batchNum < 3; batchNum++ {
-		builder := arrow.NewInt32Builder()
+		builder := core.NewInt32Builder()
 		for i := 0; i < 100; i++ {
 			val := int32(batchNum*100 + i)
 			builder.Append(val)
@@ -535,7 +535,7 @@ func TestWriterReader_MultiPageColumn(t *testing.T) {
 		array := builder.NewArray()
 		builder.Release()
 
-		batch, err := arrow.NewRecordBatch(schema, 100, []arrow.Array{array})
+		batch, err := core.NewRecordBatch(schema, 100, []core.Array{array})
 		if err != nil {
 			t.Fatalf("NewRecordBatch failed: %v", err)
 		}
@@ -565,7 +565,7 @@ func TestWriterReader_MultiPageColumn(t *testing.T) {
 		t.Fatalf("ReadRecordBatch failed: %v", err)
 	}
 
-	resultArray := resultBatch.Column(0).(*arrow.Int32Array)
+	resultArray := resultBatch.Column(0).(*core.Int32Array)
 	for i, expected := range allValues {
 		if resultArray.Value(i) != expected {
 			t.Errorf("value mismatch at index %d: expected %d, got %d", i, expected, resultArray.Value(i))
@@ -578,8 +578,8 @@ func TestWriterReader_MultiPageWithNulls(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_multipage_nulls.lance")
 
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "data", Type: arrow.PrimFloat64(), Nullable: true},
+	schema := core.NewSchema([]core.Field{
+		{Name: "data", Type: core.PrimFloat64(), Nullable: true},
 	}, nil)
 
 	// [MODIFIED] 使用 defaultEncoderFactory()
@@ -593,7 +593,7 @@ func TestWriterReader_MultiPageWithNulls(t *testing.T) {
 	expectedNulls := make([]bool, 0)
 
 	for batchNum := 0; batchNum < 2; batchNum++ {
-		builder := arrow.NewFloat64Builder()
+		builder := core.NewFloat64Builder()
 		for i := 0; i < 50; i++ {
 			if (batchNum*50+i)%7 == 0 {
 				builder.AppendNull()
@@ -609,7 +609,7 @@ func TestWriterReader_MultiPageWithNulls(t *testing.T) {
 		array := builder.NewArray()
 		builder.Release()
 
-		batch, err := arrow.NewRecordBatch(schema, 50, []arrow.Array{array})
+		batch, err := core.NewRecordBatch(schema, 50, []core.Array{array})
 		if err != nil {
 			t.Fatalf("NewRecordBatch failed: %v", err)
 		}
@@ -635,7 +635,7 @@ func TestWriterReader_MultiPageWithNulls(t *testing.T) {
 		t.Fatalf("ReadRecordBatch failed: %v", err)
 	}
 
-	resultArray := resultBatch.Column(0).(*arrow.Float64Array)
+	resultArray := resultBatch.Column(0).(*core.Float64Array)
 	for i := 0; i < len(expectedNulls); i++ {
 		isValid := resultArray.IsValid(i)
 		if isValid != expectedNulls[i] {
@@ -652,7 +652,7 @@ func TestWriterReader_MultiPageWithNulls(t *testing.T) {
 // ====================
 
 func TestPageWriter_EmptyArray(t *testing.T) {
-	builder := arrow.NewInt32Builder()
+	builder := core.NewInt32Builder()
 	array := builder.NewArray()
 	builder.Release()
 
@@ -677,12 +677,12 @@ func TestWriter_SchemaMismatch(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_schema_mismatch.lance")
 
-	schema1 := arrow.NewSchema([]arrow.Field{
-		{Name: "field1", Type: arrow.PrimInt32(), Nullable: false},
+	schema1 := core.NewSchema([]core.Field{
+		{Name: "field1", Type: core.PrimInt32(), Nullable: false},
 	}, nil)
 
-	schema2 := arrow.NewSchema([]arrow.Field{
-		{Name: "field2", Type: arrow.PrimInt32(), Nullable: false},
+	schema2 := core.NewSchema([]core.Field{
+		{Name: "field2", Type: core.PrimInt32(), Nullable: false},
 	}, nil)
 
 	// [MODIFIED] 使用 defaultEncoderFactory()
@@ -693,12 +693,12 @@ func TestWriter_SchemaMismatch(t *testing.T) {
 	defer writer.Close()
 
 	// Try to write batch with different schema
-	builder := arrow.NewInt32Builder()
+	builder := core.NewInt32Builder()
 	builder.Append(1)
 	array := builder.NewArray()
 	builder.Release()
 
-	batch, err := arrow.NewRecordBatch(schema2, 1, []arrow.Array{array})
+	batch, err := core.NewRecordBatch(schema2, 1, []core.Array{array})
 	if err != nil {
 		t.Fatalf("NewRecordBatch failed: %v", err)
 	}
@@ -713,8 +713,8 @@ func TestWriter_ClosedWriter(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "test_closed.lance")
 
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "data", Type: arrow.PrimInt32(), Nullable: false},
+	schema := core.NewSchema([]core.Field{
+		{Name: "data", Type: core.PrimInt32(), Nullable: false},
 	}, nil)
 
 	// [MODIFIED] 使用 defaultEncoderFactory()
@@ -728,12 +728,12 @@ func TestWriter_ClosedWriter(t *testing.T) {
 	}
 
 	// Try to write after close
-	builder := arrow.NewInt32Builder()
+	builder := core.NewInt32Builder()
 	builder.Append(1)
 	array := builder.NewArray()
 	builder.Release()
 
-	batch, err := arrow.NewRecordBatch(schema, 1, []arrow.Array{array})
+	batch, err := core.NewRecordBatch(schema, 1, []core.Array{array})
 	if err != nil {
 		t.Fatalf("NewRecordBatch failed: %v", err)
 	}
@@ -756,8 +756,8 @@ func TestReader_ClosedReader(t *testing.T) {
 	filename := filepath.Join(tmpDir, "test_closed_reader.lance")
 
 	// Create a valid file
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "data", Type: arrow.PrimInt32(), Nullable: false},
+	schema := core.NewSchema([]core.Field{
+		{Name: "data", Type: core.PrimInt32(), Nullable: false},
 	}, nil)
 
 	// [MODIFIED] 使用 defaultEncoderFactory()
@@ -766,12 +766,12 @@ func TestReader_ClosedReader(t *testing.T) {
 		t.Fatalf("NewWriter failed: %v", err)
 	}
 
-	builder := arrow.NewInt32Builder()
+	builder := core.NewInt32Builder()
 	builder.Append(1)
 	array := builder.NewArray()
 	builder.Release()
 
-	batch, err := arrow.NewRecordBatch(schema, 1, []arrow.Array{array})
+	batch, err := core.NewRecordBatch(schema, 1, []core.Array{array})
 	if err != nil {
 		t.Fatalf("NewRecordBatch failed: %v", err)
 	}
@@ -800,7 +800,7 @@ func TestReader_ClosedReader(t *testing.T) {
 // Helper Functions
 // ====================
 
-func arraysEqual(a, b arrow.Array) bool {
+func arraysEqual(a, b core.Array) bool {
 	if a.Len() != b.Len() {
 		return false
 	}
@@ -810,8 +810,8 @@ func arraysEqual(a, b arrow.Array) bool {
 	}
 
 	switch arr := a.(type) {
-	case *arrow.Int32Array:
-		barr := b.(*arrow.Int32Array)
+	case *core.Int32Array:
+		barr := b.(*core.Int32Array)
 		for i := 0; i < a.Len(); i++ {
 			if a.IsValid(i) != b.IsValid(i) {
 				return false
@@ -820,8 +820,8 @@ func arraysEqual(a, b arrow.Array) bool {
 				return false
 			}
 		}
-	case *arrow.Int64Array:
-		barr := b.(*arrow.Int64Array)
+	case *core.Int64Array:
+		barr := b.(*core.Int64Array)
 		for i := 0; i < a.Len(); i++ {
 			if a.IsValid(i) != b.IsValid(i) {
 				return false
@@ -830,8 +830,8 @@ func arraysEqual(a, b arrow.Array) bool {
 				return false
 			}
 		}
-	case *arrow.Float32Array:
-		barr := b.(*arrow.Float32Array)
+	case *core.Float32Array:
+		barr := b.(*core.Float32Array)
 		for i := 0; i < a.Len(); i++ {
 			if a.IsValid(i) != b.IsValid(i) {
 				return false
@@ -840,8 +840,8 @@ func arraysEqual(a, b arrow.Array) bool {
 				return false
 			}
 		}
-	case *arrow.Float64Array:
-		barr := b.(*arrow.Float64Array)
+	case *core.Float64Array:
+		barr := b.(*core.Float64Array)
 		for i := 0; i < a.Len(); i++ {
 			if a.IsValid(i) != b.IsValid(i) {
 				return false
@@ -850,8 +850,8 @@ func arraysEqual(a, b arrow.Array) bool {
 				return false
 			}
 		}
-	case *arrow.FixedSizeListArray:
-		barr := b.(*arrow.FixedSizeListArray)
+	case *core.FixedSizeListArray:
+		barr := b.(*core.FixedSizeListArray)
 		if arr.Len() != barr.Len() {
 			return false
 		}
@@ -869,7 +869,7 @@ func arraysEqual(a, b arrow.Array) bool {
 // ====================
 
 func BenchmarkWriteInt32Array(b *testing.B) {
-	builder := arrow.NewInt32Builder()
+	builder := core.NewInt32Builder()
 	builder.Reserve(1000)
 	for i := 0; i < 1000; i++ {
 		builder.Append(int32(i))
@@ -887,7 +887,7 @@ func BenchmarkWriteInt32Array(b *testing.B) {
 }
 
 func BenchmarkReadInt32Array(b *testing.B) {
-	builder := arrow.NewInt32Builder()
+	builder := core.NewInt32Builder()
 	builder.Reserve(1000)
 	for i := 0; i < 1000; i++ {
 		builder.Append(int32(i))
@@ -903,7 +903,7 @@ func BenchmarkReadInt32Array(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = reader.ReadPage(pages[0], arrow.PrimInt32())
+		_, _ = reader.ReadPage(pages[0], core.PrimInt32())
 	}
 }
 
@@ -911,7 +911,7 @@ func BenchmarkWriteVectorArray(b *testing.B) {
 	dim := 768
 	numVectors := 100
 
-	childBuilder := arrow.NewFloat32Builder()
+	childBuilder := core.NewFloat32Builder()
 	childBuilder.Reserve(dim * numVectors)
 	for i := 0; i < numVectors*dim; i++ {
 		childBuilder.Append(float32(i) * 0.001)
@@ -919,8 +919,8 @@ func BenchmarkWriteVectorArray(b *testing.B) {
 	childArray := childBuilder.NewArray()
 	childBuilder.Release()
 
-	listType := arrow.FixedSizeListOf(arrow.PrimFloat32(), dim)
-	array := arrow.NewFixedSizeListArray(listType.(*arrow.FixedSizeListType), childArray, nil)
+	listType := core.FixedSizeListOf(core.PrimFloat32(), dim)
+	array := core.NewFixedSizeListArray(listType.(*core.FixedSizeListType), childArray, nil)
 
 	// [MODIFIED] 使用 defaultEncoderFactory()
 	writer := NewPageWriter(defaultEncoderFactory())
@@ -934,13 +934,13 @@ func BenchmarkWriteVectorArray(b *testing.B) {
 func BenchmarkFileRoundtrip(b *testing.B) {
 	tmpDir := b.TempDir()
 
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "id", Type: arrow.PrimInt32(), Nullable: false},
-		{Name: "value", Type: arrow.PrimFloat64(), Nullable: false},
+	schema := core.NewSchema([]core.Field{
+		{Name: "id", Type: core.PrimInt32(), Nullable: false},
+		{Name: "value", Type: core.PrimFloat64(), Nullable: false},
 	}, nil)
 
-	idBuilder := arrow.NewInt32Builder()
-	valueBuilder := arrow.NewFloat64Builder()
+	idBuilder := core.NewInt32Builder()
+	valueBuilder := core.NewFloat64Builder()
 	idBuilder.Reserve(1000)
 	valueBuilder.Reserve(1000)
 
@@ -954,7 +954,7 @@ func BenchmarkFileRoundtrip(b *testing.B) {
 	idBuilder.Release()
 	valueBuilder.Release()
 
-	batch, _ := arrow.NewRecordBatch(schema, 1000, []arrow.Array{idArray, valueArray})
+	batch, _ := core.NewRecordBatch(schema, 1000, []core.Array{idArray, valueArray})
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -1009,7 +1009,7 @@ func TestEncoderSelection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			array := arrow.NewInt32Array(tt.values, nil)
+			array := core.NewInt32Array(tt.values, nil)
 
 			writer := NewPageWriter(defaultEncoderFactory())
 			pages, err := writer.WritePages(array, 0)
@@ -1027,7 +1027,7 @@ func TestEncoderSelection(t *testing.T) {
 
 			// 验证数据正确性
 			reader := NewPageReader()
-			result, err := reader.ReadPage(pages[0], arrow.PrimInt32())
+			result, err := reader.ReadPage(pages[0], core.PrimInt32())
 			if err != nil {
 				t.Fatalf("ReadPage failed: %v", err)
 			}
@@ -1043,13 +1043,13 @@ func TestEncoderSelection(t *testing.T) {
 func TestNullFallbackToZstd(t *testing.T) {
 	tests := []struct {
 		name       string
-		buildArray func() arrow.Array
-		dtype      arrow.DataType
+		buildArray func() core.Array
+		dtype      core.DataType
 	}{
 		{
 			name: "RLE_with_nulls_fallback",
-			buildArray: func() arrow.Array {
-				builder := arrow.NewInt32Builder()
+			buildArray: func() core.Array {
+				builder := core.NewInt32Builder()
 				builder.Append(1)
 				builder.AppendNull() // null
 				builder.Append(1)
@@ -1057,12 +1057,12 @@ func TestNullFallbackToZstd(t *testing.T) {
 				builder.Append(1)
 				return builder.NewArray()
 			},
-			dtype: arrow.PrimInt32(),
+			dtype: core.PrimInt32(),
 		},
 		{
 			name: "BSS_with_nulls_fallback",
-			buildArray: func() arrow.Array {
-				builder := arrow.NewFloat32Builder()
+			buildArray: func() core.Array {
+				builder := core.NewFloat32Builder()
 				builder.Append(1.1)
 				builder.AppendNull()
 				builder.Append(1.1)
@@ -1070,12 +1070,12 @@ func TestNullFallbackToZstd(t *testing.T) {
 				builder.Append(1.1)
 				return builder.NewArray()
 			},
-			dtype: arrow.PrimFloat32(),
+			dtype: core.PrimFloat32(),
 		},
 		{
 			name: "BitPacking_with_nulls_fallback",
-			buildArray: func() arrow.Array {
-				builder := arrow.NewInt32Builder()
+			buildArray: func() core.Array {
+				builder := core.NewInt32Builder()
 				for i := 0; i < 10; i++ {
 					if i%2 == 0 {
 						builder.Append(int32(i))
@@ -1085,12 +1085,12 @@ func TestNullFallbackToZstd(t *testing.T) {
 				}
 				return builder.NewArray()
 			},
-			dtype: arrow.PrimInt32(),
+			dtype: core.PrimInt32(),
 		},
 		{
 			name: "Dictionary_with_nulls_fallback",
-			buildArray: func() arrow.Array {
-				builder := arrow.NewInt32Builder()
+			buildArray: func() core.Array {
+				builder := core.NewInt32Builder()
 				builder.Append(1)
 				builder.Append(1)
 				builder.AppendNull()
@@ -1098,7 +1098,7 @@ func TestNullFallbackToZstd(t *testing.T) {
 				builder.Append(2)
 				return builder.NewArray()
 			},
-			dtype: arrow.PrimInt32(),
+			dtype: core.PrimInt32(),
 		},
 	}
 
@@ -1140,7 +1140,7 @@ func TestEdgeCases(t *testing.T) {
 		{
 			name: "empty_array",
 			testFn: func(t *testing.T) {
-				array := arrow.NewInt32Array([]int32{}, nil)
+				array := core.NewInt32Array([]int32{}, nil)
 				writer := NewPageWriter(defaultEncoderFactory())
 				_, err := writer.WritePages(array, 0)
 				if err == nil {
@@ -1151,7 +1151,7 @@ func TestEdgeCases(t *testing.T) {
 		{
 			name: "single_value",
 			testFn: func(t *testing.T) {
-				array := arrow.NewInt32Array([]int32{42}, nil)
+				array := core.NewInt32Array([]int32{42}, nil)
 				writer := NewPageWriter(defaultEncoderFactory())
 				pages, err := writer.WritePages(array, 0)
 				if err != nil {
@@ -1159,12 +1159,12 @@ func TestEdgeCases(t *testing.T) {
 				}
 
 				reader := NewPageReader()
-				result, err := reader.ReadPage(pages[0], arrow.PrimInt32())
+				result, err := reader.ReadPage(pages[0], core.PrimInt32())
 				if err != nil {
 					t.Fatalf("ReadPage failed: %v", err)
 				}
 
-				if result.Len() != 1 || result.(*arrow.Int32Array).Value(0) != 42 {
+				if result.Len() != 1 || result.(*core.Int32Array).Value(0) != 42 {
 					t.Error("Single value mismatch")
 				}
 			},
@@ -1172,7 +1172,7 @@ func TestEdgeCases(t *testing.T) {
 		{
 			name: "all_nulls",
 			testFn: func(t *testing.T) {
-				builder := arrow.NewInt32Builder()
+				builder := core.NewInt32Builder()
 				for i := 0; i < 10; i++ {
 					builder.AppendNull()
 				}
@@ -1185,7 +1185,7 @@ func TestEdgeCases(t *testing.T) {
 				}
 
 				reader := NewPageReader()
-				result, err := reader.ReadPage(pages[0], arrow.PrimInt32())
+				result, err := reader.ReadPage(pages[0], core.PrimInt32())
 				if err != nil {
 					t.Fatalf("ReadPage failed: %v", err)
 				}
@@ -1202,7 +1202,7 @@ func TestEdgeCases(t *testing.T) {
 				for i := range values {
 					values[i] = int32(i % 100) // 低基数
 				}
-				array := arrow.NewInt32Array(values, nil)
+				array := core.NewInt32Array(values, nil)
 
 				writer := NewPageWriter(defaultEncoderFactory())
 				pages, err := writer.WritePages(array, 0)
@@ -1211,7 +1211,7 @@ func TestEdgeCases(t *testing.T) {
 				}
 
 				reader := NewPageReader()
-				result, err := reader.ReadPage(pages[0], arrow.PrimInt32())
+				result, err := reader.ReadPage(pages[0], core.PrimInt32())
 				if err != nil {
 					t.Fatalf("ReadPage failed: %v", err)
 				}
@@ -1235,7 +1235,7 @@ func TestCompressionEffectiveness(t *testing.T) {
 	for i := range values {
 		values[i] = int32(i % 10) // 只有10个唯一值
 	}
-	array := arrow.NewInt32Array(values, nil)
+	array := core.NewInt32Array(values, nil)
 
 	writer := NewPageWriter(defaultEncoderFactory())
 	pages, err := writer.WritePages(array, 0)
@@ -1268,7 +1268,7 @@ func TestConcurrency_EncodeDecode(t *testing.T) {
 	for i := range values {
 		values[i] = int32(i)
 	}
-	array := arrow.NewInt32Array(values, nil)
+	array := core.NewInt32Array(values, nil)
 
 	// 并发编码
 	const numGoroutines = 100
@@ -1283,7 +1283,7 @@ func TestConcurrency_EncodeDecode(t *testing.T) {
 			}
 
 			// 立即解码
-			_, err = reader.ReadPage(pages[0], arrow.PrimInt32())
+			_, err = reader.ReadPage(pages[0], core.PrimInt32())
 			errChan <- err
 		}()
 	}
@@ -1306,20 +1306,20 @@ func TestPageMetadata_UncompressedSizeAccuracy(t *testing.T) {
 
 	testCases := []struct {
 		name                 string
-		buildArray           func() arrow.Array
+		buildArray           func() core.Array
 		expectedUncompressed int32
 	}{
 		{
 			name: "Int32_NoNulls",
-			buildArray: func() arrow.Array {
-				return arrow.NewInt32Array([]int32{1, 2, 3, 4, 5}, nil)
+			buildArray: func() core.Array {
+				return core.NewInt32Array([]int32{1, 2, 3, 4, 5}, nil)
 			},
 			expectedUncompressed: 5 * 4, // 20 bytes
 		},
 		{
 			name: "Int32_WithNulls",
-			buildArray: func() arrow.Array {
-				builder := arrow.NewInt32Builder()
+			buildArray: func() core.Array {
+				builder := core.NewInt32Builder()
 				builder.Append(1)
 				builder.AppendNull()
 				builder.Append(3)
@@ -1329,8 +1329,8 @@ func TestPageMetadata_UncompressedSizeAccuracy(t *testing.T) {
 		},
 		{
 			name: "Float64_WithNulls",
-			buildArray: func() arrow.Array {
-				builder := arrow.NewFloat64Builder()
+			buildArray: func() core.Array {
+				builder := core.NewFloat64Builder()
 				for i := 0; i < 100; i++ {
 					if i%10 == 0 {
 						builder.AppendNull()
@@ -1371,7 +1371,7 @@ func TestEncoderFallback_ValueOutOfRange(t *testing.T) {
 
 	// BitPacking 无法处理负数，应该回退到 Zstd
 	values := []int32{1, 2, 3, -1, 5} // -1 会触发回退
-	array := arrow.NewInt32Array(values, nil)
+	array := core.NewInt32Array(values, nil)
 
 	pages, err := writer.WritePages(array, 0)
 	if err != nil {
@@ -1384,7 +1384,7 @@ func TestEncoderFallback_ValueOutOfRange(t *testing.T) {
 	}
 
 	// 验证能正确读取
-	result, err := reader.ReadPage(pages[0], arrow.PrimInt32())
+	result, err := reader.ReadPage(pages[0], core.PrimInt32())
 	if err != nil {
 		t.Fatalf("ReadPage failed: %v", err)
 	}
@@ -1406,7 +1406,7 @@ func TestEncoderFallback_DictionaryTooLarge(t *testing.T) {
 	for i := range values {
 		values[i] = int32(i)
 	}
-	array := arrow.NewInt32Array(values, nil)
+	array := core.NewInt32Array(values, nil)
 
 	pages, err := writer.WritePages(array, 0)
 	if err != nil {
@@ -1419,7 +1419,7 @@ func TestEncoderFallback_DictionaryTooLarge(t *testing.T) {
 	}
 
 	// 验证能正确读取
-	result, err := reader.ReadPage(pages[0], arrow.PrimInt32())
+	result, err := reader.ReadPage(pages[0], core.PrimInt32())
 	if err != nil {
 		t.Fatalf("ReadPage failed: %v", err)
 	}
@@ -1440,14 +1440,14 @@ func TestFixedSizeList_AlwaysUsesZstd(t *testing.T) {
 	dim := 128
 	numVectors := 100
 
-	childBuilder := arrow.NewFloat32Builder()
+	childBuilder := core.NewFloat32Builder()
 	for i := 0; i < numVectors*dim; i++ {
 		childBuilder.Append(float32(i))
 	}
 	childArray := childBuilder.NewArray()
 
-	listType := arrow.FixedSizeListOf(arrow.PrimFloat32(), dim)
-	array := arrow.NewFixedSizeListArray(listType.(*arrow.FixedSizeListType), childArray, nil)
+	listType := core.FixedSizeListOf(core.PrimFloat32(), dim)
+	array := core.NewFixedSizeListArray(listType.(*core.FixedSizeListType), childArray, nil)
 
 	pages, err := writer.WritePages(array, 0)
 	if err != nil {
@@ -1507,7 +1507,7 @@ func TestEncoderFactory_ExtremeThresholds(t *testing.T) {
 			factory := encoding.NewEncoderFactoryWithConfig(3, tc.config)
 			writer := NewPageWriter(factory)
 
-			array := arrow.NewInt32Array(tc.values, nil)
+			array := core.NewInt32Array(tc.values, nil)
 			pages, err := writer.WritePages(array, 0)
 			if err != nil {
 				t.Fatalf("WritePages failed: %v", err)
@@ -1527,15 +1527,15 @@ func TestWriter_HeaderExceedsReservedSize(t *testing.T) {
 	filename := tmpDir + "/huge_schema.lance"
 
 	// 创建一个超大 Schema（超过 8KB）
-	fields := make([]arrow.Field, 1000) // 1000 列
+	fields := make([]core.Field, 1000) // 1000 列
 	for i := 0; i < 1000; i++ {
-		fields[i] = arrow.Field{
+		fields[i] = core.Field{
 			Name:     fmt.Sprintf("column_%d_with_very_long_name_to_increase_size", i),
-			Type:     arrow.PrimInt32(),
+			Type:     core.PrimInt32(),
 			Nullable: false,
 		}
 	}
-	schema := arrow.NewSchema(fields, nil)
+	schema := core.NewSchema(fields, nil)
 
 	// 尝试创建 Writer（应该失败或警告）
 	_, err := NewWriter(filename, schema, encoding.NewEncoderFactory(3))

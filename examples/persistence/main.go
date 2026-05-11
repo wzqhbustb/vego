@@ -1,5 +1,5 @@
 // Persistence Example
-// This example demonstrates how to save and load HNSW index to/from disk.
+// This example demonstrates how to save and load a Vego collection to/from disk.
 //
 // Run: go run main.go
 package main
@@ -10,7 +10,7 @@ import (
 	"os"
 	"time"
 
-	hnsw "github.com/wzqhbustb/vego/index"
+	"github.com/wzqhbustb/vego/vego"
 )
 
 func main() {
@@ -19,109 +19,114 @@ func main() {
 
 	// Create a temporary directory for the demo
 	tmpDir := "/tmp/vego_persistence_demo"
+	os.RemoveAll(tmpDir)
 	os.MkdirAll(tmpDir, 0755)
 	defer os.RemoveAll(tmpDir)
 	fmt.Printf("Working directory: %s\n", tmpDir)
 	fmt.Println()
 
-	// Step 1: Create and populate index
-	fmt.Println("Step 1: Creating and populating index...")
-	config := hnsw.Config{
-		Dimension:    128,
-		Adaptive:     true,
-		ExpectedSize: 5000,
+	// Step 1: Open database and create collection
+	fmt.Println("Step 1: Opening database and creating collection...")
+	db, err := vego.Open(tmpDir)
+	if err != nil {
+		panic(err)
 	}
-	index := hnsw.NewHNSW(config)
+	defer db.Close()
 
-	// Add some vectors
+	coll, err := db.Collection("embeddings")
+	if err != nil {
+		panic(err)
+	}
+
+	// Add some documents with vectors
 	for i := 0; i < 500; i++ {
 		vec := make([]float32, 128)
 		for j := range vec {
 			vec[j] = rand.Float32()
 		}
-		index.Add(vec)
+		doc := &vego.Document{
+			ID:       fmt.Sprintf("doc-%d", i),
+			Vector:   vec,
+			Metadata: map[string]interface{}{"index": i},
+		}
+		if err := coll.Insert(doc); err != nil {
+			panic(err)
+		}
 	}
-	fmt.Printf("✓ Created index with %d vectors\n", index.Len())
+	fmt.Printf("✓ Created collection with %d documents\n", coll.Count())
 	fmt.Println()
 
-	// Step 2: Save index to disk
-	fmt.Println("Step 2: Saving index to disk...")
-	savePath := tmpDir + "/my_index"
-	
+	// Step 2: Save collection to disk (auto-saved on Close, but explicit here)
+	fmt.Println("Step 2: Saving collection to disk...")
 	start := time.Now()
-	err := index.SaveToLance(savePath)
-	if err != nil {
+	if err := coll.Save(); err != nil {
 		panic(err)
 	}
 	elapsed := time.Since(start)
-	
-	fmt.Printf("✓ Index saved to %s\n", savePath)
+	fmt.Printf("✓ Collection saved\n")
 	fmt.Printf("  - Save time: %v\n", elapsed)
-	
-	// Check file size
-	if info, err := os.Stat(savePath); err == nil {
-		fmt.Printf("  - File size: %.2f MB\n", float64(info.Size())/(1024*1024))
-	}
 	fmt.Println()
 
-	// Step 3: Load index from disk
-	fmt.Println("Step 3: Loading index from disk...")
-	
+	// Step 3: Close and reopen database to test persistence
+	fmt.Println("Step 3: Closing and reopening database...")
+	if err := db.Close(); err != nil {
+		panic(err)
+	}
+
 	start = time.Now()
-	loadedIndex, err := hnsw.LoadHNSWFromLance(savePath)
+	db2, err := vego.Open(tmpDir)
 	if err != nil {
 		panic(err)
 	}
+	defer db2.Close()
 	elapsed = time.Since(start)
-	
-	fmt.Printf("✓ Index loaded from %s\n", savePath)
-	fmt.Printf("  - Load time: %v\n", elapsed)
-	fmt.Printf("  - Loaded %d vectors\n", loadedIndex.Len())
+
+	coll2, err := db2.Collection("embeddings")
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Printf("✓ Database reopened\n")
+	fmt.Printf("  - Open time: %v\n", elapsed)
+	fmt.Printf("  - Loaded %d documents\n", coll2.Count())
 	fmt.Println()
 
-	// Step 4: Verify loaded index works
-	fmt.Println("Step 4: Verifying loaded index...")
+	// Step 4: Verify loaded collection works
+	fmt.Println("Step 4: Verifying loaded collection...")
 	query := make([]float32, 128)
 	for j := range query {
 		query[j] = rand.Float32()
 	}
 
-	// Search on original index
-	results1, _ := index.Search(query, 5, 0)
-	fmt.Printf("Original index search:\n")
-	for i, r := range results1 {
-		fmt.Printf("  %d. ID: %d, Distance: %.4f\n", i+1, r.ID, r.Distance)
+	results, err := coll2.Search(query, 5)
+	if err != nil {
+		panic(err)
 	}
-
-	// Search on loaded index
-	results2, _ := loadedIndex.Search(query, 5, 0)
-	fmt.Printf("Loaded index search:\n")
-	for i, r := range results2 {
-		fmt.Printf("  %d. ID: %d, Distance: %.4f\n", i+1, r.ID, r.Distance)
+	fmt.Printf("Search results from loaded collection:\n")
+	for i, r := range results {
+		fmt.Printf("  %d. ID: %s, Distance: %.4f\n", i+1, r.Document.ID, r.Distance)
 	}
 	fmt.Println()
 
-	// Step 5: Continue using loaded index
-	fmt.Println("Step 5: Adding more vectors to loaded index...")
+	// Step 5: Continue using loaded collection
+	fmt.Println("Step 5: Adding more documents to loaded collection...")
 	for i := 0; i < 100; i++ {
 		vec := make([]float32, 128)
 		for j := range vec {
 			vec[j] = rand.Float32()
 		}
-		loadedIndex.Add(vec)
+		doc := &vego.Document{
+			ID:       fmt.Sprintf("new-doc-%d", i),
+			Vector:   vec,
+			Metadata: map[string]interface{}{"batch": "second"},
+		}
+		if err := coll2.Insert(doc); err != nil {
+			panic(err)
+		}
 	}
-	fmt.Printf("✓ Added 100 more vectors, total: %d\n", loadedIndex.Len())
-	fmt.Println()
-
-	// Save again
-	fmt.Println("Step 6: Saving updated index...")
-	err = loadedIndex.SaveToLance(savePath)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Printf("✓ Updated index saved\n")
+	fmt.Printf("✓ Added 100 more documents, total: %d\n", coll2.Count())
 	fmt.Println()
 
 	fmt.Println("=== Demo completed successfully! ===")
-	fmt.Println("The index has been persisted and can be loaded in future runs.")
+	fmt.Println("The collection has been persisted and can be loaded in future runs.")
 }

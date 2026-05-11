@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/column"
 )
 
@@ -21,27 +21,27 @@ func BenchmarkWriteFile(b *testing.B) {
 
 			b.Run(name, func(b *testing.B) {
 				// 构建 schema
-				fields := make([]arrow.Field, cols)
+				fields := make([]core.Field, cols)
 				for i := range fields {
-					fields[i] = arrow.Field{
+					fields[i] = core.Field{
 						Name:     fmt.Sprintf("col%d", i),
-						Type:     arrow.PrimInt32(),
+						Type:     core.PrimInt32(),
 						Nullable: false,
 					}
 				}
-				schema := arrow.NewSchema(fields, nil)
+				schema := core.NewSchema(fields, nil)
 
 				// 构建数据
-				columns := make([]arrow.Array, cols)
+				columns := make([]core.Array, cols)
 				for i := range columns {
 					data := generateInt32Data(rows, "sequential")
-					builder := arrow.NewInt32Builder()
+					builder := core.NewInt32Builder()
 					for _, v := range data {
 						builder.Append(v)
 					}
 					columns[i] = builder.NewArray()
 				}
-				batch, _ := arrow.NewRecordBatch(schema, rows, columns)
+				batch, _ := core.NewRecordBatch(schema, rows, columns)
 
 				filename := filepath.Join(testDataDir, "write_bench.lance")
 
@@ -74,22 +74,22 @@ func BenchmarkReadFile(b *testing.B) {
 			// 准备文件
 			filename := filepath.Join(testDataDir, fmt.Sprintf("read_bench_%d_%d.lance", rows, cols))
 
-			fields := make([]arrow.Field, cols)
+			fields := make([]core.Field, cols)
 			for i := range fields {
-				fields[i] = arrow.Field{Name: fmt.Sprintf("col%d", i), Type: arrow.PrimInt32(), Nullable: false}
+				fields[i] = core.Field{Name: fmt.Sprintf("col%d", i), Type: core.PrimInt32(), Nullable: false}
 			}
-			schema := arrow.NewSchema(fields, nil)
+			schema := core.NewSchema(fields, nil)
 
-			columns := make([]arrow.Array, cols)
+			columns := make([]core.Array, cols)
 			for i := range columns {
 				data := generateInt32Data(rows, "sequential")
-				builder := arrow.NewInt32Builder()
+				builder := core.NewInt32Builder()
 				for _, v := range data {
 					builder.Append(v)
 				}
 				columns[i] = builder.NewArray()
 			}
-			batch, _ := arrow.NewRecordBatch(schema, rows, columns)
+			batch, _ := core.NewRecordBatch(schema, rows, columns)
 
 			writer, _ := column.NewWriter(filename, schema, encoderFactory)
 			writer.WriteRecordBatch(batch)
@@ -133,22 +133,22 @@ func BenchmarkRoundtrip(b *testing.B) {
 
 	for _, sc := range scenarios {
 		b.Run(sc.name, func(b *testing.B) {
-			fields := make([]arrow.Field, sc.cols)
+			fields := make([]core.Field, sc.cols)
 			for i := range fields {
-				fields[i] = arrow.Field{Name: fmt.Sprintf("col%d", i), Type: arrow.PrimInt32(), Nullable: false}
+				fields[i] = core.Field{Name: fmt.Sprintf("col%d", i), Type: core.PrimInt32(), Nullable: false}
 			}
-			schema := arrow.NewSchema(fields, nil)
+			schema := core.NewSchema(fields, nil)
 
-			columns := make([]arrow.Array, sc.cols)
+			columns := make([]core.Array, sc.cols)
 			for i := range columns {
 				data := generateInt32Data(sc.rows, "sequential")
-				builder := arrow.NewInt32Builder()
+				builder := core.NewInt32Builder()
 				for _, v := range data {
 					builder.Append(v)
 				}
 				columns[i] = builder.NewArray()
 			}
-			batch, _ := arrow.NewRecordBatch(schema, sc.rows, columns)
+			batch, _ := core.NewRecordBatch(schema, sc.rows, columns)
 
 			filename := filepath.Join(testDataDir, "roundtrip_bench.lance")
 

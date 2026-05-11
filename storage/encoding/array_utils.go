@@ -1,8 +1,7 @@
 package encoding
 
 import (
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"unsafe"
 )
 
@@ -10,21 +9,21 @@ import (
 // This is used by encoders that need byte-level access (like Zstd).
 // For FixedSizeListArray, it recursively extracts bytes from the child array.
 // Note: This does NOT include the null bitmap.
-func ArrayToBytes(array arrow.Array) ([]byte, error) {
+func ArrayToBytes(array core.Array) ([]byte, error) {
 	switch arr := array.(type) {
-	case *arrow.Int32Array:
+	case *core.Int32Array:
 		return int32SliceToBytes(arr.Values()), nil
-	case *arrow.Int64Array:
+	case *core.Int64Array:
 		return int64SliceToBytes(arr.Values()), nil
-	case *arrow.Float32Array:
+	case *core.Float32Array:
 		return float32SliceToBytes(arr.Values()), nil
-	case *arrow.Float64Array:
+	case *core.Float64Array:
 		return float64SliceToBytes(arr.Values()), nil
-	case *arrow.FixedSizeListArray:
+	case *core.FixedSizeListArray:
 		// For FixedSizeListArray, recursively get bytes from child array
 		return ArrayToBytes(arr.Values())
 	default:
-		return nil, lerrors.New(lerrors.ErrUnsupportedType).
+		return nil, core.New(core.ErrUnsupportedType).
 			Op("array_to_bytes").
 			Context("array_type", "unknown").
 			Build()
@@ -91,7 +90,7 @@ func float64SliceToBytes(values []float64) []byte {
 // GetNullBitmap extracts the null bitmap from an array if it has nulls.
 // Returns nil if the array has no nulls.
 // For FixedSizeListArray, returns the list-level null bitmap (not the child's).
-func GetNullBitmap(array arrow.Array) *arrow.Bitmap {
+func GetNullBitmap(array core.Array) *core.Bitmap {
 	if array.NullN() == 0 {
 		return nil
 	}
@@ -99,20 +98,20 @@ func GetNullBitmap(array arrow.Array) *arrow.Bitmap {
 }
 
 // HasNulls is a helper to check if array has any nulls.
-func HasNulls(array arrow.Array) bool {
+func HasNulls(array core.Array) bool {
 	return array.NullN() > 0
 }
 
 // GetValueCount returns the number of values in the array.
 // For FixedSizeListArray, returns the number of lists (not total elements).
-func GetValueCount(array arrow.Array) int {
+func GetValueCount(array core.Array) int {
 	return array.Len()
 }
 
 // GetFixedSizeListValueSize returns the list size for FixedSizeListArray.
 // Returns 0 for other types.
-func GetFixedSizeListValueSize(array arrow.Array) int {
-	if arr, ok := array.(*arrow.FixedSizeListArray); ok {
+func GetFixedSizeListValueSize(array core.Array) int {
+	if arr, ok := array.(*core.FixedSizeListArray); ok {
 		return arr.ListSize()
 	}
 	return 0

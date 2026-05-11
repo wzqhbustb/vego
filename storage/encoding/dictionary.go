@@ -4,8 +4,7 @@ import (
 	"encoding/binary"
 	"math"
 
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/format"
 )
 
@@ -21,7 +20,7 @@ func (e *DictionaryEncoder) Type() format.EncodingType {
 	return format.EncodingDictionary
 }
 
-func (e *DictionaryEncoder) Encode(array arrow.Array) (*EncodedData, error) {
+func (e *DictionaryEncoder) Encode(array core.Array) (*EncodedData, error) {
 	if array.Len() == 0 {
 		return nil, ErrEmptyArray
 	}
@@ -32,46 +31,46 @@ func (e *DictionaryEncoder) Encode(array arrow.Array) (*EncodedData, error) {
 	}
 
 	switch arr := array.(type) {
-	case *arrow.Int32Array:
+	case *core.Int32Array:
 		return e.encodeInt32(arr)
-	case *arrow.Int64Array:
+	case *core.Int64Array:
 		return e.encodeInt64(arr)
-	case *arrow.Float32Array:
+	case *core.Float32Array:
 		return e.encodeFloat32(arr)
-	case *arrow.Float64Array:
+	case *core.Float64Array:
 		return e.encodeFloat64(arr)
 	default:
-		return nil, lerrors.New(lerrors.ErrUnsupportedType).
+		return nil, core.New(core.ErrUnsupportedType).
 			Op("dictionary_encode").
 			Build()
 	}
 }
 
-func (e *DictionaryEncoder) encodeWithNulls(array arrow.Array) (*EncodedData, error) {
+func (e *DictionaryEncoder) encodeWithNulls(array core.Array) (*EncodedData, error) {
 	nullBitmap := ExtractNullBitmap(array) // 使用复制版本
 	nulls := DecodeNullBitmap(nullBitmap, array.Len())
 
 	switch arr := array.(type) {
-	case *arrow.Int32Array:
+	case *core.Int32Array:
 		values := FilterInt32(arr.Values(), nulls)
 		return e.encodeInt32WithValues(values, nullBitmap, array.Len(), array.NullN())
-	case *arrow.Int64Array:
+	case *core.Int64Array:
 		values := FilterInt64(arr.Values(), nulls)
 		return e.encodeInt64WithValues(values, nullBitmap, array.Len(), array.NullN())
-	case *arrow.Float32Array:
+	case *core.Float32Array:
 		values := FilterFloat32(arr.Values(), nulls)
 		return e.encodeFloat32WithValues(values, nullBitmap, array.Len(), array.NullN())
-	case *arrow.Float64Array:
+	case *core.Float64Array:
 		values := FilterFloat64(arr.Values(), nulls)
 		return e.encodeFloat64WithValues(values, nullBitmap, array.Len(), array.NullN())
 	default:
-		return nil, lerrors.New(lerrors.ErrUnsupportedType).
+		return nil, core.New(core.ErrUnsupportedType).
 			Op("dictionary_encode_with_nulls").
 			Build()
 	}
 }
 
-func (e *DictionaryEncoder) encodeInt32(arr *arrow.Int32Array) (*EncodedData, error) {
+func (e *DictionaryEncoder) encodeInt32(arr *core.Int32Array) (*EncodedData, error) {
 	return e.encodeInt32WithValues(arr.Values(), nil, arr.Len(), 0)
 }
 
@@ -95,7 +94,7 @@ func (e *DictionaryEncoder) encodeInt32WithValues(values []int32, nullBitmap []b
 	return e.packDictionaryWithNulls(dictValues, indices, 4, nullBitmap, numValues, nullCount)
 }
 
-func (e *DictionaryEncoder) encodeInt64(arr *arrow.Int64Array) (*EncodedData, error) {
+func (e *DictionaryEncoder) encodeInt64(arr *core.Int64Array) (*EncodedData, error) {
 	return e.encodeInt64WithValues(arr.Values(), nil, arr.Len(), 0)
 }
 
@@ -124,7 +123,7 @@ func (e *DictionaryEncoder) encodeInt64WithValues(values []int64, nullBitmap []b
 	return e.packDictionaryBytesWithNulls(dictBytes, indices, 8, uint32(len(dictValues)), nullBitmap, numValues, nullCount)
 }
 
-func (e *DictionaryEncoder) encodeFloat32(arr *arrow.Float32Array) (*EncodedData, error) {
+func (e *DictionaryEncoder) encodeFloat32(arr *core.Float32Array) (*EncodedData, error) {
 	return e.encodeFloat32WithValues(arr.Values(), nil, arr.Len(), 0)
 }
 
@@ -153,7 +152,7 @@ func (e *DictionaryEncoder) encodeFloat32WithValues(values []float32, nullBitmap
 	return e.packDictionaryBytesWithNulls(dictBytes, indices, 4, uint32(len(dictValues)), nullBitmap, numValues, nullCount)
 }
 
-func (e *DictionaryEncoder) encodeFloat64(arr *arrow.Float64Array) (*EncodedData, error) {
+func (e *DictionaryEncoder) encodeFloat64(arr *core.Float64Array) (*EncodedData, error) {
 	return e.encodeFloat64WithValues(arr.Values(), nil, arr.Len(), 0)
 }
 
@@ -286,7 +285,7 @@ func (e *DictionaryEncoder) packDictionaryBytesWithNulls(dictBytes []byte, indic
 	}, nil
 }
 
-func (e *DictionaryEncoder) EstimateSize(array arrow.Array) int {
+func (e *DictionaryEncoder) EstimateSize(array core.Array) int {
 	// 保守估计：50% 基数
 	numValues := array.Len()
 	cardinality := numValues / 2
@@ -303,7 +302,7 @@ func (e *DictionaryEncoder) EstimateSize(array arrow.Array) int {
 	return 10 + cardinality*valueSize + numValues*indexSize
 }
 
-func (e *DictionaryEncoder) SupportsType(dtype arrow.DataType) bool {
+func (e *DictionaryEncoder) SupportsType(dtype core.DataType) bool {
 	id := dtype.ID()
-	return id == arrow.INT32 || id == arrow.INT64 || id == arrow.FLOAT32 || id == arrow.FLOAT64
+	return id == core.INT32 || id == core.INT64 || id == core.FLOAT32 || id == core.FLOAT64
 }

@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
+
+	"github.com/wzqhbustb/vego/core"
 )
 
 // Page represents a single data page in a Lance file
@@ -72,19 +73,19 @@ func (p *Page) SetDataWithNullBitmap(data []byte, nullBitmap []byte, uncompresse
 // Validate validates the page
 func (p *Page) Validate() error {
 	if p.NumValues < 0 {
-		return lerrors.ValidationFailed("validate_page", "",
+		return core.ValidationFailed("validate_page", "",
 			fmt.Sprintf("invalid num values: %d", p.NumValues))
 	}
 	if p.UncompressedSize < 0 {
-		return lerrors.ValidationFailed("validate_page", "",
+		return core.ValidationFailed("validate_page", "",
 			fmt.Sprintf("invalid uncompressed size: %d", p.UncompressedSize))
 	}
 	if p.CompressedSize < 0 || p.CompressedSize > MaxPageSize {
-		return lerrors.ValidationFailed("validate_page", "",
+		return core.ValidationFailed("validate_page", "",
 			fmt.Sprintf("invalid compressed size: %d", p.CompressedSize))
 	}
 	if int32(len(p.Data)) != p.CompressedSize {
-		return lerrors.New(lerrors.ErrInvalidArgument).
+		return core.New(core.ErrInvalidArgument).
 			Op("validate_page").
 			Context("field", "data").
 			Context("actual_size", len(p.Data)).
@@ -96,7 +97,7 @@ func (p *Page) Validate() error {
 	// Verify checksum (only for Data, NullBitmap is stored separately)
 	computed := crc32.ChecksumIEEE(p.Data)
 	if computed != p.Checksum {
-		return lerrors.FormatCorrupted("", p.Offset,
+		return core.FormatCorrupted("", p.Offset,
 			fmt.Sprintf("page checksum mismatch: computed 0x%08X vs stored 0x%08X", computed, p.Checksum))
 	}
 
@@ -208,8 +209,8 @@ func (p *Page) ReadFrom(r io.Reader) (int64, error) {
 		// Verify null bitmap checksum
 		computedChecksum := crc32.ChecksumIEEE(p.NullBitmap)
 		if computedChecksum != storedNullBitmapChecksum {
-			return int64(n + dataRead), lerrors.FormatCorrupted("", p.Offset,
-				fmt.Sprintf("null bitmap checksum mismatch: computed 0x%08X vs stored 0x%08X", 
+			return int64(n + dataRead), core.FormatCorrupted("", p.Offset,
+				fmt.Sprintf("null bitmap checksum mismatch: computed 0x%08X vs stored 0x%08X",
 					computedChecksum, storedNullBitmapChecksum))
 		}
 	}

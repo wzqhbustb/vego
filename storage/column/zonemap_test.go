@@ -8,7 +8,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/format"
 )
 
@@ -92,8 +92,8 @@ func TestZoneMapEvaluatorReaderDelegation(t *testing.T) {
 	tmpFile := "/tmp/test_zonemap_evaluator.lance"
 	defer os.Remove(tmpFile)
 	
-	schema := arrow.NewSchema([]arrow.Field{
-		arrow.NewField("id", arrow.PrimInt32(), false),
+	schema := core.NewSchema([]core.Field{
+		core.NewField("id", core.PrimInt32(), false),
 	}, nil)
 	
 	writer, err := NewWriter(tmpFile, schema, nil)

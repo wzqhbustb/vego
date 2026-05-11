@@ -2,7 +2,7 @@
 # Unified interface for testing vego, index (HNSW), and storage modules
 
 .PHONY: all test test-race test-v test-coverage help
-.PHONY: test-vego test-index test-storage test-memory test-memory-integration
+.PHONY: test-core test-vfs test-vego test-index test-storage test-memory test-memory-integration
 .PHONY: test-vego-race test-index-race test-storage-race
 .PHONY: bench bench-quick bench-all bench-compare
 .PHONY: ci pre-commit clean
@@ -14,22 +14,28 @@ all: test
 # All-in-One Test Commands
 # =============================================================================
 
-# Run all tests across all modules (vego + index + storage + memory)
+# Run all tests across all modules (core + vfs + vego + index + storage + memory)
 test:
 	@echo "========================================"
-	@echo "Running all tests (vego + index + storage + memory)..."
+	@echo "Running all tests (core + vfs + vego + index + storage + memory)..."
 	@echo "========================================"
 	@echo ""
-	@echo "[1/4] Running vego tests..."
+	@echo "[1/6] Running core tests..."
+	@cd $(CURDIR) && go test -count=1 ./core/...
+	@echo ""
+	@echo "[2/6] Running vfs tests..."
+	@cd $(CURDIR) && go test -count=1 ./vfs/...
+	@echo ""
+	@echo "[3/6] Running vego tests..."
 	@$(MAKE) -C vego test
 	@echo ""
-	@echo "[2/4] Running index tests..."
+	@echo "[4/6] Running index tests..."
 	@$(MAKE) -C index test
 	@echo ""
-	@echo "[3/4] Running storage tests..."
+	@echo "[5/6] Running storage tests..."
 	@$(MAKE) -C storage test
 	@echo ""
-	@echo "[4/4] Running memory tests..."
+	@echo "[6/6] Running memory tests..."
 	@cd $(CURDIR) && go test -count=1 ./memory/...
 	@echo ""
 	@echo "========================================"
@@ -42,16 +48,22 @@ test-v:
 	@echo "Running all tests with verbose output..."
 	@echo "========================================"
 	@echo ""
-	@echo "[1/4] Running vego tests (verbose)..."
+	@echo "[1/6] Running core tests (verbose)..."
+	@cd $(CURDIR) && go test -count=1 -v ./core/...
+	@echo ""
+	@echo "[2/6] Running vfs tests (verbose)..."
+	@cd $(CURDIR) && go test -count=1 -v ./vfs/...
+	@echo ""
+	@echo "[3/6] Running vego tests (verbose)..."
 	@$(MAKE) -C vego test-v
 	@echo ""
-	@echo "[2/4] Running index tests (verbose)..."
+	@echo "[4/6] Running index tests (verbose)..."
 	@$(MAKE) -C index test-v
 	@echo ""
-	@echo "[3/4] Running storage tests (verbose)..."
+	@echo "[5/6] Running storage tests (verbose)..."
 	@$(MAKE) -C storage test-v
 	@echo ""
-	@echo "[4/4] Running memory tests (verbose)..."
+	@echo "[6/6] Running memory tests (verbose)..."
 	@cd $(CURDIR) && go test -count=1 -v ./memory/...
 	@echo ""
 	@echo "========================================"
@@ -64,16 +76,22 @@ test-race:
 	@echo "Running all tests with race detector..."
 	@echo "========================================"
 	@echo ""
-	@echo "[1/4] Running vego tests (race)..."
+	@echo "[1/6] Running core tests (race)..."
+	@cd $(CURDIR) && go test -race -count=1 ./core/...
+	@echo ""
+	@echo "[2/6] Running vfs tests (race)..."
+	@cd $(CURDIR) && go test -race -count=1 ./vfs/...
+	@echo ""
+	@echo "[3/6] Running vego tests (race)..."
 	@$(MAKE) -C vego test-race
 	@echo ""
-	@echo "[2/4] Running index tests (race)..."
+	@echo "[4/6] Running index tests (race)..."
 	@$(MAKE) -C index test-race
 	@echo ""
-	@echo "[3/4] Running storage tests (race)..."
+	@echo "[5/6] Running storage tests (race)..."
 	@$(MAKE) -C storage test-race
 	@echo ""
-	@echo "[4/4] Running memory tests (race)..."
+	@echo "[6/6] Running memory tests (race)..."
 	@cd $(CURDIR) && go test -race -count=1 ./memory/...
 	@echo ""
 	@echo "========================================"
@@ -86,16 +104,22 @@ test-coverage:
 	@echo "Running all tests with coverage..."
 	@echo "========================================"
 	@echo ""
-	@echo "[1/4] Running vego tests with coverage..."
+	@echo "[1/6] Running core tests with coverage..."
+	@cd $(CURDIR) && go test -count=1 -coverprofile=coverage_core.out ./core/...
+	@echo ""
+	@echo "[2/6] Running vfs tests with coverage..."
+	@cd $(CURDIR) && go test -count=1 -coverprofile=coverage_vfs.out ./vfs/...
+	@echo ""
+	@echo "[3/6] Running vego tests with coverage..."
 	@$(MAKE) -C vego test-cover
 	@echo ""
-	@echo "[2/4] Running index tests..."
+	@echo "[4/6] Running index tests..."
 	@$(MAKE) -C index test || true
 	@echo ""
-	@echo "[3/4] Running storage tests with coverage..."
+	@echo "[5/6] Running storage tests with coverage..."
 	@$(MAKE) -C storage test-coverage
 	@echo ""
-	@echo "[4/4] Running memory tests with coverage..."
+	@echo "[6/6] Running memory tests with coverage..."
 	@cd $(CURDIR) && go test -count=1 -coverprofile=coverage.out ./memory/...
 	@echo ""
 	@echo "========================================"
@@ -105,6 +129,20 @@ test-coverage:
 # =============================================================================
 # Module-Specific Test Commands
 # =============================================================================
+
+# Run only core tests
+test-core:
+	@echo "========================================"
+	@echo "Running core tests..."
+	@echo "========================================"
+	@cd $(CURDIR) && go test -count=1 ./core/...
+
+# Run only vfs tests
+test-vfs:
+	@echo "========================================"
+	@echo "Running vfs tests..."
+	@echo "========================================"
+	@cd $(CURDIR) && go test -count=1 ./vfs/...
 
 # Run only vego (Collection API) tests
 test-vego:
@@ -315,7 +353,7 @@ help:
 	@echo "═══════════════════════════════════════════════════════════════"
 	@echo "All-in-One Commands (Recommended)"
 	@echo "═══════════════════════════════════════════════════════════════"
-	@echo "  make test              - Run all tests (vego + index + storage + memory)"
+	@echo "  make test              - Run all tests (core + vfs + vego + index + storage + memory)"
 	@echo "  make test-v            - Run all tests with verbose output"
 	@echo "  make test-race         - Run all tests with race detector"
 	@echo "  make test-coverage     - Run all tests with coverage report"

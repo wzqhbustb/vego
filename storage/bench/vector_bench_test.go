@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/column"
 )
 
@@ -21,29 +21,29 @@ func BenchmarkVectorWrite(b *testing.B) {
 
 			b.Run(name, func(b *testing.B) {
 				vectors := generateVectorData(n, dim)
-				listType := arrow.FixedSizeListOf(arrow.PrimFloat32(), dim)
+				listType := core.FixedSizeListOf(core.PrimFloat32(), dim)
 
-				childBuilder := arrow.NewFloat32Builder()
+				childBuilder := core.NewFloat32Builder()
 				for _, vec := range vectors {
 					for _, v := range vec {
 						childBuilder.Append(v)
 					}
 				}
 				childArray := childBuilder.NewArray()
-				array := arrow.NewFixedSizeListArray(listType.(*arrow.FixedSizeListType), childArray, nil)
+				array := core.NewFixedSizeListArray(listType.(*core.FixedSizeListType), childArray, nil)
 
-				idBuilder := arrow.NewInt32Builder()
+				idBuilder := core.NewInt32Builder()
 				for i := 0; i < n; i++ {
 					idBuilder.Append(int32(i))
 				}
 				idArray := idBuilder.NewArray()
 
-				schema := arrow.NewSchema([]arrow.Field{
-					{Name: "id", Type: arrow.PrimInt32(), Nullable: false},
+				schema := core.NewSchema([]core.Field{
+					{Name: "id", Type: core.PrimInt32(), Nullable: false},
 					{Name: "embedding", Type: listType, Nullable: false},
 				}, nil)
 
-				batch, _ := arrow.NewRecordBatch(schema, n, []arrow.Array{idArray, array})
+				batch, _ := core.NewRecordBatch(schema, n, []core.Array{idArray, array})
 
 				filename := filepath.Join(testDataDir, "vector_write_bench.lance")
 
@@ -71,29 +71,29 @@ func BenchmarkVectorSearch(b *testing.B) {
 	dim := 768
 
 	vectors := generateVectorData(n, dim)
-	listType := arrow.FixedSizeListOf(arrow.PrimFloat32(), dim)
+	listType := core.FixedSizeListOf(core.PrimFloat32(), dim)
 
-	childBuilder := arrow.NewFloat32Builder()
+	childBuilder := core.NewFloat32Builder()
 	for _, vec := range vectors {
 		for _, v := range vec {
 			childBuilder.Append(v)
 		}
 	}
 	childArray := childBuilder.NewArray()
-	array := arrow.NewFixedSizeListArray(listType.(*arrow.FixedSizeListType), childArray, nil)
+	array := core.NewFixedSizeListArray(listType.(*core.FixedSizeListType), childArray, nil)
 
-	idBuilder := arrow.NewInt32Builder()
+	idBuilder := core.NewInt32Builder()
 	for i := 0; i < n; i++ {
 		idBuilder.Append(int32(i))
 	}
 	idArray := idBuilder.NewArray()
 
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "id", Type: arrow.PrimInt32(), Nullable: false},
+	schema := core.NewSchema([]core.Field{
+		{Name: "id", Type: core.PrimInt32(), Nullable: false},
 		{Name: "embedding", Type: listType, Nullable: false},
 	}, nil)
 
-	batch, _ := arrow.NewRecordBatch(schema, n, []arrow.Array{idArray, array})
+	batch, _ := core.NewRecordBatch(schema, n, []core.Array{idArray, array})
 
 	filename := filepath.Join(testDataDir, "vector_search_bench.lance")
 	os.Remove(filename)

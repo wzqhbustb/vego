@@ -4,9 +4,8 @@ import (
 	"bytes"
 	"encoding/binary"
 
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/encoding"
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
 	"github.com/wzqhbustb/vego/storage/format"
 )
 
@@ -19,9 +18,9 @@ func NewPageReader() *PageReader {
 }
 
 // ReadPage converts a Page back into an Array.
-func (r *PageReader) ReadPage(page *format.Page, dataType arrow.DataType) (arrow.Array, error) {
+func (r *PageReader) ReadPage(page *format.Page, dataType core.DataType) (core.Array, error) {
 	if page == nil {
-		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+		return nil, core.New(core.ErrInvalidArgument).
 			Op("read_page").
 			Context("message", "page is nil").
 			Build()
@@ -33,7 +32,7 @@ func (r *PageReader) ReadPage(page *format.Page, dataType arrow.DataType) (arrow
 		if page.NullBitmap != nil && int(page.NumValues) > 0 {
 			return r.createAllNullArray(dataType, int(page.NumValues), page.NullBitmap)
 		}
-		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+		return nil, core.New(core.ErrInvalidArgument).
 			Op("read_page").
 			Context("message", "page data is empty").
 			Build()
@@ -42,7 +41,7 @@ func (r *PageReader) ReadPage(page *format.Page, dataType arrow.DataType) (arrow
 	// Get decoder based on encoding type
 	decoder, err := encoding.GetDecoder(page.Encoding)
 	if err != nil {
-		return nil, lerrors.New(lerrors.ErrUnsupportedType).
+		return nil, core.New(core.ErrUnsupportedType).
 			Op("get_decoder").
 			Context("encoding", page.Encoding).
 			Wrap(err).
@@ -50,7 +49,7 @@ func (r *PageReader) ReadPage(page *format.Page, dataType arrow.DataType) (arrow
 	}
 
 	if decoder == nil {
-		return nil, lerrors.New(lerrors.ErrUnsupportedType).
+		return nil, core.New(core.ErrUnsupportedType).
 			Op("read_page").
 			Context("encoding", "plain").
 			Context("message", "plain encoding is not supported: all pages must be encoded").
@@ -60,7 +59,7 @@ func (r *PageReader) ReadPage(page *format.Page, dataType arrow.DataType) (arrow
 	// Decode the data, passing null bitmap from page if available
 	array, err := decoder.Decode(page.Data, dataType, page.NullBitmap, int(page.NumValues))
 	if err != nil {
-		return nil, lerrors.New(lerrors.ErrDecodeFailed).
+		return nil, core.New(core.ErrDecodeFailed).
 			Op("decode_page").
 			Context("encoding", page.Encoding).
 			Wrap(err).
@@ -69,7 +68,7 @@ func (r *PageReader) ReadPage(page *format.Page, dataType arrow.DataType) (arrow
 
 	// Verify the decoded array has correct length
 	if array.Len() != int(page.NumValues) {
-		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+		return nil, core.New(core.ErrInvalidArgument).
 			Op("verify_decoded_array").
 			Context("expected_values", page.NumValues).
 			Context("actual_values", array.Len()).
@@ -84,11 +83,11 @@ func (r *PageReader) ReadPage(page *format.Page, dataType arrow.DataType) (arrow
 
 // ReadPageFromData 直接从编码后的数据解码 Array（用于 AsyncIO 返回的数据）
 // 注意：data 是完整的 Page 字节流（包含 30 字节 header + encoded data + optional null bitmap)
-func (r *PageReader) ReadPageFromData(data []byte, encodingType format.EncodingType, numValues int32, dataType arrow.DataType) (arrow.Array, error) {
+func (r *PageReader) ReadPageFromData(data []byte, encodingType format.EncodingType, numValues int32, dataType core.DataType) (core.Array, error) {
 	const PageHeaderSize = 30
 
 	if len(data) < PageHeaderSize {
-		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+		return nil, core.New(core.ErrInvalidArgument).
 			Op("read_page_from_data").
 			Context("expected_bytes", PageHeaderSize).
 			Context("actual_bytes", len(data)).
@@ -110,7 +109,7 @@ func (r *PageReader) ReadPageFromData(data []byte, encodingType format.EncodingT
 	dataEnd := PageHeaderSize + int(compressedSize)
 
 	if dataEnd > len(data) {
-		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+		return nil, core.New(core.ErrInvalidArgument).
 			Op("read_page_from_data").
 			Context("expected_data_end", dataEnd).
 			Context("actual_data_len", len(data)).
@@ -126,7 +125,7 @@ func (r *PageReader) ReadPageFromData(data []byte, encodingType format.EncodingT
 		bitmapStart := dataEnd
 		bitmapEnd := dataEnd + int(nullBitmapSize)
 		if bitmapEnd > len(data) {
-			return nil, lerrors.New(lerrors.ErrInvalidArgument).
+			return nil, core.New(core.ErrInvalidArgument).
 				Op("read_page_from_data").
 				Context("expected_bitmap_end", bitmapEnd).
 				Context("actual_data_len", len(data)).
@@ -141,7 +140,7 @@ func (r *PageReader) ReadPageFromData(data []byte, encodingType format.EncodingT
 		if nullBitmap != nil && int(numValues) > 0 {
 			return r.createAllNullArray(dataType, int(numValues), nullBitmap)
 		}
-		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+		return nil, core.New(core.ErrInvalidArgument).
 			Op("read_page_from_data").
 			Context("message", "page data is empty and no null bitmap").
 			Build()
@@ -150,7 +149,7 @@ func (r *PageReader) ReadPageFromData(data []byte, encodingType format.EncodingT
 	// Get decoder
 	decoder, err := encoding.GetDecoder(encodingType)
 	if err != nil {
-		return nil, lerrors.New(lerrors.ErrUnsupportedType).
+		return nil, core.New(core.ErrUnsupportedType).
 			Op("get_decoder").
 			Context("encoding", encodingType).
 			Wrap(err).
@@ -158,7 +157,7 @@ func (r *PageReader) ReadPageFromData(data []byte, encodingType format.EncodingT
 	}
 
 	if decoder == nil {
-		return nil, lerrors.New(lerrors.ErrUnsupportedType).
+		return nil, core.New(core.ErrUnsupportedType).
 			Op("read_page_from_data").
 			Context("encoding", "plain").
 			Context("message", "plain encoding is not supported: all pages must be encoded").
@@ -168,7 +167,7 @@ func (r *PageReader) ReadPageFromData(data []byte, encodingType format.EncodingT
 	// Decode with null bitmap
 	array, err := decoder.Decode(encodedData, dataType, nullBitmap, int(numValues))
 	if err != nil {
-		return nil, lerrors.New(lerrors.ErrDecodeFailed).
+		return nil, core.New(core.ErrDecodeFailed).
 			Op("decode_page_from_data").
 			Context("encoding", encodingType).
 			Wrap(err).
@@ -176,7 +175,7 @@ func (r *PageReader) ReadPageFromData(data []byte, encodingType format.EncodingT
 	}
 
 	if array.Len() != int(numValues) {
-		return nil, lerrors.New(lerrors.ErrInvalidArgument).
+		return nil, core.New(core.ErrInvalidArgument).
 			Op("verify_decoded_array_from_data").
 			Context("expected_values", numValues).
 			Context("actual_values", array.Len()).
@@ -188,28 +187,28 @@ func (r *PageReader) ReadPageFromData(data []byte, encodingType format.EncodingT
 }
 
 // createAllNullArray creates an array with all null values
-func (r *PageReader) createAllNullArray(dataType arrow.DataType, numValues int, nullBitmap []byte) (arrow.Array, error) {
-	bitmap := arrow.NewBitmapFromBytes(nullBitmap, numValues)
+func (r *PageReader) createAllNullArray(dataType core.DataType, numValues int, nullBitmap []byte) (core.Array, error) {
+	bitmap := core.NewBitmapFromBytes(nullBitmap, numValues)
 	
 	switch dataType.ID() {
-	case arrow.INT32:
+	case core.INT32:
 		values := make([]int32, numValues)
-		return arrow.NewInt32Array(values, bitmap), nil
-	case arrow.INT64:
+		return core.NewInt32Array(values, bitmap), nil
+	case core.INT64:
 		values := make([]int64, numValues)
-		return arrow.NewInt64Array(values, bitmap), nil
-	case arrow.FLOAT32:
+		return core.NewInt64Array(values, bitmap), nil
+	case core.FLOAT32:
 		values := make([]float32, numValues)
-		return arrow.NewFloat32Array(values, bitmap), nil
-	case arrow.FLOAT64:
+		return core.NewFloat32Array(values, bitmap), nil
+	case core.FLOAT64:
 		values := make([]float64, numValues)
-		return arrow.NewFloat64Array(values, bitmap), nil
-	case arrow.FIXED_SIZE_LIST:
+		return core.NewFloat64Array(values, bitmap), nil
+	case core.FIXED_SIZE_LIST:
 		// 全 null FixedSizeList 数组：需要创建嵌套的全 null 子数组
-		listType := dataType.(*arrow.FixedSizeListType)
+		listType := dataType.(*core.FixedSizeListType)
 		return r.createAllNullFixedSizeListArray(listType, numValues, bitmap)
 	default:
-		return nil, lerrors.New(lerrors.ErrUnsupportedType).
+		return nil, core.New(core.ErrUnsupportedType).
 			Op("create_all_null_array").
 			Context("data_type", dataType.Name()).
 			Build()
@@ -217,33 +216,33 @@ func (r *PageReader) createAllNullArray(dataType arrow.DataType, numValues int, 
 }
 
 // createAllNullFixedSizeListArray 创建全 null 的 FixedSizeList 数组
-func (r *PageReader) createAllNullFixedSizeListArray(listType *arrow.FixedSizeListType, numValues int, bitmap *arrow.Bitmap) (arrow.Array, error) {
+func (r *PageReader) createAllNullFixedSizeListArray(listType *core.FixedSizeListType, numValues int, bitmap *core.Bitmap) (core.Array, error) {
 	elemType := listType.Elem()
 	elemSize := listType.Size()
 	
 	// 创建全 null 的子数组
 	totalElemCount := numValues * elemSize
-	var elemArray arrow.Array
+	var elemArray core.Array
 	
 	switch elemType.ID() {
-	case arrow.FLOAT32:
+	case core.FLOAT32:
 		elemValues := make([]float32, totalElemCount)
-		elemArray = arrow.NewFloat32Array(elemValues, nil)
-	case arrow.FLOAT64:
+		elemArray = core.NewFloat32Array(elemValues, nil)
+	case core.FLOAT64:
 		elemValues := make([]float64, totalElemCount)
-		elemArray = arrow.NewFloat64Array(elemValues, nil)
-	case arrow.INT32:
+		elemArray = core.NewFloat64Array(elemValues, nil)
+	case core.INT32:
 		elemValues := make([]int32, totalElemCount)
-		elemArray = arrow.NewInt32Array(elemValues, nil)
-	case arrow.INT64:
+		elemArray = core.NewInt32Array(elemValues, nil)
+	case core.INT64:
 		elemValues := make([]int64, totalElemCount)
-		elemArray = arrow.NewInt64Array(elemValues, nil)
+		elemArray = core.NewInt64Array(elemValues, nil)
 	default:
-		return nil, lerrors.New(lerrors.ErrUnsupportedType).
+		return nil, core.New(core.ErrUnsupportedType).
 			Op("create_all_null_fixed_size_list").
 			Context("elem_type", elemType.Name()).
 			Build()
 	}
 	
-	return arrow.NewFixedSizeListArray(listType, elemArray, bitmap), nil
+	return core.NewFixedSizeListArray(listType, elemArray, bitmap), nil
 }

@@ -21,8 +21,7 @@ import (
 	"bytes"
 	"encoding/binary"
 
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/format"
 )
 
@@ -38,24 +37,24 @@ func (e *RLEEncoder) Type() format.EncodingType {
 	return format.EncodingRLE
 }
 
-func (e *RLEEncoder) Encode(array arrow.Array) (*EncodedData, error) {
+func (e *RLEEncoder) Encode(array core.Array) (*EncodedData, error) {
 	if array.Len() == 0 {
 		return nil, ErrEmptyArray
 	}
 
 	switch arr := array.(type) {
-	case *arrow.Int32Array:
+	case *core.Int32Array:
 		return e.encodeInt32(arr)
-	case *arrow.Int64Array:
+	case *core.Int64Array:
 		return e.encodeInt64(arr)
 	default:
-		return nil, lerrors.New(lerrors.ErrUnsupportedType).
+		return nil, core.New(core.ErrUnsupportedType).
 			Op("rle_encode").
 			Build()
 	}
 }
 
-func (e *RLEEncoder) encodeInt32(arr *arrow.Int32Array) (*EncodedData, error) {
+func (e *RLEEncoder) encodeInt32(arr *core.Int32Array) (*EncodedData, error) {
 	values := arr.Values()
 	numValues := arr.Len()
 	nullN := arr.NullN()
@@ -168,7 +167,7 @@ func (e *RLEEncoder) encodeInt32(arr *arrow.Int32Array) (*EncodedData, error) {
 	}, nil
 }
 
-func (e *RLEEncoder) encodeInt64(arr *arrow.Int64Array) (*EncodedData, error) {
+func (e *RLEEncoder) encodeInt64(arr *core.Int64Array) (*EncodedData, error) {
 	values := arr.Values()
 	numValues := arr.Len()
 	nullN := arr.NullN()
@@ -275,14 +274,14 @@ func (e *RLEEncoder) encodeInt64(arr *arrow.Int64Array) (*EncodedData, error) {
 	}, nil
 }
 
-func (e *RLEEncoder) EstimateSize(array arrow.Array) int {
+func (e *RLEEncoder) EstimateSize(array core.Array) int {
 	numValues := array.Len()
 	valueSize := GetValueSize(array.DataType().ID())
 	// Conservative: each value could be a separate run
 	return 4 + numValues*(valueSize+4) // numRuns + (value + count) per run
 }
 
-func (e *RLEEncoder) SupportsType(dtype arrow.DataType) bool {
+func (e *RLEEncoder) SupportsType(dtype core.DataType) bool {
 	id := dtype.ID()
-	return id == arrow.INT32 || id == arrow.INT64
+	return id == core.INT32 || id == core.INT64
 }

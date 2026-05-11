@@ -204,8 +204,6 @@ func runBenchmark(b *testing.B, config BenchmarkConfig) *BenchmarkResult {
 	b.Helper()
 
 	result := &BenchmarkResult{Config: config}
-	tempDir := b.TempDir()
-	storagePath := filepath.Join(tempDir, "index")
 
 	// Generate test data
 	b.Logf("Generating %d vectors of dimension %d...", config.DatasetSize, config.Dimension)
@@ -266,36 +264,53 @@ func runBenchmark(b *testing.B, config BenchmarkConfig) *BenchmarkResult {
 	b.Logf("Build completed in %v (%.2f vectors/sec, %.2f MB memory, %.2f MB total alloc)",
 		result.BuildTime, result.BuildQPS, result.MemoryUsageMB, result.TotalAllocMB)
 
-	// Phase 2: Save to storage
-	b.Logf("Saving index to storage...")
-	saveStart := time.Now()
-	if err := index.SaveToLance(storagePath); err != nil {
-		b.Fatalf("Failed to save index: %v", err)
-	}
-	result.SaveTime = time.Since(saveStart)
-
-	storageSize, err := getStorageSize(storagePath)
+	// Phase 2: Marshal to memory
+	b.Logf("Marshaling index...")
+	marshalStart := time.Now()
+	metaBatch, err := index.MarshalMetadata()
 	if err != nil {
-		b.Fatalf("Failed to get storage size: %v", err)
+		b.Fatalf("Failed to marshal metadata: %v", err)
 	}
-	result.StorageSizeMB = float64(storageSize) / (1024 * 1024)
+	nodesBatch, err := index.MarshalNodes()
+	if err != nil {
+		b.Fatalf("Failed to marshal nodes: %v", err)
+	}
+	connBatch, err := index.MarshalConnections()
+	if err != nil {
+		b.Fatalf("Failed to marshal connections: %v", err)
+	}
+	result.SaveTime = time.Since(marshalStart)
+	b.Logf("Marshal completed in %v", result.SaveTime)
 
-	b.Logf("Save completed in %v (%.2f MB on disk)", result.SaveTime, result.StorageSizeMB)
-
-	// Clear memory to test load from cold start
+	// Clear memory to test unmarshal from cold start
 	index = nil
 	runtime.GC()
 	time.Sleep(10 * time.Millisecond)
 
-	// Phase 3: Load from storage
-	b.Logf("Loading index from storage...")
-	loadStart := time.Now()
-	loadedIndex, err := LoadHNSWFromLance(storagePath)
+	// Phase 3: Unmarshal from memory
+	b.Logf("Unmarshaling index...")
+	unmarshalStart := time.Now()
+	meta, err := UnmarshalMetadata(metaBatch)
 	if err != nil {
-		b.Fatalf("Failed to load index: %v", err)
+		b.Fatalf("Failed to unmarshal metadata: %v", err)
 	}
-	result.LoadTime = time.Since(loadStart)
-	b.Logf("Load completed in %v", result.LoadTime)
+	loadedConfig := Config{
+		M:              meta.M,
+		EfConstruction: meta.EfConstruction,
+		Dimension:      meta.Dimension,
+		DistanceFunc:   meta.DistanceFunc,
+	}
+	loadedIndex := NewHNSW(loadedConfig)
+	loadedIndex.SetEntryPoint(meta.EntryPoint)
+	loadedIndex.SetMaxLevel(meta.MaxLevel)
+	if err := loadedIndex.UnmarshalNodes(nodesBatch); err != nil {
+		b.Fatalf("Failed to unmarshal nodes: %v", err)
+	}
+	if err := loadedIndex.UnmarshalConnections(connBatch); err != nil {
+		b.Fatalf("Failed to unmarshal connections: %v", err)
+	}
+	result.LoadTime = time.Since(unmarshalStart)
+	b.Logf("Unmarshal completed in %v", result.LoadTime)
 
 	// Verify loaded index
 	if len(loadedIndex.nodes) != config.DatasetSize {

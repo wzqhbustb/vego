@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	hnsw "github.com/wzqhbustb/vego/index"
 	vego "github.com/wzqhbustb/vego/vego"
 	"golang.org/x/sync/semaphore"
 )
@@ -156,11 +155,11 @@ func Open(path string, opts ...Option) (*MemoryStore, error) {
 	// Translate string distance func to Vego option.
 	switch cfg.DistanceFunc {
 	case "cosine":
-		vegoOpts = append(vegoOpts, vego.WithDistanceFunc(hnsw.CosineDistance))
+		vegoOpts = append(vegoOpts, vego.WithDistanceFunc(vego.CosineDistance))
 	case "l2":
-		vegoOpts = append(vegoOpts, vego.WithDistanceFunc(hnsw.L2Distance))
+		vegoOpts = append(vegoOpts, vego.WithDistanceFunc(vego.L2Distance))
 	case "ip":
-		vegoOpts = append(vegoOpts, vego.WithDistanceFunc(hnsw.InnerProductDistance))
+		vegoOpts = append(vegoOpts, vego.WithDistanceFunc(vego.InnerProductDistance))
 	}
 
 	db, err := vego.Open(dbPath, vegoOpts...)
@@ -592,7 +591,7 @@ func (s *MemoryStore) pureVectorSearch(ctx context.Context, query string, filter
 	// consistent with hybridSearch's limit*3 strategy.
 	results, err := s.vectorSearch(ctx, vec, limit*3, minScore)
 	if err != nil {
-		if errors.Is(err, hnsw.ErrEmptyIndex) {
+		if errors.Is(err, vego.ErrEmptyIndex) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("vector search: %w", err)

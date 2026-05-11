@@ -4,10 +4,9 @@
 package column
 
 import (
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/encoding"
 	"github.com/wzqhbustb/vego/storage/format"
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
 )
 
 // RowIndexWriter extends Writer with RowIndex and BlockCache support for V1.1+ files
@@ -17,12 +16,12 @@ type RowIndexWriter struct {
 	version       format.VersionPolicy
 	writeRowIndex bool
 	blockSize     int32
-	schema        *arrow.Schema
+	schema        *core.Schema
 }
 
 // NewRowIndexWriter creates a writer with RowIndex support
 // If version is V1.0, RowIndex will not be written
-func NewRowIndexWriter(filename string, schema *arrow.Schema, version format.VersionPolicy, factory *encoding.EncoderFactory) (*RowIndexWriter, error) {
+func NewRowIndexWriter(filename string, schema *core.Schema, version format.VersionPolicy, factory *encoding.EncoderFactory) (*RowIndexWriter, error) {
 	if factory == nil {
 		factory = encoding.NewEncoderFactory(3)
 	}
@@ -60,7 +59,7 @@ func (w *RowIndexWriter) AddRowID(docID string, rowIndex int64) error {
 // Close finalizes the file, including RowIndex and BlockCache info if applicable
 func (w *RowIndexWriter) Close() error {
 	if w.closed {
-		return lerrors.New(lerrors.ErrInvalidArgument).
+		return core.New(core.ErrInvalidArgument).
 			Op("close_rowindex_writer").
 			Context("message", "writer already closed").
 			Build()
@@ -90,7 +89,7 @@ func (w *RowIndexWriter) writeRowIndexPage() error {
 	// Convert RowIndex to Page
 	page, err := w.rowIndex.ToPage()
 	if err != nil {
-		return lerrors.New(lerrors.ErrEncodeFailed).
+		return core.New(core.ErrEncodeFailed).
 			Op("write_rowindex_page").
 			Wrap(err).
 			Build()
@@ -102,7 +101,7 @@ func (w *RowIndexWriter) writeRowIndexPage() error {
 	// Write the page
 	n, err := page.WriteTo(w.file)
 	if err != nil {
-		return lerrors.IO("write_rowindex_page", "", err)
+		return core.IO("write_rowindex_page", "", err)
 	}
 
 	// Update position

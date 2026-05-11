@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/encoding"
 	"github.com/wzqhbustb/vego/storage/format"
 )
@@ -48,7 +48,7 @@ func TestE2E_SmartEncoding(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// 构建数组
-			builder := arrow.NewInt32Builder()
+			builder := core.NewInt32Builder()
 			for _, v := range tc.values {
 				builder.Append(v)
 			}
@@ -67,7 +67,7 @@ func TestE2E_SmartEncoding(t *testing.T) {
 			}
 
 			// 读取（会自动解码）
-			result, err := reader.ReadPage(pages[0], arrow.PrimInt32())
+			result, err := reader.ReadPage(pages[0], core.PrimInt32())
 			if err != nil {
 				t.Fatalf("Read failed: %v", err)
 			}
@@ -92,7 +92,7 @@ func TestE2E_Float32_BSS(t *testing.T) {
 		values[i] = float32(i) * 0.001 // 0.000, 0.001, 0.002...
 	}
 
-	builder := arrow.NewFloat32Builder()
+	builder := core.NewFloat32Builder()
 	for _, v := range values {
 		builder.Append(v)
 	}
@@ -110,14 +110,14 @@ func TestE2E_Float32_BSS(t *testing.T) {
 	}
 
 	// 读取
-	result, err := reader.ReadPage(pages[0], arrow.PrimFloat32())
+	result, err := reader.ReadPage(pages[0], core.PrimFloat32())
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
 
 	// 验证数据
-	original := array.(*arrow.Float32Array).Values()
-	resultArray := result.(*arrow.Float32Array)
+	original := array.(*core.Float32Array).Values()
+	resultArray := result.(*core.Float32Array)
 	for i, v := range original {
 		if resultArray.Value(i) != v {
 			t.Errorf("Value mismatch at %d: expected %f, got %f", i, v, resultArray.Value(i))
@@ -136,7 +136,7 @@ func TestE2E_CompressionRatio(t *testing.T) {
 		values[i] = int32(i % 10) // 只有10个唯一值
 	}
 
-	builder := arrow.NewInt32Builder()
+	builder := core.NewInt32Builder()
 	for _, v := range values {
 		builder.Append(v)
 	}
@@ -168,8 +168,8 @@ func TestE2E_MultiplePages(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := tmpDir + "/test.lance"
 
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "id", Type: arrow.PrimInt32(), Nullable: false},
+	schema := core.NewSchema([]core.Field{
+		{Name: "id", Type: core.PrimInt32(), Nullable: false},
 	}, nil)
 
 	// 写入多个 batch（每批一个 page）
@@ -179,13 +179,13 @@ func TestE2E_MultiplePages(t *testing.T) {
 	}
 
 	for batchNum := 0; batchNum < 3; batchNum++ {
-		builder := arrow.NewInt32Builder()
+		builder := core.NewInt32Builder()
 		for i := 0; i < 100; i++ {
 			builder.Append(int32(batchNum*100 + i))
 		}
 		array := builder.NewArray()
 
-		batch, _ := arrow.NewRecordBatch(schema, 100, []arrow.Array{array})
+		batch, _ := core.NewRecordBatch(schema, 100, []core.Array{array})
 		if err := writer.WriteRecordBatch(batch); err != nil {
 			t.Fatalf("Write failed: %v", err)
 		}
@@ -221,7 +221,7 @@ func TestE2E_EmptyArray(t *testing.T) {
 	factory := encoding.NewEncoderFactory(3)
 	writer := NewPageWriter(factory)
 
-	builder := arrow.NewInt32Builder()
+	builder := core.NewInt32Builder()
 	array := builder.NewArray() // 空数组
 
 	_, err := writer.WritePages(array, 0)
@@ -236,7 +236,7 @@ func TestE2E_SingleValue(t *testing.T) {
 	writer := NewPageWriter(factory)
 	reader := NewPageReader()
 
-	builder := arrow.NewInt32Builder()
+	builder := core.NewInt32Builder()
 	builder.Append(42)
 	array := builder.NewArray()
 
@@ -245,12 +245,12 @@ func TestE2E_SingleValue(t *testing.T) {
 		t.Fatalf("Write failed: %v", err)
 	}
 
-	result, err := reader.ReadPage(pages[0], arrow.PrimInt32())
+	result, err := reader.ReadPage(pages[0], core.PrimInt32())
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
 
-	if result.Len() != 1 || result.(*arrow.Int32Array).Value(0) != 42 {
+	if result.Len() != 1 || result.(*core.Int32Array).Value(0) != 42 {
 		t.Error("Single value roundtrip failed")
 	}
 }
@@ -261,7 +261,7 @@ func TestE2E_AllNulls(t *testing.T) {
 	writer := NewPageWriter(factory)
 	reader := NewPageReader()
 
-	builder := arrow.NewInt32Builder()
+	builder := core.NewInt32Builder()
 	for i := 0; i < 100; i++ {
 		builder.AppendNull()
 	}
@@ -272,7 +272,7 @@ func TestE2E_AllNulls(t *testing.T) {
 		t.Fatalf("Write failed: %v", err)
 	}
 
-	result, err := reader.ReadPage(pages[0], arrow.PrimInt32())
+	result, err := reader.ReadPage(pages[0], core.PrimInt32())
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
@@ -298,7 +298,7 @@ func TestE2E_BitPacking_Int32(t *testing.T) {
 	writer := NewPageWriter(factory)
 	reader := NewPageReader()
 
-	builder := arrow.NewInt32Builder()
+	builder := core.NewInt32Builder()
 	for _, v := range values {
 		builder.Append(v)
 	}
@@ -312,7 +312,7 @@ func TestE2E_BitPacking_Int32(t *testing.T) {
 	// 验证使用了 BitPacking 或其他编码
 	t.Logf("Encoding used: %v", pages[0].Encoding)
 
-	result, err := reader.ReadPage(pages[0], arrow.PrimInt32())
+	result, err := reader.ReadPage(pages[0], core.PrimInt32())
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
@@ -334,7 +334,7 @@ func TestE2E_RLE_LongRuns(t *testing.T) {
 	writer := NewPageWriter(factory)
 	reader := NewPageReader()
 
-	builder := arrow.NewInt32Builder()
+	builder := core.NewInt32Builder()
 	for _, v := range values {
 		builder.Append(v)
 	}
@@ -357,7 +357,7 @@ func TestE2E_RLE_LongRuns(t *testing.T) {
 		t.Logf("Warning: RLE compression ratio higher than expected: %.4f", ratio)
 	}
 
-	result, err := reader.ReadPage(pages[0], arrow.PrimInt32())
+	result, err := reader.ReadPage(pages[0], core.PrimInt32())
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
@@ -379,7 +379,7 @@ func TestE2E_Dictionary_LowCardinality(t *testing.T) {
 	writer := NewPageWriter(factory)
 	reader := NewPageReader()
 
-	builder := arrow.NewInt32Builder()
+	builder := core.NewInt32Builder()
 	for _, v := range values {
 		builder.Append(v)
 	}
@@ -401,7 +401,7 @@ func TestE2E_Dictionary_LowCardinality(t *testing.T) {
 		t.Logf("Warning: Dictionary compression ratio higher than expected: %.4f", ratio)
 	}
 
-	result, err := reader.ReadPage(pages[0], arrow.PrimInt32())
+	result, err := reader.ReadPage(pages[0], core.PrimInt32())
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
@@ -420,11 +420,11 @@ func TestE2E_MixedTypes(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := tmpDir + "/mixed.lance"
 
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "id", Type: arrow.PrimInt32(), Nullable: false},
-		{Name: "score", Type: arrow.PrimFloat64(), Nullable: true},
+	schema := core.NewSchema([]core.Field{
+		{Name: "id", Type: core.PrimInt32(), Nullable: false},
+		{Name: "score", Type: core.PrimFloat64(), Nullable: true},
 		// [REMOVED] PrimInt8() 未定义，移除或使用 PrimInt32() 代替
-		// {Name: "flag", Type: arrow.PrimInt8(), Nullable: false},
+		// {Name: "flag", Type: core.PrimInt8(), Nullable: false},
 	}, nil)
 
 	writer, err := NewWriter(filename, schema, encoding.NewEncoderFactory(3))
@@ -433,8 +433,8 @@ func TestE2E_MixedTypes(t *testing.T) {
 	}
 
 	// 构建数据 - 只使用 schema 中定义的列
-	idBuilder := arrow.NewInt32Builder()
-	scoreBuilder := arrow.NewFloat64Builder()
+	idBuilder := core.NewInt32Builder()
+	scoreBuilder := core.NewFloat64Builder()
 
 	for i := 0; i < 1000; i++ {
 		idBuilder.Append(int32(i))
@@ -448,7 +448,7 @@ func TestE2E_MixedTypes(t *testing.T) {
 	idArray := idBuilder.NewArray()
 	scoreArray := scoreBuilder.NewArray()
 
-	batch, _ := arrow.NewRecordBatch(schema, 1000, []arrow.Array{idArray, scoreArray})
+	batch, _ := core.NewRecordBatch(schema, 1000, []core.Array{idArray, scoreArray})
 	if err := writer.WriteRecordBatch(batch); err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
@@ -469,7 +469,7 @@ func TestE2E_CorruptedData(t *testing.T) {
 	reader := NewPageReader()
 
 	// 正常写入
-	builder := arrow.NewInt32Builder()
+	builder := core.NewInt32Builder()
 	for i := 0; i < 100; i++ {
 		builder.Append(int32(i))
 	}
@@ -492,7 +492,7 @@ func TestE2E_CorruptedData(t *testing.T) {
 	}
 
 	// 应该返回错误
-	_, err = reader.ReadPage(corruptedPage, arrow.PrimInt32())
+	_, err = reader.ReadPage(corruptedPage, core.PrimInt32())
 	if err == nil {
 		t.Error("Expected error for corrupted data")
 	}
@@ -511,7 +511,7 @@ func TestE2E_UnsupportedEncoding(t *testing.T) {
 		Data:        []byte{1, 2, 3, 4},
 	}
 
-	_, err := reader.ReadPage(invalidPage, arrow.PrimInt32())
+	_, err := reader.ReadPage(invalidPage, core.PrimInt32())
 	if err == nil {
 		t.Error("Expected error for unsupported encoding")
 	}
@@ -534,7 +534,7 @@ func TestE2E_LargePage(t *testing.T) {
 		values[i] = int32(i % 1000)
 	}
 
-	builder := arrow.NewInt32Builder()
+	builder := core.NewInt32Builder()
 	for _, v := range values {
 		builder.Append(v)
 	}
@@ -550,7 +550,7 @@ func TestE2E_LargePage(t *testing.T) {
 		t.Logf("Note: Produced %d pages for %d values", len(pages), n)
 	}
 
-	result, err := reader.ReadPage(pages[0], arrow.PrimInt32())
+	result, err := reader.ReadPage(pages[0], core.PrimInt32())
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
@@ -602,7 +602,7 @@ func BenchmarkE2E_EncodingComparison(b *testing.B) {
 			writer := NewPageWriter(factory)
 			reader := NewPageReader()
 
-			builder := arrow.NewInt32Builder()
+			builder := core.NewInt32Builder()
 			for _, v := range tc.values {
 				builder.Append(v)
 			}
@@ -612,7 +612,7 @@ func BenchmarkE2E_EncodingComparison(b *testing.B) {
 
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				reader.ReadPage(pages[0], arrow.PrimInt32())
+				reader.ReadPage(pages[0], core.PrimInt32())
 			}
 		})
 	}
@@ -629,9 +629,9 @@ func TestE2E_VectorColumn(t *testing.T) {
 
 	// 创建 768 维向量 schema（典型 Embedding 维度）
 	dim := 768
-	listType := arrow.FixedSizeListOf(arrow.PrimFloat32(), dim)
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "vector_id", Type: arrow.PrimInt32(), Nullable: false},
+	listType := core.FixedSizeListOf(core.PrimFloat32(), dim)
+	schema := core.NewSchema([]core.Field{
+		{Name: "vector_id", Type: core.PrimInt32(), Nullable: false},
 		{Name: "embedding", Type: listType, Nullable: false},
 	}, nil)
 
@@ -642,8 +642,8 @@ func TestE2E_VectorColumn(t *testing.T) {
 
 	// 构建向量数据（100 个向量）
 	numVectors := 100
-	idBuilder := arrow.NewInt32Builder()
-	childBuilder := arrow.NewFloat32Builder()
+	idBuilder := core.NewInt32Builder()
+	childBuilder := core.NewFloat32Builder()
 
 	// 同时构建预期的字节数据用于后续比较
 	expectedBytes := make([][]byte, numVectors)
@@ -668,9 +668,9 @@ func TestE2E_VectorColumn(t *testing.T) {
 
 	idArray := idBuilder.NewArray()
 	childArray := childBuilder.NewArray()
-	vectorArray := arrow.NewFixedSizeListArray(listType.(*arrow.FixedSizeListType), childArray, nil)
+	vectorArray := core.NewFixedSizeListArray(listType.(*core.FixedSizeListType), childArray, nil)
 
-	batch, _ := arrow.NewRecordBatch(schema, numVectors, []arrow.Array{idArray, vectorArray})
+	batch, _ := core.NewRecordBatch(schema, numVectors, []core.Array{idArray, vectorArray})
 	if err := writer.WriteRecordBatch(batch); err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
@@ -694,7 +694,7 @@ func TestE2E_VectorColumn(t *testing.T) {
 	}
 
 	// 验证 ID 列
-	resultID := result.Column(0).(*arrow.Int32Array)
+	resultID := result.Column(0).(*core.Int32Array)
 	for i := 0; i < numVectors; i++ {
 		if resultID.Value(i) != int32(i) {
 			t.Errorf("Vector ID mismatch at %d: expected %d, got %d", i, i, resultID.Value(i))
@@ -703,8 +703,8 @@ func TestE2E_VectorColumn(t *testing.T) {
 	}
 
 	// [FIXED] 使用字节级别比较，避免浮点精度问题
-	resultVector := result.Column(1).(*arrow.FixedSizeListArray)
-	resultValues := resultVector.Values().(*arrow.Float32Array)
+	resultVector := result.Column(1).(*core.FixedSizeListArray)
+	resultValues := resultVector.Values().(*core.Float32Array)
 
 	for i := 0; i < numVectors; i++ {
 		// 提取实际向量的字节表示
@@ -768,9 +768,9 @@ func TestE2E_MixedTypes_Fixed(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := tmpDir + "/mixed.lance"
 
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "id", Type: arrow.PrimInt32(), Nullable: false},
-		{Name: "score", Type: arrow.PrimFloat64(), Nullable: true},
+	schema := core.NewSchema([]core.Field{
+		{Name: "id", Type: core.PrimInt32(), Nullable: false},
+		{Name: "score", Type: core.PrimFloat64(), Nullable: true},
 	}, nil)
 
 	writer, err := NewWriter(filename, schema, encoding.NewEncoderFactory(3))
@@ -779,8 +779,8 @@ func TestE2E_MixedTypes_Fixed(t *testing.T) {
 	}
 
 	// 构建数据
-	idBuilder := arrow.NewInt32Builder()
-	scoreBuilder := arrow.NewFloat64Builder()
+	idBuilder := core.NewInt32Builder()
+	scoreBuilder := core.NewFloat64Builder()
 
 	for i := 0; i < 1000; i++ {
 		idBuilder.Append(int32(i))
@@ -794,7 +794,7 @@ func TestE2E_MixedTypes_Fixed(t *testing.T) {
 	idArray := idBuilder.NewArray()
 	scoreArray := scoreBuilder.NewArray()
 
-	batch, _ := arrow.NewRecordBatch(schema, 1000, []arrow.Array{idArray, scoreArray})
+	batch, _ := core.NewRecordBatch(schema, 1000, []core.Array{idArray, scoreArray})
 	if err := writer.WriteRecordBatch(batch); err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
@@ -825,7 +825,7 @@ func TestE2E_MixedTypes_Fixed(t *testing.T) {
 	}
 
 	// 验证 ID 列
-	resultID := result.Column(0).(*arrow.Int32Array)
+	resultID := result.Column(0).(*core.Int32Array)
 	for i := 0; i < 1000; i++ {
 		if resultID.Value(i) != int32(i) {
 			t.Errorf("ID mismatch at %d: expected %d, got %d", i, i, resultID.Value(i))
@@ -834,7 +834,7 @@ func TestE2E_MixedTypes_Fixed(t *testing.T) {
 	}
 
 	// 验证 Score 列（包括 null）
-	resultScore := result.Column(1).(*arrow.Float64Array)
+	resultScore := result.Column(1).(*core.Float64Array)
 	nullCount := 0
 	for i := 0; i < 1000; i++ {
 		if i%10 == 0 {
@@ -863,8 +863,8 @@ func TestE2E_Int64Type(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := tmpDir + "/int64.lance"
 
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "timestamp", Type: arrow.PrimInt64(), Nullable: false},
+	schema := core.NewSchema([]core.Field{
+		{Name: "timestamp", Type: core.PrimInt64(), Nullable: false},
 	}, nil)
 
 	writer, err := NewWriter(filename, schema, encoding.NewEncoderFactory(3))
@@ -873,14 +873,14 @@ func TestE2E_Int64Type(t *testing.T) {
 	}
 
 	// 构建 Int64 数据（时间戳）
-	builder := arrow.NewInt64Builder()
+	builder := core.NewInt64Builder()
 	now := int64(1704067200000) // 2024-01-01 00:00:00 UTC in ms
 	for i := 0; i < 1000; i++ {
 		builder.Append(now + int64(i)*1000) // 每秒一个
 	}
 	array := builder.NewArray()
 
-	batch, _ := arrow.NewRecordBatch(schema, 1000, []arrow.Array{array})
+	batch, _ := core.NewRecordBatch(schema, 1000, []core.Array{array})
 	if err := writer.WriteRecordBatch(batch); err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
@@ -899,7 +899,7 @@ func TestE2E_Int64Type(t *testing.T) {
 		t.Fatalf("Read failed: %v", err)
 	}
 
-	resultArray := result.Column(0).(*arrow.Int64Array)
+	resultArray := result.Column(0).(*core.Int64Array)
 	for i := 0; i < 1000; i++ {
 		expected := now + int64(i)*1000
 		if resultArray.Value(i) != expected {
@@ -914,8 +914,8 @@ func TestE2E_Float64Type(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := tmpDir + "/float64.lance"
 
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "measurement", Type: arrow.PrimFloat64(), Nullable: true},
+	schema := core.NewSchema([]core.Field{
+		{Name: "measurement", Type: core.PrimFloat64(), Nullable: true},
 	}, nil)
 
 	writer, err := NewWriter(filename, schema, encoding.NewEncoderFactory(3))
@@ -924,7 +924,7 @@ func TestE2E_Float64Type(t *testing.T) {
 	}
 
 	// 构建 Float64 数据（高精度测量值）
-	builder := arrow.NewFloat64Builder()
+	builder := core.NewFloat64Builder()
 	for i := 0; i < 1000; i++ {
 		if i%20 == 0 {
 			builder.AppendNull()
@@ -934,7 +934,7 @@ func TestE2E_Float64Type(t *testing.T) {
 	}
 	array := builder.NewArray()
 
-	batch, _ := arrow.NewRecordBatch(schema, 1000, []arrow.Array{array})
+	batch, _ := core.NewRecordBatch(schema, 1000, []core.Array{array})
 	if err := writer.WriteRecordBatch(batch); err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
@@ -953,7 +953,7 @@ func TestE2E_Float64Type(t *testing.T) {
 		t.Fatalf("Read failed: %v", err)
 	}
 
-	resultArray := result.Column(0).(*arrow.Float64Array)
+	resultArray := result.Column(0).(*core.Float64Array)
 	nullCount := 0
 	for i := 0; i < 1000; i++ {
 		if i%20 == 0 {
@@ -985,7 +985,7 @@ func TestE2E_PartialNulls(t *testing.T) {
 	writer := NewPageWriter(factory)
 	reader := NewPageReader()
 
-	builder := arrow.NewInt32Builder()
+	builder := core.NewInt32Builder()
 
 	// 创建模式：valid, null, valid, null, ...
 	for i := 0; i < 100; i++ {
@@ -1002,7 +1002,7 @@ func TestE2E_PartialNulls(t *testing.T) {
 		t.Fatalf("Write failed: %v", err)
 	}
 
-	result, err := reader.ReadPage(pages[0], arrow.PrimInt32())
+	result, err := reader.ReadPage(pages[0], core.PrimInt32())
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
@@ -1013,7 +1013,7 @@ func TestE2E_PartialNulls(t *testing.T) {
 			if !result.IsValid(i) {
 				t.Errorf("Expected valid at index %d", i)
 			}
-			if result.(*arrow.Int32Array).Value(i) != int32(i) {
+			if result.(*core.Int32Array).Value(i) != int32(i) {
 				t.Errorf("Value mismatch at %d", i)
 			}
 		} else {
@@ -1037,7 +1037,7 @@ func TestE2E_EncodingSelection(t *testing.T) {
 			values[i] = int32(i / 100) // 10 个值，每个重复 100 次
 		}
 
-		builder := arrow.NewInt32Builder()
+		builder := core.NewInt32Builder()
 		for _, v := range values {
 			builder.Append(v)
 		}
@@ -1052,7 +1052,7 @@ func TestE2E_EncodingSelection(t *testing.T) {
 		t.Logf("Encoding used for long runs: %v", pages[0].Encoding)
 
 		// 验证能正确读取即可
-		result, err := reader.ReadPage(pages[0], arrow.PrimInt32())
+		result, err := reader.ReadPage(pages[0], core.PrimInt32())
 		if err != nil {
 			t.Fatalf("Read failed: %v", err)
 		}
@@ -1069,7 +1069,7 @@ func TestE2E_EncodingSelection(t *testing.T) {
 			values[i] = int32(i % 3) // 只有 3 个唯一值
 		}
 
-		builder := arrow.NewInt32Builder()
+		builder := core.NewInt32Builder()
 		for _, v := range values {
 			builder.Append(v)
 		}
@@ -1087,7 +1087,7 @@ func TestE2E_EncodingSelection(t *testing.T) {
 			t.Logf("Note: Expected Dictionary, got %v (may use fallback)", pages[0].Encoding)
 		}
 
-		result, err := reader.ReadPage(pages[0], arrow.PrimInt32())
+		result, err := reader.ReadPage(pages[0], core.PrimInt32())
 		if err != nil {
 			t.Fatalf("Read failed: %v", err)
 		}
@@ -1103,10 +1103,10 @@ func TestE2E_WriterReaderRoundtrip(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := tmpDir + "/roundtrip.lance"
 
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "id", Type: arrow.PrimInt32(), Nullable: false},
-		{Name: "value", Type: arrow.PrimFloat64(), Nullable: true},
-		{Name: "flag", Type: arrow.PrimInt64(), Nullable: false},
+	schema := core.NewSchema([]core.Field{
+		{Name: "id", Type: core.PrimInt32(), Nullable: false},
+		{Name: "value", Type: core.PrimFloat64(), Nullable: true},
+		{Name: "flag", Type: core.PrimInt64(), Nullable: false},
 	}, nil)
 
 	// 写入数据
@@ -1115,11 +1115,11 @@ func TestE2E_WriterReaderRoundtrip(t *testing.T) {
 		t.Fatalf("NewWriter failed: %v", err)
 	}
 
-	var batches []*arrow.RecordBatch
+	var batches []*core.RecordBatch
 	for batchNum := 0; batchNum < 5; batchNum++ {
-		idBuilder := arrow.NewInt32Builder()
-		valueBuilder := arrow.NewFloat64Builder()
-		flagBuilder := arrow.NewInt64Builder()
+		idBuilder := core.NewInt32Builder()
+		valueBuilder := core.NewFloat64Builder()
+		flagBuilder := core.NewInt64Builder()
 
 		for i := 0; i < 100; i++ {
 			idBuilder.Append(int32(batchNum*100 + i))
@@ -1131,7 +1131,7 @@ func TestE2E_WriterReaderRoundtrip(t *testing.T) {
 			flagBuilder.Append(int64(batchNum*100 + i))
 		}
 
-		batch, _ := arrow.NewRecordBatch(schema, 100, []arrow.Array{
+		batch, _ := core.NewRecordBatch(schema, 100, []core.Array{
 			idBuilder.NewArray(),
 			valueBuilder.NewArray(),
 			flagBuilder.NewArray(),
@@ -1164,7 +1164,7 @@ func TestE2E_WriterReaderRoundtrip(t *testing.T) {
 	// 验证所有数据
 	for i := 0; i < 500; i++ {
 		expectedID := int32(i)
-		if result.Column(0).(*arrow.Int32Array).Value(i) != expectedID {
+		if result.Column(0).(*core.Int32Array).Value(i) != expectedID {
 			t.Errorf("ID mismatch at %d", i)
 			break
 		}
@@ -1181,7 +1181,7 @@ func TestE2E_PageMetadata(t *testing.T) {
 		values[i] = int32(i)
 	}
 
-	builder := arrow.NewInt32Builder()
+	builder := core.NewInt32Builder()
 	for _, v := range values {
 		builder.Append(v)
 	}

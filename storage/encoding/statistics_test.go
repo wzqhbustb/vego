@@ -4,7 +4,7 @@ package encoding
 
 import (
 	"math"
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"testing"
 	"time"
 )
@@ -45,11 +45,11 @@ func TestComputeStatistics_Int32(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var array arrow.Array
+			var array core.Array
 			if tt.nulls != nil {
-				array = arrow.NewInt32Array(tt.values, newBitmapFromBools(tt.nulls))
+				array = core.NewInt32Array(tt.values, newBitmapFromBools(tt.nulls))
 			} else {
-				array = arrow.NewInt32Array(tt.values, nil)
+				array = core.NewInt32Array(tt.values, nil)
 			}
 
 			stats := ComputeStatistics(array)
@@ -73,7 +73,7 @@ func TestComputeStatistics_Int32(t *testing.T) {
 			}
 
 			// Check DataType
-			if stats.DataType != arrow.INT32 {
+			if stats.DataType != core.INT32 {
 				t.Errorf("DataType = %v, want INT32", stats.DataType)
 			}
 
@@ -92,7 +92,7 @@ func TestComputeStatistics_Int32(t *testing.T) {
 
 func TestComputeStatistics_Int64(t *testing.T) {
 	values := []int64{100, 200, 300, 400, 500}
-	array := arrow.NewInt64Array(values, nil)
+	array := core.NewInt64Array(values, nil)
 
 	stats := ComputeStatistics(array)
 
@@ -104,7 +104,7 @@ func TestComputeStatistics_Int64(t *testing.T) {
 		t.Errorf("NumValues = %d, want %d", stats.NumValues, len(values))
 	}
 
-	if stats.DataType != arrow.INT64 {
+	if stats.DataType != core.INT64 {
 		t.Errorf("DataType = %v, want INT64", stats.DataType)
 	}
 
@@ -161,7 +161,7 @@ func TestComputeStatistics_BitWidth(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			array := arrow.NewInt32Array(tt.values, nil)
+			array := core.NewInt32Array(tt.values, nil)
 			stats := ComputeStatistics(array)
 
 			if err := stats.Validate(); err != nil {
@@ -187,7 +187,7 @@ func TestComputeStatistics_BitWidth_LargeArray(t *testing.T) {
 		values[i] = int32(i % 256) // Values 0-255
 	}
 
-	array := arrow.NewInt32Array(values, nil)
+	array := core.NewInt32Array(values, nil)
 	stats := ComputeStatistics(array)
 
 	if err := stats.Validate(); err != nil {
@@ -224,7 +224,7 @@ func TestComputeStatistics_BitWidth_VeryLargeArray(t *testing.T) {
 		values[i] = int32(i % 128)
 	}
 
-	array := arrow.NewInt32Array(values, nil)
+	array := core.NewInt32Array(values, nil)
 	stats := ComputeStatistics(array)
 
 	if err := stats.Validate(); err != nil {
@@ -248,7 +248,7 @@ func TestComputeStatistics_BitWidth_VeryLargeArray(t *testing.T) {
 
 func TestComputeStatistics_Float32(t *testing.T) {
 	values := []float32{1.0, 2.0, 3.0, 4.0, 5.0}
-	array := arrow.NewFloat32Array(values, nil)
+	array := core.NewFloat32Array(values, nil)
 
 	stats := ComputeStatistics(array)
 
@@ -260,7 +260,7 @@ func TestComputeStatistics_Float32(t *testing.T) {
 		t.Errorf("NumValues = %d, want %d", stats.NumValues, len(values))
 	}
 
-	if stats.DataType != arrow.FLOAT32 {
+	if stats.DataType != core.FLOAT32 {
 		t.Errorf("DataType = %v, want FLOAT32", stats.DataType)
 	}
 
@@ -292,7 +292,7 @@ func TestComputeStatistics_Float32_NaN(t *testing.T) {
 		float32(math.NaN()),
 		3.0,
 	}
-	array := arrow.NewFloat32Array(values, nil)
+	array := core.NewFloat32Array(values, nil)
 
 	stats := ComputeStatistics(array)
 
@@ -320,7 +320,7 @@ func TestComputeStatistics_Float32_Infinity(t *testing.T) {
 		0.0,
 		float32(math.Inf(1)), // +Inf again
 	}
-	array := arrow.NewFloat32Array(values, nil)
+	array := core.NewFloat32Array(values, nil)
 
 	stats := ComputeStatistics(array)
 
@@ -341,7 +341,7 @@ func TestComputeStatistics_Float32_Infinity(t *testing.T) {
 
 func TestComputeStatistics_Float64(t *testing.T) {
 	values := []float64{1.5, 2.5, 3.5, 4.5, 5.5}
-	array := arrow.NewFloat64Array(values, nil)
+	array := core.NewFloat64Array(values, nil)
 
 	stats := ComputeStatistics(array)
 
@@ -349,7 +349,7 @@ func TestComputeStatistics_Float64(t *testing.T) {
 		t.Fatalf("Validation failed: %v", err)
 	}
 
-	if stats.DataType != arrow.FLOAT64 {
+	if stats.DataType != core.FLOAT64 {
 		t.Errorf("DataType = %v, want FLOAT64", stats.DataType)
 	}
 
@@ -396,7 +396,7 @@ func TestComputeRunRatio(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			array := arrow.NewInt32Array(tt.values, nil)
+			array := core.NewInt32Array(tt.values, nil)
 			stats := ComputeStatistics(array)
 
 			ratio := stats.GetRunRatio()
@@ -446,7 +446,7 @@ func TestComputeCardinality(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			array := arrow.NewInt32Array(tt.values, nil)
+			array := core.NewInt32Array(tt.values, nil)
 			stats := ComputeStatistics(array)
 
 			if stats.Cardinality == nil {
@@ -489,7 +489,7 @@ func TestComputeCardinalityRatio(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			array := arrow.NewInt32Array(tt.values, nil)
+			array := core.NewInt32Array(tt.values, nil)
 			stats := ComputeStatistics(array)
 
 			ratio := stats.GetCardinalityRatio()
@@ -507,7 +507,7 @@ func TestComputeCardinalityRatio(t *testing.T) {
 func TestBytePositionEntropy(t *testing.T) {
 	// Test with sequential integers
 	values := makeSequence(0, 100)
-	array := arrow.NewInt32Array(values, nil)
+	array := core.NewInt32Array(values, nil)
 
 	stats := ComputeStatistics(array)
 
@@ -533,7 +533,7 @@ func TestBytePositionEntropy_Float32(t *testing.T) {
 	for i := range values {
 		values[i] = float32(i) + 0.5 // Similar magnitude
 	}
-	array := arrow.NewFloat32Array(values, nil)
+	array := core.NewFloat32Array(values, nil)
 
 	stats := ComputeStatistics(array)
 
@@ -579,11 +579,11 @@ func TestComputeStatistics_NullCount(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var array arrow.Array
+			var array core.Array
 			if tt.nulls != nil {
-				array = arrow.NewInt32Array(tt.values, newBitmapFromBools(tt.nulls))
+				array = core.NewInt32Array(tt.values, newBitmapFromBools(tt.nulls))
 			} else {
-				array = arrow.NewInt32Array(tt.values, nil)
+				array = core.NewInt32Array(tt.values, nil)
 			}
 
 			stats := ComputeStatistics(array)
@@ -609,7 +609,7 @@ func TestComputeStatistics_NullCount(t *testing.T) {
 // ====================
 
 func TestComputeStatistics_EmptyArray(t *testing.T) {
-	array := arrow.NewInt32Array([]int32{}, nil)
+	array := core.NewInt32Array([]int32{}, nil)
 	stats := ComputeStatistics(array)
 
 	if err := stats.Validate(); err != nil {
@@ -626,7 +626,7 @@ func TestComputeStatistics_EmptyArray(t *testing.T) {
 }
 
 func TestComputeStatistics_SingleValue(t *testing.T) {
-	array := arrow.NewInt32Array([]int32{42}, nil)
+	array := core.NewInt32Array([]int32{42}, nil)
 	stats := ComputeStatistics(array)
 
 	if err := stats.Validate(); err != nil {
@@ -656,9 +656,9 @@ func TestComputeStatistics_FixedSizeList(t *testing.T) {
 		flatValues = append(flatValues, vec...)
 	}
 
-	valuesArray := arrow.NewFloat32Array(flatValues, nil)
-	fslType := arrow.FixedSizeListOf(arrow.PrimFloat32(), 3).(*arrow.FixedSizeListType)
-	array := arrow.NewFixedSizeListArray(fslType, valuesArray, nil)
+	valuesArray := core.NewFloat32Array(flatValues, nil)
+	fslType := core.FixedSizeListOf(core.PrimFloat32(), 3).(*core.FixedSizeListType)
+	array := core.NewFixedSizeListArray(fslType, valuesArray, nil)
 
 	stats := ComputeStatistics(array)
 
@@ -779,7 +779,7 @@ func TestStatistics_Clone(t *testing.T) {
 	// Test full clone
 	original := &Statistics{
 		NumValues:  100,
-		DataType:   arrow.INT32,
+		DataType:   core.INT32,
 		ComputedAt: time.Now(),
 		IsComplete: true,
 	}
@@ -852,7 +852,7 @@ func makeSequence(start, count int) []int32 {
 
 func BenchmarkComputeStatistics_Int32_Small(b *testing.B) {
 	values := makeSequence(0, 100)
-	array := arrow.NewInt32Array(values, nil)
+	array := core.NewInt32Array(values, nil)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -862,7 +862,7 @@ func BenchmarkComputeStatistics_Int32_Small(b *testing.B) {
 
 func BenchmarkComputeStatistics_Int32_Medium(b *testing.B) {
 	values := makeSequence(0, 10000)
-	array := arrow.NewInt32Array(values, nil)
+	array := core.NewInt32Array(values, nil)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -872,7 +872,7 @@ func BenchmarkComputeStatistics_Int32_Medium(b *testing.B) {
 
 func BenchmarkComputeStatistics_Int32_Large(b *testing.B) {
 	values := makeSequence(0, 100000)
-	array := arrow.NewInt32Array(values, nil)
+	array := core.NewInt32Array(values, nil)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -885,7 +885,7 @@ func BenchmarkComputeStatistics_Float32(b *testing.B) {
 	for i := range values {
 		values[i] = float32(i) * 0.1
 	}
-	array := arrow.NewFloat32Array(values, nil)
+	array := core.NewFloat32Array(values, nil)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -932,8 +932,8 @@ func BenchmarkUniformSampleIndices(b *testing.B) {
 // Helper function to create bitmap from boolean slice
 // true = value is valid (bit set to 1)
 // false = value is null (bit set to 0)
-func newBitmapFromBools(validBits []bool) *arrow.Bitmap {
-	bm := arrow.NewBitmap(len(validBits))
+func newBitmapFromBools(validBits []bool) *core.Bitmap {
+	bm := core.NewBitmap(len(validBits))
 	for i, valid := range validBits {
 		if valid {
 			bm.Set(i)

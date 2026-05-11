@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/format"
 )
 
@@ -25,7 +25,7 @@ func TestBSSEncoder_Encode_Float32(t *testing.T) {
 	for i := range values {
 		values[i] = float32(i) * 0.001
 	}
-	array := arrow.NewFloat32Array(values, nil)
+	array := core.NewFloat32Array(values, nil)
 
 	encoded, err := encoder.Encode(array)
 	if err != nil {
@@ -37,12 +37,12 @@ func TestBSSEncoder_Encode_Float32(t *testing.T) {
 	}
 
 	// 解码验证
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimFloat32(), nil, encoded.NumValues)
+	decoded, err := decoder.Decode(encoded.Data, core.PrimFloat32(), nil, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
 
-	result := decoded.(*arrow.Float32Array)
+	result := decoded.(*core.Float32Array)
 	if result.Len() != len(values) {
 		t.Errorf("Expected %d values, got %d", len(values), result.Len())
 	}
@@ -74,19 +74,19 @@ func TestBSSEncoder_Encode_Float64(t *testing.T) {
 	for i := range values {
 		values[i] = float64(i) * 0.0001
 	}
-	array := arrow.NewFloat64Array(values, nil)
+	array := core.NewFloat64Array(values, nil)
 
 	encoded, err := encoder.Encode(array)
 	if err != nil {
 		t.Fatalf("Encode failed: %v", err)
 	}
 
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimFloat64(), nil, encoded.NumValues)
+	decoded, err := decoder.Decode(encoded.Data, core.PrimFloat64(), nil, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
 
-	result := decoded.(*arrow.Float64Array)
+	result := decoded.(*core.Float64Array)
 	for i := 0; i < len(values); i++ {
 		if result.Value(i) != values[i] {
 			t.Errorf("Value mismatch at %d", i)
@@ -99,7 +99,7 @@ func TestBSSEncoder_WithNulls(t *testing.T) {
 	encoder := NewBSSEncoder()
 	decoder := NewBSSDecoder()
 
-	builder := arrow.NewFloat32Builder()
+	builder := core.NewFloat32Builder()
 	for i := 0; i < 10; i++ {
 		if i%2 == 0 {
 			builder.Append(float32(i))
@@ -122,12 +122,12 @@ func TestBSSEncoder_WithNulls(t *testing.T) {
 	}
 
 	// 解码并验证
-	decoded, err := decoder.Decode(encoded.Data, arrow.PrimFloat32(), encoded.NullBitmap, encoded.NumValues)
+	decoded, err := decoder.Decode(encoded.Data, core.PrimFloat32(), encoded.NullBitmap, encoded.NumValues)
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
 	}
 
-	result := decoded.(*arrow.Float32Array)
+	result := decoded.(*core.Float32Array)
 	if result.Len() != 10 {
 		t.Fatalf("Expected 10 values, got %d", result.Len())
 	}
@@ -155,7 +155,7 @@ func TestBSSEncoder_UnsupportedType(t *testing.T) {
 
 	// Int32 不支持
 	values := []int32{1, 2, 3}
-	array := arrow.NewInt32Array(values, nil)
+	array := core.NewInt32Array(values, nil)
 
 	_, err := encoder.Encode(array)
 	if err == nil {
@@ -167,7 +167,7 @@ func TestBSSEncoder_EmptyArray(t *testing.T) {
 	encoder := NewBSSEncoder()
 
 	values := []float32{}
-	array := arrow.NewFloat32Array(values, nil)
+	array := core.NewFloat32Array(values, nil)
 
 	_, err := encoder.Encode(array)
 	if err != ErrEmptyArray {
@@ -178,13 +178,13 @@ func TestBSSEncoder_EmptyArray(t *testing.T) {
 func TestBSSEncoder_SupportsType(t *testing.T) {
 	encoder := NewBSSEncoder()
 
-	if !encoder.SupportsType(arrow.PrimFloat32()) {
+	if !encoder.SupportsType(core.PrimFloat32()) {
 		t.Error("Should support Float32")
 	}
-	if !encoder.SupportsType(arrow.PrimFloat64()) {
+	if !encoder.SupportsType(core.PrimFloat64()) {
 		t.Error("Should support Float64")
 	}
-	if encoder.SupportsType(arrow.PrimInt32()) {
+	if encoder.SupportsType(core.PrimInt32()) {
 		t.Error("Should not support Int32")
 	}
 }
@@ -193,7 +193,7 @@ func TestBSSEncoder_EstimateSize(t *testing.T) {
 	encoder := NewBSSEncoder()
 
 	values := make([]float32, 100)
-	array := arrow.NewFloat32Array(values, nil)
+	array := core.NewFloat32Array(values, nil)
 
 	estimated := encoder.EstimateSize(array)
 	// 100 floats * 4 bytes = 400 bytes
@@ -208,7 +208,7 @@ func BenchmarkBSSEncoder_Encode_Float32(b *testing.B) {
 	for i := range values {
 		values[i] = float32(i) * 0.001
 	}
-	array := arrow.NewFloat32Array(values, nil)
+	array := core.NewFloat32Array(values, nil)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -222,13 +222,13 @@ func BenchmarkBSSDecoder_Decode_Float32(b *testing.B) {
 	for i := range values {
 		values[i] = float32(i) * 0.001
 	}
-	array := arrow.NewFloat32Array(values, nil)
+	array := core.NewFloat32Array(values, nil)
 	encoded, _ := encoder.Encode(array)
 
 	decoder := NewBSSDecoder()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		decoder.Decode(encoded.Data, arrow.PrimFloat32(), nil, encoded.NumValues)
+		decoder.Decode(encoded.Data, core.PrimFloat32(), nil, encoded.NumValues)
 	}
 }

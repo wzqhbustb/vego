@@ -6,11 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"strconv"
 	"strings"
 
-	lerrors "github.com/wzqhbustb/vego/storage/errors"
 )
 
 // Header represents the Lance file header
@@ -18,7 +17,7 @@ type Header struct {
 	Magic      uint32        // Magic number (0x4C414E43)
 	Version    uint16        // File format version
 	Flags      uint16        // Feature flags
-	Schema     *arrow.Schema // Arrow schema
+	Schema     *core.Schema // Arrow schema
 	NumRows    int64         // Total number of rows
 	NumColumns int32         // Number of columns
 	PageSize   int32         // Default page size
@@ -36,7 +35,7 @@ const (
 )
 
 // NewHeader creates a new header
-func NewHeader(schema *arrow.Schema, numRows int64) *Header {
+func NewHeader(schema *core.Schema, numRows int64) *Header {
 	return &Header{
 		Magic:      MagicNumber,
 		Version:    CurrentVersion,
@@ -67,23 +66,23 @@ func (h *Header) Validate() error {
 		return err
 	}
 	if h.Schema == nil {
-		return lerrors.New(lerrors.ErrInvalidArgument).
+		return core.New(core.ErrInvalidArgument).
 			Op("validate_header").
 			Context("field", "schema").
 			Context("message", "schema is nil").
 			Build()
 	}
 	if h.NumRows < 0 {
-		return lerrors.ValidationFailed("validate_header", "",
+		return core.ValidationFailed("validate_header", "",
 			fmt.Sprintf("invalid row count: %d", h.NumRows))
 	}
 	if h.NumColumns != int32(h.Schema.NumFields()) {
-		return lerrors.SchemaMismatch("", "column_count",
+		return core.SchemaMismatch("", "column_count",
 			fmt.Sprintf("%d", h.Schema.NumFields()),
 			fmt.Sprintf("%d", h.NumColumns))
 	}
 	if h.PageSize <= 0 || h.PageSize > MaxPageSize {
-		return lerrors.ValidationFailed("validate_header", "",
+		return core.ValidationFailed("validate_header", "",
 			fmt.Sprintf("invalid page size: %d (must be <= %d)", h.PageSize, MaxPageSize))
 	}
 	return nil
@@ -117,7 +116,7 @@ func (h *Header) WriteTo(w io.Writer) (int64, error) {
 
 	// Validate schema size before writing
 	if len(schemaJSON) > MaxSchemaSize {
-		return 0, lerrors.New(lerrors.ErrMetadataError).
+		return 0, core.New(core.ErrMetadataError).
 			Op("write_header").
 			Context("field", "schema").
 			Context("size", len(schemaJSON)).
@@ -170,7 +169,7 @@ func (h *Header) ReadFrom(r io.Reader) (int64, error) {
 
 	// Validate schema length using constant
 	if schemaLen < 0 || schemaLen > MaxSchemaSize {
-		return int64(n) + 4, lerrors.New(lerrors.ErrMetadataError).
+		return int64(n) + 4, core.New(core.ErrMetadataError).
 			Op("read_header").
 			Context("field", "schema").
 			Context("schema_length", schemaLen).
@@ -195,7 +194,7 @@ func (h *Header) ReadFrom(r io.Reader) (int64, error) {
 }
 
 // serializeSchemaToJSON with proper escaping
-func serializeSchemaToJSON(schema *arrow.Schema) []byte {
+func serializeSchemaToJSON(schema *core.Schema) []byte {
 	// Use standard json.Marshal for safety
 	type fieldJSON struct {
 		Name     string `json:"name"`
@@ -228,21 +227,21 @@ func serializeSchemaToJSON(schema *arrow.Schema) []byte {
 }
 
 // serializeTypeName converts DataType to string representation
-func serializeTypeName(dt arrow.DataType) string {
+func serializeTypeName(dt core.DataType) string {
 	switch t := dt.(type) {
-	case *arrow.Int32Type:
+	case *core.Int32Type:
 		return "int32"
-	case *arrow.Int64Type:
+	case *core.Int64Type:
 		return "int64"
-	case *arrow.Float32Type:
+	case *core.Float32Type:
 		return "float32"
-	case *arrow.Float64Type:
+	case *core.Float64Type:
 		return "float64"
-	case *arrow.BinaryType:
+	case *core.BinaryType:
 		return "binary"
-	case *arrow.StringType:
+	case *core.StringType:
 		return "string"
-	case *arrow.FixedSizeListType:
+	case *core.FixedSizeListType:
 		elemType := serializeTypeName(t.Elem())
 		return fmt.Sprintf("fixed_size_list[%d]<%s>", t.Size(), elemType)
 	default:
@@ -250,7 +249,7 @@ func serializeTypeName(dt arrow.DataType) string {
 	}
 }
 
-func deserializeSchemaFromJSON(data []byte) (*arrow.Schema, error) {
+func deserializeSchemaFromJSON(data []byte) (*core.Schema, error) {
 	// Parse JSON structure
 	var schemaJSON struct {
 		Fields []struct {
@@ -262,23 +261,23 @@ func deserializeSchemaFromJSON(data []byte) (*arrow.Schema, error) {
 	}
 
 	if err := json.Unmarshal(data, &schemaJSON); err != nil {
-		return nil, lerrors.MetadataError("deserialize_schema", "", "json_parse", err)
+		return nil, core.MetadataError("deserialize_schema", "", "json_parse", err)
 	}
 
 	if len(schemaJSON.Fields) == 0 {
-		return nil, lerrors.New(lerrors.ErrMetadataError).
+		return nil, core.New(core.ErrMetadataError).
 			Op("deserialize_schema").
 			Context("field", "fields").
 			Context("message", "schema has no fields").
 			Build()
 	}
 
-	// Convert JSON fields to arrow.Field
-	fields := make([]arrow.Field, len(schemaJSON.Fields)) // 注意：不是指针切片
+	// Convert JSON fields to core.Field
+	fields := make([]core.Field, len(schemaJSON.Fields)) // 注意：不是指针切片
 	for i, f := range schemaJSON.Fields {
 		dataType, err := parseDataType(f.Type)
 		if err != nil {
-			return nil, lerrors.New(lerrors.ErrMetadataError).
+			return nil, core.New(core.ErrMetadataError).
 				Op("deserialize_schema").
 				Context("field", f.Name).
 				Context("error_phase", "type_parsing").
@@ -286,7 +285,7 @@ func deserializeSchemaFromJSON(data []byte) (*arrow.Schema, error) {
 				Build()
 		}
 
-		fields[i] = arrow.Field{
+		fields[i] = core.Field{
 			Name:     f.Name,
 			Type:     dataType,
 			Nullable: f.Nullable,
@@ -295,27 +294,27 @@ func deserializeSchemaFromJSON(data []byte) (*arrow.Schema, error) {
 	}
 
 	// Create schema with metadata using constructor
-	schema := arrow.NewSchema(fields, schemaJSON.Metadata)
+	schema := core.NewSchema(fields, schemaJSON.Metadata)
 
 	return schema, nil
 }
 
-// parseDataType parses a type string to arrow.DataType
-func parseDataType(typeStr string) (arrow.DataType, error) {
+// parseDataType parses a type string to core.DataType
+func parseDataType(typeStr string) (core.DataType, error) {
 	// Handle basic types
 	switch typeStr {
 	case "int32":
-		return arrow.PrimInt32(), nil
+		return core.PrimInt32(), nil
 	case "int64":
-		return arrow.PrimInt64(), nil
+		return core.PrimInt64(), nil
 	case "float32":
-		return arrow.PrimFloat32(), nil
+		return core.PrimFloat32(), nil
 	case "float64":
-		return arrow.PrimFloat64(), nil
+		return core.PrimFloat64(), nil
 	case "binary":
-		return arrow.PrimBinary(), nil
+		return core.PrimBinary(), nil
 	case "string", "utf8":
-		return arrow.PrimString(), nil
+		return core.PrimString(), nil
 	}
 
 	// Handle FixedSizeList (e.g., "fixed_size_list[768]<float32>")
@@ -323,29 +322,29 @@ func parseDataType(typeStr string) (arrow.DataType, error) {
 		return parseFixedSizeListType(typeStr)
 	}
 
-	return nil, lerrors.UnsupportedType("parse_data_type", typeStr, "")
+	return nil, core.UnsupportedType("parse_data_type", typeStr, "")
 }
 
 // parseFixedSizeListType parses "fixed_size_list[768]<float32>" format
-func parseFixedSizeListType(typeStr string) (arrow.DataType, error) {
+func parseFixedSizeListType(typeStr string) (core.DataType, error) {
 	// Extract size: "fixed_size_list[768]<float32>" -> 768
 	sizeStart := strings.Index(typeStr, "[")
 	sizeEnd := strings.Index(typeStr, "]")
 	if sizeStart == -1 || sizeEnd == -1 {
-		return nil, lerrors.ValidationFailed("parse_fixed_size_list", "",
+		return nil, core.ValidationFailed("parse_fixed_size_list", "",
 			fmt.Sprintf("invalid format: %s", typeStr))
 	}
 
 	sizeStr := typeStr[sizeStart+1 : sizeEnd]
 	size, err := strconv.Atoi(sizeStr)
 	if err != nil {
-		return nil, lerrors.ValidationFailed("parse_fixed_size_list", "",
+		return nil, core.ValidationFailed("parse_fixed_size_list", "",
 			fmt.Sprintf("invalid list size format: %s", sizeStr))
 	}
 
 	// Validate size range
 	if size <= 0 || size > MaxVectorDimension {
-		return nil, lerrors.ValidationFailed("parse_fixed_size_list", "",
+		return nil, core.ValidationFailed("parse_fixed_size_list", "",
 			fmt.Sprintf("size %d out of range [1, %d]", size, MaxVectorDimension))
 	}
 
@@ -353,14 +352,14 @@ func parseFixedSizeListType(typeStr string) (arrow.DataType, error) {
 	elemStart := strings.Index(typeStr, "<")
 	elemEnd := strings.Index(typeStr, ">")
 	if elemStart == -1 || elemEnd == -1 {
-		return nil, lerrors.ValidationFailed("parse_fixed_size_list", "",
+		return nil, core.ValidationFailed("parse_fixed_size_list", "",
 			fmt.Sprintf("invalid format: %s", typeStr))
 	}
 
 	elemTypeStr := typeStr[elemStart+1 : elemEnd]
 	elemType, err := parseDataType(elemTypeStr)
 	if err != nil {
-		return nil, lerrors.New(lerrors.ErrUnsupportedType).
+		return nil, core.New(core.ErrUnsupportedType).
 			Op("parse_fixed_size_list").
 			Context("phase", "element_type").
 			Wrap(err).
@@ -368,5 +367,5 @@ func parseFixedSizeListType(typeStr string) (arrow.DataType, error) {
 	}
 
 	// 使用构造函数创建
-	return arrow.FixedSizeListOf(elemType, size), nil
+	return core.FixedSizeListOf(elemType, size), nil
 }

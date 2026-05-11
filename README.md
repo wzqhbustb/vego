@@ -501,20 +501,38 @@ coll2, _ := db2.Collection("documents")
 For direct HNSW index access (advanced use cases):
 
 ```go
-// Save index to disk
-err := index.SaveToLance("./my_index")
-if err != nil {
-    panic(err)
-}
+import (
+    hnsw "github.com/wzqhbustb/vego/index"
+    "github.com/wzqhbustb/vego/storage/column"
+    "github.com/wzqhbustb/vego/storage/encoding"
+)
 
-// Load index from disk
-loadedIndex, err := hnsw.LoadHNSWFromLance("./my_index")
-if err != nil {
-    panic(err)
-}
+// Serialize nodes to RecordBatch
+nodesBatch, _ := index.MarshalNodes()
+connBatch, _ := index.MarshalConnections()
+metaBatch, _ := index.MarshalMetadata()
 
-// Continue using loaded index
-results, _ := loadedIndex.Search(query, 10, 0)
+// Persist using column.Writer
+writer, _ := column.NewWriter("nodes.lance", nodesBatch.Schema(),
+    encoding.NewEncoderFactory(3))
+writer.WriteRecordBatch(nodesBatch)
+writer.Close()
+
+// Load back
+reader, _ := column.NewReader("metadata.lance")
+metaBatch, _ := reader.ReadRecordBatch()
+reader.Close()
+metadata, _ := hnsw.UnmarshalMetadata(metaBatch)
+
+config := hnsw.Config{M: int(metadata[0]), Dimension: int(metadata[4])}
+loadedIndex := hnsw.NewHNSW(config)
+loadedIndex.SetEntryPoint(metadata[5])
+loadedIndex.SetMaxLevel(metadata[6])
+
+reader, _ = column.NewReader("nodes.lance")
+nodesBatch, _ = reader.ReadRecordBatch()
+reader.Close()
+loadedIndex.UnmarshalNodes(nodesBatch)
 ```
 
 ### 📚 More Examples
@@ -1201,7 +1219,7 @@ While Vego is production-ready for many use cases, please be aware of these curr
 - **Best Practice**: Enable auto-compaction with default thresholds (30% deleted ratio)
 
 ### 5. Incremental Persistence
-- **Issue**: `SaveToLance` performs full export; no incremental save
+- **Issue**: `Collection.Save()` performs full export of the HNSW index; no incremental save
 - **Impact**: Large datasets take longer to persist
 - **Status**: Under investigation
 

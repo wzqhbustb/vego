@@ -8,7 +8,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/format"
 )
 
@@ -18,9 +18,9 @@ func TestWriterColumnStatistics(t *testing.T) {
 	defer os.Remove(tmpFile)
 
 	// Create schema with int32 and float64 columns
-	schema := arrow.NewSchema([]arrow.Field{
-		arrow.NewField("id", arrow.PrimInt32(), false),
-		arrow.NewField("value", arrow.PrimFloat64(), false),
+	schema := core.NewSchema([]core.Field{
+		core.NewField("id", core.PrimInt32(), false),
+		core.NewField("value", core.PrimFloat64(), false),
 	}, nil)
 
 	// Create writer
@@ -103,8 +103,8 @@ func TestZoneMapPredicatePushdown(t *testing.T) {
 	defer os.Remove(tmpFile)
 
 	// Create schema with int32 column
-	schema := arrow.NewSchema([]arrow.Field{
-		arrow.NewField("id", arrow.PrimInt32(), false),
+	schema := core.NewSchema([]core.Field{
+		core.NewField("id", core.PrimInt32(), false),
 	}, nil)
 
 	// Create writer
@@ -179,8 +179,8 @@ func TestStatisticsNullValues(t *testing.T) {
 	defer os.Remove(tmpFile)
 
 	// Create schema with nullable int32 column
-	schema := arrow.NewSchema([]arrow.Field{
-		arrow.NewField("id", arrow.PrimInt32(), true),
+	schema := core.NewSchema([]core.Field{
+		core.NewField("id", core.PrimInt32(), true),
 	}, nil)
 
 	// Create writer
@@ -233,46 +233,46 @@ func TestStatisticsNullValues(t *testing.T) {
 
 // Helper functions
 
-func createTestRecordBatchFloat32(t *testing.T, schema *arrow.Schema, values []float32) *arrow.RecordBatch {
+func createTestRecordBatchFloat32(t *testing.T, schema *core.Schema, values []float32) *core.RecordBatch {
 	t.Helper()
-	valueArray := arrow.NewFloat32Array(values, nil)
-	batch, err := arrow.NewRecordBatch(schema, len(values), []arrow.Array{valueArray})
+	valueArray := core.NewFloat32Array(values, nil)
+	batch, err := core.NewRecordBatch(schema, len(values), []core.Array{valueArray})
 	if err != nil {
 		t.Fatalf("Failed to create record batch: %v", err)
 	}
 	return batch
 }
 
-func createTestRecordBatchFloat64(t *testing.T, schema *arrow.Schema, values []float64) *arrow.RecordBatch {
+func createTestRecordBatchFloat64(t *testing.T, schema *core.Schema, values []float64) *core.RecordBatch {
 	t.Helper()
-	valueArray := arrow.NewFloat64Array(values, nil)
-	batch, err := arrow.NewRecordBatch(schema, len(values), []arrow.Array{valueArray})
+	valueArray := core.NewFloat64Array(values, nil)
+	batch, err := core.NewRecordBatch(schema, len(values), []core.Array{valueArray})
 	if err != nil {
 		t.Fatalf("Failed to create record batch: %v", err)
 	}
 	return batch
 }
 
-func createTestRecordBatch(t *testing.T, schema *arrow.Schema, ids []int32, values []float64) *arrow.RecordBatch {
+func createTestRecordBatch(t *testing.T, schema *core.Schema, ids []int32, values []float64) *core.RecordBatch {
 	t.Helper()
 	if len(ids) != len(values) {
 		t.Fatal("ids and values must have same length")
 	}
 
-	idArray := arrow.NewInt32Array(ids, nil)
-	valueArray := arrow.NewFloat64Array(values, nil)
+	idArray := core.NewInt32Array(ids, nil)
+	valueArray := core.NewFloat64Array(values, nil)
 
-	batch, err := arrow.NewRecordBatch(schema, len(ids), []arrow.Array{idArray, valueArray})
+	batch, err := core.NewRecordBatch(schema, len(ids), []core.Array{idArray, valueArray})
 	if err != nil {
 		t.Fatalf("Failed to create record batch: %v", err)
 	}
 	return batch
 }
 
-func createTestRecordBatchInt32(t *testing.T, schema *arrow.Schema, ids []int32) *arrow.RecordBatch {
+func createTestRecordBatchInt32(t *testing.T, schema *core.Schema, ids []int32) *core.RecordBatch {
 	t.Helper()
-	idArray := arrow.NewInt32Array(ids, nil)
-	batch, err := arrow.NewRecordBatch(schema, len(ids), []arrow.Array{idArray})
+	idArray := core.NewInt32Array(ids, nil)
+	batch, err := core.NewRecordBatch(schema, len(ids), []core.Array{idArray})
 	if err != nil {
 		t.Fatalf("Failed to create record batch: %v", err)
 	}
@@ -285,8 +285,8 @@ func TestStatisticsFooterOffset(t *testing.T) {
 	defer os.Remove(tmpFile)
 
 	// Create schema with int32 column
-	schema := arrow.NewSchema([]arrow.Field{
-		arrow.NewField("id", arrow.PrimInt32(), false),
+	schema := core.NewSchema([]core.Field{
+		core.NewField("id", core.PrimInt32(), false),
 	}, nil)
 
 	// Create writer
@@ -350,8 +350,8 @@ func TestStatisticsWithNaNValues(t *testing.T) {
 		tmpFile := "/tmp/test_stats_float32_nan.lance"
 		defer os.Remove(tmpFile)
 
-		schema := arrow.NewSchema([]arrow.Field{
-			arrow.NewField("value", arrow.PrimFloat32(), false),
+		schema := core.NewSchema([]core.Field{
+			core.NewField("value", core.PrimFloat32(), false),
 		}, nil)
 
 		writer, err := NewWriter(tmpFile, schema, nil)
@@ -405,8 +405,8 @@ func TestStatisticsWithNaNValues(t *testing.T) {
 		tmpFile := "/tmp/test_stats_float64_all_nan.lance"
 		defer os.Remove(tmpFile)
 
-		schema := arrow.NewSchema([]arrow.Field{
-			arrow.NewField("value", arrow.PrimFloat64(), false),
+		schema := core.NewSchema([]core.Field{
+			core.NewField("value", core.PrimFloat64(), false),
 		}, nil)
 
 		writer, err := NewWriter(tmpFile, schema, nil)
@@ -448,8 +448,8 @@ func TestStatisticsWithNaNValues(t *testing.T) {
 		tmpFile := "/tmp/test_stats_float32_nan_first.lance"
 		defer os.Remove(tmpFile)
 
-		schema := arrow.NewSchema([]arrow.Field{
-			arrow.NewField("value", arrow.PrimFloat32(), false),
+		schema := core.NewSchema([]core.Field{
+			core.NewField("value", core.PrimFloat32(), false),
 		}, nil)
 
 		writer, err := NewWriter(tmpFile, schema, nil)
@@ -496,9 +496,9 @@ func TestStatisticsTypeID(t *testing.T) {
 	defer os.Remove(tmpFile)
 
 	// Create schema with both int32 and float32 columns
-	schema := arrow.NewSchema([]arrow.Field{
-		arrow.NewField("int_col", arrow.PrimInt32(), false),
-		arrow.NewField("float_col", arrow.PrimFloat32(), false),
+	schema := core.NewSchema([]core.Field{
+		core.NewField("int_col", core.PrimInt32(), false),
+		core.NewField("float_col", core.PrimFloat32(), false),
 	}, nil)
 
 	writer, err := NewWriter(tmpFile, schema, nil)
@@ -563,14 +563,14 @@ func TestStatisticsTypeID(t *testing.T) {
 	}
 }
 
-func createTestRecordBatchMixed(t *testing.T, schema *arrow.Schema, intVals []int32, floatVals []float32) *arrow.RecordBatch {
+func createTestRecordBatchMixed(t *testing.T, schema *core.Schema, intVals []int32, floatVals []float32) *core.RecordBatch {
 	t.Helper()
 	if len(intVals) != len(floatVals) {
 		t.Fatal("intVals and floatVals must have same length")
 	}
-	intArray := arrow.NewInt32Array(intVals, nil)
-	floatArray := arrow.NewFloat32Array(floatVals, nil)
-	batch, err := arrow.NewRecordBatch(schema, len(intVals), []arrow.Array{intArray, floatArray})
+	intArray := core.NewInt32Array(intVals, nil)
+	floatArray := core.NewFloat32Array(floatVals, nil)
+	batch, err := core.NewRecordBatch(schema, len(intVals), []core.Array{intArray, floatArray})
 	if err != nil {
 		t.Fatalf("Failed to create record batch: %v", err)
 	}
@@ -584,8 +584,8 @@ func TestStatisticsOOMProtection(t *testing.T) {
 	tmpFile := "/tmp/test_stats_oom.lance"
 	defer os.Remove(tmpFile)
 
-	schema := arrow.NewSchema([]arrow.Field{
-		arrow.NewField("id", arrow.PrimInt32(), false),
+	schema := core.NewSchema([]core.Field{
+		core.NewField("id", core.PrimInt32(), false),
 	}, nil)
 
 	writer, err := NewWriter(tmpFile, schema, nil)
@@ -634,8 +634,8 @@ func TestStatisticsBoundaryValues(t *testing.T) {
 		tmpFile := "/tmp/test_stats_int32_bounds.lance"
 		defer os.Remove(tmpFile)
 
-		schema := arrow.NewSchema([]arrow.Field{
-			arrow.NewField("value", arrow.PrimInt32(), false),
+		schema := core.NewSchema([]core.Field{
+			core.NewField("value", core.PrimInt32(), false),
 		}, nil)
 
 		writer, err := NewWriter(tmpFile, schema, nil)
@@ -682,8 +682,8 @@ func TestStatisticsBoundaryValues(t *testing.T) {
 		tmpFile := "/tmp/test_stats_int64_bounds.lance"
 		defer os.Remove(tmpFile)
 
-		schema := arrow.NewSchema([]arrow.Field{
-			arrow.NewField("value", arrow.PrimInt64(), false),
+		schema := core.NewSchema([]core.Field{
+			core.NewField("value", core.PrimInt64(), false),
 		}, nil)
 
 		writer, err := NewWriter(tmpFile, schema, nil)
@@ -729,8 +729,8 @@ func TestStatisticsBoundaryValues(t *testing.T) {
 		tmpFile := "/tmp/test_stats_float32_bounds.lance"
 		defer os.Remove(tmpFile)
 
-		schema := arrow.NewSchema([]arrow.Field{
-			arrow.NewField("value", arrow.PrimFloat32(), false),
+		schema := core.NewSchema([]core.Field{
+			core.NewField("value", core.PrimFloat32(), false),
 		}, nil)
 
 		writer, err := NewWriter(tmpFile, schema, nil)
@@ -777,8 +777,8 @@ func TestStatisticsBoundaryValues(t *testing.T) {
 		tmpFile := "/tmp/test_stats_float64_bounds.lance"
 		defer os.Remove(tmpFile)
 
-		schema := arrow.NewSchema([]arrow.Field{
-			arrow.NewField("value", arrow.PrimFloat64(), false),
+		schema := core.NewSchema([]core.Field{
+			core.NewField("value", core.PrimFloat64(), false),
 		}, nil)
 
 		writer, err := NewWriter(tmpFile, schema, nil)
@@ -824,8 +824,8 @@ func TestStatisticsBoundaryValues(t *testing.T) {
 		tmpFile := "/tmp/test_stats_float_inf.lance"
 		defer os.Remove(tmpFile)
 
-		schema := arrow.NewSchema([]arrow.Field{
-			arrow.NewField("value", arrow.PrimFloat64(), false),
+		schema := core.NewSchema([]core.Field{
+			core.NewField("value", core.PrimFloat64(), false),
 		}, nil)
 
 		writer, err := NewWriter(tmpFile, schema, nil)
@@ -869,10 +869,10 @@ func TestStatisticsBoundaryValues(t *testing.T) {
 	})
 }
 
-func createTestRecordBatchInt64(t *testing.T, schema *arrow.Schema, values []int64) *arrow.RecordBatch {
+func createTestRecordBatchInt64(t *testing.T, schema *core.Schema, values []int64) *core.RecordBatch {
 	t.Helper()
-	valueArray := arrow.NewInt64Array(values, nil)
-	batch, err := arrow.NewRecordBatch(schema, len(values), []arrow.Array{valueArray})
+	valueArray := core.NewInt64Array(values, nil)
+	batch, err := core.NewRecordBatch(schema, len(values), []core.Array{valueArray})
 	if err != nil {
 		t.Fatalf("Failed to create record batch: %v", err)
 	}
@@ -886,8 +886,8 @@ func TestStatisticsSpecialArrays(t *testing.T) {
 		tmpFile := "/tmp/test_stats_zeros.lance"
 		defer os.Remove(tmpFile)
 
-		schema := arrow.NewSchema([]arrow.Field{
-			arrow.NewField("value", arrow.PrimInt32(), false),
+		schema := core.NewSchema([]core.Field{
+			core.NewField("value", core.PrimInt32(), false),
 		}, nil)
 
 		writer, err := NewWriter(tmpFile, schema, nil)
@@ -930,8 +930,8 @@ func TestStatisticsSpecialArrays(t *testing.T) {
 	t.Run("EmptyArray", func(t *testing.T) {
 		// Empty arrays are not supported by the column writer
 		// This test verifies that empty arrays are rejected during validation
-		schema := arrow.NewSchema([]arrow.Field{
-			arrow.NewField("value", arrow.PrimInt32(), false),
+		schema := core.NewSchema([]core.Field{
+			core.NewField("value", core.PrimInt32(), false),
 		}, nil)
 
 		writer, err := NewWriter("/tmp/test_stats_empty.lance", schema, nil)
@@ -953,8 +953,8 @@ func TestStatisticsSpecialArrays(t *testing.T) {
 		tmpFile := "/tmp/test_stats_single.lance"
 		defer os.Remove(tmpFile)
 
-		schema := arrow.NewSchema([]arrow.Field{
-			arrow.NewField("value", arrow.PrimInt32(), false),
+		schema := core.NewSchema([]core.Field{
+			core.NewField("value", core.PrimInt32(), false),
 		}, nil)
 
 		writer, err := NewWriter(tmpFile, schema, nil)
@@ -1002,8 +1002,8 @@ func TestStatisticsVersionCompatibility(t *testing.T) {
 		tmpFile := "/tmp/test_stats_version_with.lance"
 		defer os.Remove(tmpFile)
 
-		schema := arrow.NewSchema([]arrow.Field{
-			arrow.NewField("value", arrow.PrimInt32(), false),
+		schema := core.NewSchema([]core.Field{
+			core.NewField("value", core.PrimInt32(), false),
 		}, nil)
 
 		writer, err := NewWriter(tmpFile, schema, nil)
@@ -1054,8 +1054,8 @@ func TestZoneMapFloatNaNQuery(t *testing.T) {
 	tmpFile := "/tmp/test_zonemap_float_nan.lance"
 	defer os.Remove(tmpFile)
 
-	schema := arrow.NewSchema([]arrow.Field{
-		arrow.NewField("float_val", arrow.PrimFloat64(), false),
+	schema := core.NewSchema([]core.Field{
+		core.NewField("float_val", core.PrimFloat64(), false),
 	}, nil)
 
 	writer, err := NewWriter(tmpFile, schema, nil)
@@ -1109,24 +1109,24 @@ func TestZoneMapFloatNaNQuery(t *testing.T) {
 	}
 }
 
-func createTestRecordBatchInt32WithNulls(t *testing.T, schema *arrow.Schema, ids []int32, valid []bool) *arrow.RecordBatch {
+func createTestRecordBatchInt32WithNulls(t *testing.T, schema *core.Schema, ids []int32, valid []bool) *core.RecordBatch {
 	t.Helper()
 	if len(ids) != len(valid) {
 		t.Fatal("ids and valid must have same length")
 	}
 
-	var nullBitmap *arrow.Bitmap
+	var nullBitmap *core.Bitmap
 	for i, v := range valid {
 		if nullBitmap == nil {
-			nullBitmap = arrow.NewBitmap(len(valid))
+			nullBitmap = core.NewBitmap(len(valid))
 		}
 		if v {
 			nullBitmap.Set(i)
 		}
 	}
 
-	idArray := arrow.NewInt32Array(ids, nullBitmap)
-	batch, err := arrow.NewRecordBatch(schema, len(ids), []arrow.Array{idArray})
+	idArray := core.NewInt32Array(ids, nullBitmap)
+	batch, err := core.NewRecordBatch(schema, len(ids), []core.Array{idArray})
 	if err != nil {
 		t.Fatalf("Failed to create record batch: %v", err)
 	}

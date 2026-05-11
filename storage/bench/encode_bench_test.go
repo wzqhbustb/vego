@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/wzqhbustb/vego/storage/arrow"
+	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/column"
 )
 
@@ -19,7 +19,7 @@ func BenchmarkEncoding_Int32(b *testing.B) {
 
 			b.Run(name, func(b *testing.B) {
 				data := generateInt32Data(size, pattern)
-				builder := arrow.NewInt32Builder()
+				builder := core.NewInt32Builder()
 				for _, v := range data {
 					builder.Append(v)
 				}
@@ -54,7 +54,7 @@ func BenchmarkEncoding_Float32(b *testing.B) {
 
 			b.Run(name, func(b *testing.B) {
 				data := generateFloat32Data(size, pattern)
-				builder := arrow.NewFloat32Builder()
+				builder := core.NewFloat32Builder()
 				for _, v := range data {
 					builder.Append(v)
 				}
@@ -87,16 +87,16 @@ func BenchmarkEncoding_Vector768(b *testing.B) {
 
 		b.Run(name, func(b *testing.B) {
 			vectors := generateVectorData(n, 768)
-			listType := arrow.FixedSizeListOf(arrow.PrimFloat32(), 768)
+			listType := core.FixedSizeListOf(core.PrimFloat32(), 768)
 
-			childBuilder := arrow.NewFloat32Builder()
+			childBuilder := core.NewFloat32Builder()
 			for _, vec := range vectors {
 				for _, v := range vec {
 					childBuilder.Append(v)
 				}
 			}
 			childArray := childBuilder.NewArray()
-			array := arrow.NewFixedSizeListArray(listType.(*arrow.FixedSizeListType), childArray, nil)
+			array := core.NewFixedSizeListArray(listType.(*core.FixedSizeListType), childArray, nil)
 
 			writer := column.NewPageWriter(encoderFactory)
 
