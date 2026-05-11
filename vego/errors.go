@@ -3,6 +3,8 @@ package vego
 import (
 	"errors"
 	"fmt"
+
+	hnsw "github.com/wzqhbustb/vego/index"
 )
 
 // Sentinel errors for common cases
@@ -33,6 +35,10 @@ var (
 
 	// ErrValidationFailed is returned when document validation fails
 	ErrValidationFailed = errors.New("validation failed")
+
+	// ErrEmptyIndex is returned when searching an index with no nodes.
+	// Re-exported from the index package so consumers don't need to import index/.
+	ErrEmptyIndex = hnsw.ErrEmptyIndex
 )
 
 // Error provides structured error information

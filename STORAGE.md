@@ -489,28 +489,32 @@ for i := 0; i < batch.NumRows(); i++ {
 
 ### HNSW Integration
 
+The `index` package provides pure in-memory serialization (`Marshal`/`Unmarshal`)
+that returns `core.RecordBatch` values. File I/O is orchestrated by the `vego`
+layer using `storage/column`.
+
 #### Saving Index
 
 ```go
-// Save HNSW index to disk
-func (h *HNSWIndex) SaveToLance(baseDir string) error {
-    // Saves three files:
-    // - nodes.lance: ID, vector, level
-    // - connections.lance: node_id, layer, neighbor_id
-    // - metadata.lance: M, dimension, entryPoint, etc.
-    
-    if err := h.saveNodes(filepath.Join(baseDir, "nodes.lance")); err != nil {
-        return fmt.Errorf("save nodes failed: %w", err)
-    }
-    
-    if err := h.saveConnections(filepath.Join(baseDir, "connections.lance")); err != nil {
-        return fmt.Errorf("save connections failed: %w", err)
-    }
-    
-    if err := h.saveMetadata(filepath.Join(baseDir, "metadata.lance")); err != nil {
-        return fmt.Errorf("save metadata failed: %w", err)
-    }
-    
+// Serialize HNSW index to RecordBatches
+func saveHNSWIndex(idx *hnsw.HNSWIndex, baseDir string) error {
+    nodesBatch, err := idx.MarshalNodes()
+    if err != nil { return err }
+
+    connBatch, err := idx.MarshalConnections()
+    if err != nil { return err }
+
+    metaBatch, err := idx.MarshalMetadata()
+    if err != nil { return err }
+
+    // Write via storage/column
+    factory := encoding.NewEncoderFactory(3)
+    writer, _ := column.NewWriter(
+        filepath.Join(baseDir, "nodes.lance"),
+        nodesBatch.Schema(), factory)
+    writer.WriteRecordBatch(nodesBatch)
+    writer.Close()
+    // ... repeat for connections and metadata
     return nil
 }
 ```
@@ -518,37 +522,43 @@ func (h *HNSWIndex) SaveToLance(baseDir string) error {
 #### Loading Index
 
 ```go
-// Load HNSW index from disk
-func LoadHNSWFromLance(baseDir string) (*HNSWIndex, error) {
-    // 1. Load metadata to get configuration
-    metadata, err := loadMetadata(filepath.Join(baseDir, "metadata.lance"))
-    if err != nil {
-        return nil, err
-    }
-    
+// Restore HNSW index from RecordBatches
+func loadHNSWIndex(baseDir string) (*hnsw.HNSWIndex, error) {
+    // 1. Read metadata batch
+    reader, _ := column.NewReader(filepath.Join(baseDir, "metadata.lance"))
+    metaBatch, _ := reader.ReadRecordBatch()
+    reader.Close()
+    metadata, _ := hnsw.UnmarshalMetadata(metaBatch)
+
     // 2. Create HNSW with original config
-    config := Config{
+    config := hnsw.Config{
         M:              int(metadata[0]),
         EfConstruction: int(metadata[3]),
         Dimension:      int(metadata[4]),
-        DistanceFunc:   L2Distance,
+        DistanceFunc:   hnsw.L2Distance,
     }
-    hnsw := NewHNSW(config)
-    
+    idx := hnsw.NewHNSW(config)
+
     // 3. Restore state
-    hnsw.entryPoint = metadata[5]
-    hnsw.maxLevel = metadata[6]
-    
-    // 4. Load nodes and connections
-    if err := hnsw.loadNodes(filepath.Join(baseDir, "nodes.lance")); err != nil {
-        return nil, err
+    idx.SetEntryPoint(metadata[5])
+    idx.SetMaxLevel(metadata[6])
+
+    // 4. Unmarshal nodes
+    reader, _ = column.NewReader(filepath.Join(baseDir, "nodes.lance"))
+    nodesBatch, _ := reader.ReadRecordBatch()
+    reader.Close()
+    idx.UnmarshalNodes(nodesBatch)
+
+    // 5. Unmarshal connections (if present)
+    connPath := filepath.Join(baseDir, "connections.lance")
+    if _, err := os.Stat(connPath); err == nil {
+        reader, _ = column.NewReader(connPath)
+        connBatch, _ := reader.ReadRecordBatch()
+        reader.Close()
+        idx.UnmarshalConnections(connBatch)
     }
-    
-    if err := hnsw.loadConnections(filepath.Join(baseDir, "connections.lance")); err != nil {
-        return nil, err
-    }
-    
-    return hnsw, nil
+
+    return idx, nil
 }
 ```
 

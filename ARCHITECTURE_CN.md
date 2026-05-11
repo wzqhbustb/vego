@@ -158,12 +158,13 @@ func (h *HNSWIndex) Search(query []float32, k int, filter func(int) bool) []Sear
 func (h *HNSWIndex) Delete(id int)
 
 // 序列化 — 产出 RecordBatch，不知道它们将被写到哪里。
-// 使用回调 + batchSize 支持流式处理大数据集，
-// 避免多 GB 的单 RecordBatch 分配。
-func (h *HNSWIndex) MarshalNodes(batchSize int, emit func(*core.RecordBatch) error) error
-func (h *HNSWIndex) MarshalConnections(batchSize int, emit func(*core.RecordBatch) error) error
+// 当前实现返回单 batch；当数据集超过百万级时将引入回调式流式接口（见下方说明）。
+func (h *HNSWIndex) MarshalNodes() (*core.RecordBatch, error)
+func (h *HNSWIndex) MarshalConnections() (*core.RecordBatch, error)
+func (h *HNSWIndex) MarshalMetadata() (*core.RecordBatch, error)
 func (h *HNSWIndex) UnmarshalNodes(batch *core.RecordBatch) error
 func (h *HNSWIndex) UnmarshalConnections(batch *core.RecordBatch) error
+func UnmarshalMetadata(batch *core.RecordBatch) (*MetadataResult, error)
 ```
 
 **为什么使用回调式流出：**
@@ -554,15 +555,15 @@ func (c *Collection) flush() error {
 - `vego/storage.go` 改为调用 catalog 接口，不再直接管理状态。
 - **风险：低** — 纯重构，无行为变更。
 
-### Step 2：索引引擎剥离持久化
+### Step 2：索引引擎剥离持久化 ✅ 已完成
 
 > **前置条件：** 必须先完成 Step 0 — `index/storage.go` 当前 import 了 `storage/arrow/` 和 `storage/column/`，需要先变为 `core/` 才能移除。
 
-- 为 `*index.HNSWIndex` 新增 `MarshalNodes` / `MarshalConnections` / `UnmarshalNodes` / `UnmarshalConnections` 方法。
+- 为 `*index.HNSWIndex` 新增 `MarshalNodes` / `MarshalConnections` / `MarshalMetadata` 方法，以及 `UnmarshalNodes` / `UnmarshalConnections` / `UnmarshalMetadata` 函数。
 - 移除 `index/storage.go`（直接写 Lance 文件的代码 + 对 `storage/column/` 和 `storage/encoding/` 的非法 import）。
-- 将 schema 构建逻辑（`SchemaForNodes`、`SchemaForConnections`）改为仅依赖 `core/`。
-- API 层（`vego/`）接管持久化编排。
-- **风险：中高** — 需同时改动 `index/` 和 `vego/`，且需解决跨层 import 违规。
+- 将 schema 构建逻辑（`SchemaForNodes`、`SchemaForConnections`、`SchemaForMetadata`）保留在 `index/` 中，仅依赖 `core/`。
+- API 层（`vego/index_persist.go`）接管持久化编排，使用 `storage/column/` 进行文件 I/O。
+- **状态：** 已完成。`index/` 包零 `storage/` 依赖（仅 `core/`），全量测试通过。
 
 ### Step 3：IO 层修复 + column 接口化
 
@@ -600,7 +601,7 @@ collection_path/
 
 **HNSW 持久化格式 — 性能门限：**
 
-> 100 万节点冷启动加载必须在 5 秒内完成。如果 Lance 列存格式无法达标（因逐行重建邻接表导致大量随机 I/O），设计允许回退到自定义二进制格式（扁平邻接数组 + mmap）。`MarshalNodes`/`UnmarshalNodes` 的回调接口在设计上与格式无关 — 不强制使用 Lance。
+> 100 万节点冷启动加载必须在 5 秒内完成。如果 Lance 列存格式无法达标（因逐行重建邻接表导致大量随机 I/O），设计允许回退到自定义二进制格式（扁平邻接数组 + mmap）。`MarshalNodes`/`UnmarshalNodes` 的接口在设计上与格式无关 — 不强制使用 Lance。
 
 ---
 
@@ -611,5 +612,5 @@ collection_path/
 3. **API 层是纯编排。** 它协调索引 + 存储 + catalog。它不实现算法或格式。
 4. **Interface 属于消费者。** 提供者导出具体类型。消费者定义它所需的 interface。
 5. **通过原子 snapshot 保证 crash safety。** 所有写入先到临时目录。snapshot.json rename 是唯一的 commit point。
-6. **流式优于缓存。** 大数据通过回调（emit 函数）处理，不收集为巨大切片。
+6. **流式优于缓存（未来）。** 当数据集达到百万级时，大数据将通过回调（emit 函数）处理，不收集为巨大切片。当前实现使用单 batch 以简化代码。
 7. **延迟抽象直到需要时。** 三行相似代码优于一个过早的抽象。第二个实现到来时再添加抽象。

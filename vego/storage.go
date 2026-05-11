@@ -138,13 +138,9 @@ func NewDocumentStorage(path string, dimension int, cache ...*format.BlockCache)
 	return s, nil
 }
 
-// createSchema creates the Arrow schema for vector storage
+// createSchema creates the Arrow schema for vector storage.
 func (s *DocumentStorage) createSchema() *core.Schema {
-	return core.NewSchema([]core.Field{
-		{Name: "id_hash", Type: core.PrimInt64(), Nullable: false},
-		{Name: "vector", Type: core.VectorType(s.dimension), Nullable: false},
-		{Name: "timestamp", Type: core.PrimInt64(), Nullable: false},
-	}, nil)
+	return s.snapshot.Schema(s.dimension)
 }
 
 // Put stores a single document.
@@ -532,18 +528,7 @@ func (s *DocumentStorage) ClearDeletionVector() {
 
 // saveDeletionVector persists the DeletionStore to disk.
 func (s *DocumentStorage) saveDeletionVector() error {
-	dataFile := filepath.Join(s.path, dataFileName)
-	dvPath := catalog.DeletionStorePath(dataFile)
-
-	if s.snapshot.DeletionStore.IsEmpty() {
-		// If DV is empty, remove the file if it exists
-		if _, err := os.Stat(dvPath); err == nil {
-			return os.Remove(dvPath)
-		}
-		return nil
-	}
-
-	return s.snapshot.DeletionStore.Save(dvPath)
+	return s.snapshot.SaveDeletionStore()
 }
 
 // GetAllValidDocuments returns all documents that are not marked as deleted.
@@ -1258,10 +1243,7 @@ func (s *DocumentStorage) Stats() StorageStats {
 	}
 	
 	// Get file format version
-	formatVersion := s.version.String() // Default to configured version
-	if fileVer, err := s.getFileVersion(); err == nil {
-		formatVersion = fileVer.String()
-	}
+	formatVersion := s.snapshot.FormatVersion(s.getFileVersion)
 
 	// Calculate deletion stats
 	deletedCount := s.snapshot.DeletionStore.Count()

@@ -104,14 +104,25 @@ func (s *MetadataStore) AllEntries() map[int64]DocMeta {
 // Save persists the metadata store to disk as JSON.
 func (s *MetadataStore) Save() error {
 	s.mu.RLock()
+	// Deep-copy maps under lock to avoid "concurrent map iteration and write"
+	// during json.Encode after the lock is released.
+	entriesCopy := make(map[int64]DocMeta, len(s.entries))
+	for k, v := range s.entries {
+		entriesCopy[k] = v
+	}
+	idToHashCopy := make(map[string]int64, len(s.idToHash))
+	for k, v := range s.idToHash {
+		idToHashCopy[k] = v
+	}
+	s.mu.RUnlock()
+
 	data := struct {
 		Entries  map[int64]DocMeta `json:"entries"`
 		IDToHash map[string]int64  `json:"id_to_hash"`
 	}{
-		Entries:  s.entries,
-		IDToHash: s.idToHash,
+		Entries:  entriesCopy,
+		IDToHash: idToHashCopy,
 	}
-	s.mu.RUnlock()
 
 	file, err := os.Create(s.path)
 	if err != nil {

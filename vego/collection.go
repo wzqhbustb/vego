@@ -1069,7 +1069,7 @@ func (c *Collection) Save() error {
 
 	// Save HNSW index
 	indexPath := filepath.Join(c.path, "index")
-	if err := c.index.SaveToLance(indexPath); err != nil {
+	if err := saveHNSWIndex(c.index, indexPath); err != nil {
 		return wrapError("Save", c.name, "", err)
 	}
 
@@ -1126,7 +1126,7 @@ func (c *Collection) load() error {
 	// Load HNSW index
 	indexPath := filepath.Join(c.path, "index")
 	if _, err := os.Stat(indexPath); err == nil {
-		loadedIndex, err := hnsw.LoadHNSWFromLance(indexPath)
+		loadedIndex, err := loadHNSWIndex(indexPath)
 		if err != nil {
 			return wrapError("load", c.name, "", ErrIndexCorrupted)
 		}

@@ -160,12 +160,14 @@ func (h *HNSWIndex) Search(query []float32, k int, filter func(int) bool) []Sear
 func (h *HNSWIndex) Delete(id int)
 
 // Serialization — produces RecordBatches without knowing where they go.
-// Uses callback + batchSize to support streaming for large datasets,
-// avoiding multi-GB single RecordBatch allocation.
-func (h *HNSWIndex) MarshalNodes(batchSize int, emit func(*core.RecordBatch) error) error
-func (h *HNSWIndex) MarshalConnections(batchSize int, emit func(*core.RecordBatch) error) error
+// Current implementation returns a single batch; streaming via callback
+// will be introduced when datasets exceed ~1M vectors (see note below).
+func (h *HNSWIndex) MarshalNodes() (*core.RecordBatch, error)
+func (h *HNSWIndex) MarshalConnections() (*core.RecordBatch, error)
+func (h *HNSWIndex) MarshalMetadata() (*core.RecordBatch, error)
 func (h *HNSWIndex) UnmarshalNodes(batch *core.RecordBatch) error
 func (h *HNSWIndex) UnmarshalConnections(batch *core.RecordBatch) error
+func UnmarshalMetadata(batch *core.RecordBatch) (*MetadataResult, error)
 ```
 
 **Why callback-based streaming:**
@@ -551,15 +553,15 @@ The refactoring is executed in 4 incremental steps. Each step keeps all tests gr
 - `vego/storage.go` calls catalog interfaces instead of managing state directly.
 - **Risk: Low** — pure refactoring, no behavior change.
 
-### Step 2: Index engine drops persistence
+### Step 2: Index engine drops persistence ✅ Completed
 
 > **Prerequisite:** Step 0 must be completed first — `index/storage.go` currently imports `storage/arrow/` and `storage/column/`, which must become `core/` before removal.
 
-- Add `MarshalNodes` / `MarshalConnections` / `UnmarshalNodes` / `UnmarshalConnections` to `*index.HNSWIndex`.
+- Add `MarshalNodes` / `MarshalConnections` / `MarshalMetadata` to `*index.HNSWIndex`, plus `UnmarshalNodes` / `UnmarshalConnections` / `UnmarshalMetadata`.
 - Remove `index/storage.go` (direct Lance file writes + illegal imports of `storage/column/` and `storage/encoding/`).
-- Migrate schema construction logic (`SchemaForNodes`, `SchemaForConnections`) to depend only on `core/`.
-- API layer (`vego/`) takes over persistence orchestration.
-- **Risk: Medium-High** — requires coordinated changes in `index/` and `vego/`, plus resolution of cross-layer import violations.
+- Migrate schema construction logic (`SchemaForNodes`, `SchemaForConnections`, `SchemaForMetadata`) to depend only on `core/`.
+- API layer (`vego/index_persist.go`) takes over persistence orchestration using `storage/column/`.
+- **Status:** Completed. `index/` has zero `storage/` dependencies (only `core/`), all tests pass.
 
 ### Step 3: I/O layer fixes + column interface
 
@@ -597,7 +599,7 @@ collection_path/
 
 **HNSW persistence format — performance gate:**
 
-> Cold-start loading of 1M nodes must complete within 5 seconds. If Lance columnar format cannot meet this threshold (due to row-by-row adjacency list reconstruction causing excessive random I/O), the design allows fallback to a custom binary format (flat adjacency arrays + mmap). The `MarshalNodes`/`UnmarshalNodes` callback interface is format-agnostic by design — it does not mandate Lance.
+> Cold-start loading of 1M nodes must complete within 5 seconds. If Lance columnar format cannot meet this threshold (due to row-by-row adjacency list reconstruction causing excessive random I/O), the design allows fallback to a custom binary format (flat adjacency arrays + mmap). The `MarshalNodes`/`UnmarshalNodes` interface is format-agnostic by design — it does not mandate Lance.
 
 ---
 
@@ -608,5 +610,5 @@ collection_path/
 3. **API layer is pure orchestration.** It coordinates index + storage + catalog. It does not implement algorithms or formats.
 4. **Interfaces belong to consumers.** Providers export concrete types. Consumers define the interfaces they need.
 5. **Crash safety through atomic snapshot.** All writes go to temp dirs first. Snapshot file rename is the sole commit point.
-6. **Streaming over buffering.** Large data is processed via callbacks (emit functions), not collected into huge slices.
+6. **Streaming over buffering (future).** Large data will be processed via callbacks (emit functions) once datasets reach million-scale. Current implementation uses single-batch for simplicity.
 7. **Defer abstraction until needed.** Three similar lines of code is better than a premature interface. Add abstractions when the second implementation arrives.
