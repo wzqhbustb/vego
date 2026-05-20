@@ -82,17 +82,70 @@ results, _ := coll.Search(queryVector, 10,
 - [~] `db.Restore(path)` - Restore from backup (deferred to Phase 6)
 
 #### 6. Performance & Observability 📊
-- [ ] `coll.Stats()` - Collection statistics (fix orphan count)
-- [~] `db.Stats()` - Database-wide statistics (deferred to Phase 6)
+- [ ] coll.Stats() - Collection statistics (fix orphan count)
+- [~] db.Stats() - Database-wide statistics (deferred to Phase 6)
 - [~] Query latency metrics (deferred to Phase 6)
 - [~] Index build progress callback (deferred to Phase 6)
-
+- [x] test
 #### 7. Error Handling & Reliability 🔧
 - [~] Structured error types (deferred to Phase 6)
 - [~] Partial failure handling in batch operations (deferred to Phase 6)
 - [~] Auto-retry for transient failures (deferred to Phase 6)
 - [x] Corruption detection on load (basic validation exists)
+- [x] User can perform all CRUD operations without touching index or storage packages directly
+- [ ] Examples demonstrate real-world use cases (RAG, semantic search, recommendations)
+- [x] API documentation with usage patterns
+- [~] Unit test coverage > 70% for vego package (target moved to Phase 1)
+- [ ] Integration tests for full workflows (basic coverage)
+- [x] User can perform all CRUD operations without touching index or storage packages directly
+- [ ] Examples demonstrate real-world use cases (RAG, semantic search, recommendations)
+- [x] API documentation with usage patterns
+- [~] Unit test coverage > 70% for vego package (target moved to Phase 1)
+- [ ] Integration tests for full workflows (basic coverage)
+- [x] User can perform all CRUD operations without touching index or storage packages directly
+- [ ] Examples demonstrate real-world use cases (RAG, semantic search, recommendations)
+- [x] API documentation with usage patterns
+- [~] Unit test coverage > 70% for vego package (target moved to Phase 1)
+- [ ] Integration tests for full workflows (basic coverage)
+- [x] User can perform all CRUD operations without touching index or storage packages directly
+- [ ] Examples demonstrate real-world use cases (RAG, semantic search, recommendations)
+- [x] API documentation with usage patterns
+- [~] Unit test coverage > 70% for vego package (target moved to Phase 1)
+- [ ] Integration tests for full workflows (basic coverage)
+- [x] User can perform all CRUD operations without touching index or storage packages directly
+- [ ] Examples demonstrate real-world use cases (RAG, semantic search, recommendations)
+- [x] API documentation with usage patterns
+- [~] Unit test coverage > 70% for vego package (target moved to Phase 1)
+- [ ] Integration tests for full workflows (basic coverage)
+1. What is this project? (read ROADMAP.md, any README, go.mod, main package)
+2. What is the overall architecture? (package structure, key types)
+3. Find anything related to "Stats", "stats", "Collection", "orphan", "coll" in the codebase
+4. Look at any existing statistics or metrics code
+5. Find any test files related to stats
 
+Be very thorough - read key files and report back with file paths, line numbers, and relevant code snippets.
+## Context
+
+Vego is a pure-Go vector search engine with this layered architecture:
+- **core/** - Foundation layer (Schema, Array, RecordBatch, structured errors)
+- **vfs/** - I/O layer (file read/write, async executor)
+- **index/** - HNSW index engine (graph build/search, DeletionVector)
+- **storage/** - Columnar storage engine (catalog, column, encoding, format)
+- **vego/**
+---
+
+## 审查：Persistence API (`coll.Load()`)
+
+### 加载链（架构）
+
+Persist API 从上到下分为 **5 层**：
+
+| 层级 | 文件 | 功能 |
+|---|---|---|
+| DB | `vego/db.go` → `loadCollections()` | 读取子目录，为每个目录调用 `NewCollection` |
+| Collection | `vego/collection.go` → `load()` | 加载 HNSW 索引 + ID 映射（来自 JSON） |
+| Storage | `vego/storage.go` → `load()` | 通过 `LoadWithRepair` 加载元数据，然后加载 DV |
+| Catalog | `catalog/metadata.go`、`snapshot.go`、`deletion_store.go` | 磁盘格式：JSON 元数据，二进制 bitmap
 ### Definition of Done
 - [x] User can perform all CRUD operations without touching `index` or `storage` packages directly
 - [ ] Examples demonstrate real-world use cases (RAG, semantic search, recommendations)
@@ -118,6 +171,7 @@ Solidify the storage foundation, establish benchmarks, and ensure subsequent dev
 ### Key Tasks
 
 #### Week 1-2: File Format Foundation
+- [ ] test task
 - **File Version Management**: Add version fields to Header/Footer, compatibility checking framework
 - **Format Evolution Strategy**: Design forward/backward compatibility for future schema changes
 
@@ -340,6 +394,13 @@ Production-grade reliability, observability, and query optimization for confiden
 - **Integration with PyTorch**: `LanceDataset` equivalent for Go ML frameworks
 
 #### Late Materialization (New)
+- [ ] 1000-column file open time < 100ms (vs current O(n) scan)
+- [ ] Single-column query I/O reduced by 90%.
+- [ ] File corruption localization to specific Page, support partial recovery
+- [ ] Prometheus exporter with observable key metrics
+- [ ] IVF-PQ index: 10M vectors search < 50ms with 95%+ recall
+- [ ] Blob storage: Support all 3 tiers (inline/pack/dedicated), lazy loading works
+- [ ] Late materialization: Filter-then-load reduces I/O by 5x+
 - **Concept**: Filter on lightweight columns first, load heavy blobs only for matching rows
 - **Implementation**:
   1. Search vector column → get candidate row IDs

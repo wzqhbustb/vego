@@ -115,6 +115,44 @@ go run main.go
 - Demonstrates EF parameter trade-offs
 - Guides on choosing the right configuration
 
+### 6. Semantic Search (`semantic_search/`)
+
+Demonstrates meaning-based document retrieval:
+- Indexing articles with semantic embeddings
+- Querying with natural language (not just keywords)
+- Metadata filtering (category, date range)
+- Cosine similarity for text embeddings
+
+```bash
+cd semantic_search
+go run main.go
+```
+
+**Real-world Use Cases:**
+- Enterprise knowledge base search
+- Customer support FAQ retrieval
+- Academic paper search engine
+- Legal document discovery
+
+### 7. Recommendations (`recommendations/`)
+
+Builds a recommendation engine using vector similarity:
+- Item-to-item collaborative filtering
+- Category and price-range constrained recommendations
+- User taste profiles from interaction history
+- Brand affinity filtering
+
+```bash
+cd recommendations
+go run main.go
+```
+
+**Real-world Use Cases:**
+- E-commerce product recommendations
+- Content streaming suggestions
+- News article recommendations
+- Social media feed ranking
+
 ## Common Patterns
 
 ### Creating an Index
