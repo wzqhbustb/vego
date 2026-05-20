@@ -828,13 +828,23 @@ func (c *Collection) Stats() CollectionStats {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	// Count unique node IDs in mapping (all nodes ever created)
-	allNodes := make(map[int]bool)
-	for _, nodeID := range c.idMapping.All() {
-		allNodes[nodeID] = true
-	}
-	totalIndexNodes := len(allNodes)
+	// Total HNSW nodes in the index (includes active, deleted, and orphaned)
+	totalIndexNodes := c.index.Len()
 	docCount := c.idMapping.Count()
+
+	// Count nodes that have a reverse mapping (active or deleted, but not orphaned).
+	// Orphaned nodes are HNSW nodes with no mapping in idMapping.
+	mappedNodes := make(map[int]bool)
+	for _, nodeID := range c.idMapping.All() {
+		mappedNodes[nodeID] = true
+	}
+	for nodeID := range c.idMapping.AllReverse() {
+		mappedNodes[nodeID] = true
+	}
+	orphanNodes := totalIndexNodes - len(mappedNodes)
+	if orphanNodes < 0 {
+		orphanNodes = 0
+	}
 
 	// Get deletion stats from storage
 	deletedCount, totalCount, deletionRate := c.storage.GetDeletionStats()
@@ -845,7 +855,7 @@ func (c *Collection) Stats() CollectionStats {
 		Count:        docCount,
 		Dimension:    c.dimension,
 		IndexNodes:   totalIndexNodes,
-		OrphanNodes:  0, // Will need HNSW API to accurately count
+		OrphanNodes:  orphanNodes,
 		DeletedCount: deletedCount,
 		DeletionRate: deletionRate,
 		LastUpdate:   time.Now(),

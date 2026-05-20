@@ -850,6 +850,56 @@ func TestCollectionStats(t *testing.T) {
 	}
 }
 
+// TestCollectionStatsOrphanCount verifies that OrphanNodes is correctly
+// calculated after updates (old HNSW nodes become orphaned until Compact).
+func TestCollectionStatsOrphanCount(t *testing.T) {
+	coll, cleanup := setupTestCollection(t)
+	defer cleanup()
+
+	// Insert a document — no orphans yet.
+	doc := createTestDocument("orphan_doc", 64, nil)
+	if err := coll.Insert(doc); err != nil {
+		t.Fatalf("Failed to insert document: %v", err)
+	}
+	stats := coll.Stats()
+	if stats.OrphanNodes != 0 {
+		t.Errorf("Expected 0 orphan nodes after insert, got %d", stats.OrphanNodes)
+	}
+	if stats.IndexNodes != 1 {
+		t.Errorf("Expected 1 index node after insert, got %d", stats.IndexNodes)
+	}
+
+	// Update the document — old HNSW node becomes orphaned.
+	for i := range doc.Vector {
+		doc.Vector[i] = float32(i) * 0.02
+	}
+	if err := coll.Update(doc); err != nil {
+		t.Fatalf("Failed to update document: %v", err)
+	}
+	stats = coll.Stats()
+	if stats.OrphanNodes != 1 {
+		t.Errorf("Expected 1 orphan node after update, got %d", stats.OrphanNodes)
+	}
+	if stats.IndexNodes != 2 {
+		t.Errorf("Expected 2 index nodes after update, got %d", stats.IndexNodes)
+	}
+	if stats.Count != 1 {
+		t.Errorf("Expected count 1 after update, got %d", stats.Count)
+	}
+
+	// Compact should remove the orphan.
+	if err := coll.Compact(); err != nil {
+		t.Fatalf("Compact failed: %v", err)
+	}
+	stats = coll.Stats()
+	if stats.OrphanNodes != 0 {
+		t.Errorf("Expected 0 orphan nodes after compact, got %d", stats.OrphanNodes)
+	}
+	if stats.IndexNodes != 1 {
+		t.Errorf("Expected 1 index node after compact, got %d", stats.IndexNodes)
+	}
+}
+
 // TestCollectionSaveAndClose tests save and close operations
 func TestCollectionSaveAndClose(t *testing.T) {
 	coll, _ := setupTestCollection(t)

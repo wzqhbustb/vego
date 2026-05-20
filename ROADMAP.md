@@ -86,7 +86,6 @@ results, _ := coll.Search(queryVector, 10,
 - [~] db.Stats() - Database-wide statistics (deferred to Phase 6)
 - [~] Query latency metrics (deferred to Phase 6)
 - [~] Index build progress callback (deferred to Phase 6)
-- [x] test
 #### 7. Error Handling & Reliability 🔧
 - [~] Structured error types (deferred to Phase 6)
 - [~] Partial failure handling in batch operations (deferred to Phase 6)
