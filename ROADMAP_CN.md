@@ -4,21 +4,21 @@
 
 | 阶段 | 目标 | 时间线 | 关键交付物 |
 |------|------|--------|-----------|
-| Phase 0 | 统一 API 与基础 | 1-2 周 | 用户友好的 API、基础集成测试 |
-| **Phase 1** | 存储引擎加固 | 4-6 周 | 行索引、块缓存、Deletion Vector（框架）、Get() O(1) |
-| Phase 2 | MVP（最小可行产品） | 6-8 周 | CRUD 操作、I/O 调度器、Blob 存储（基础）、Delete/Update 加固 |
+| Phase 0 ✅ | 统一 API 与基础 | 1-2 周 | 用户友好的 API、基础集成测试 |
+| Phase 1 ✅ | 存储引擎加固 | 4-6 周 | 行索引、块缓存、Deletion Vector（框架）、Get() O(1) |
+| **Phase 2** | MVP（最小可行产品） | 6-8 周 | CRUD 操作、Agent Memory、架构重构、Delete/Update 加固 |
 | Phase 3 | Beta 版 | 8-10 周 | CMO、Zone Map、IVF-PQ 索引、Blob 分层存储、生产就绪 |
 | Phase 4 | V1.0 性能版 | 10-12 周 | MiniBlock、预取、IVF-HNSW-PQ、Late Materialization |
 | Phase 5 | V1.5 云原生版 | 12-16 周 | 对象存储、多模态优化、云存储支持 |
 | Phase 6 | V2.0 企业版 | 20-24 周 | WAL、MVCC（简化版）、标量索引、时间点恢复 |
 
-**当前重点**：Phase 0 - 构建统一的、用户友好的 API 层，无缝集成 HNSW 向量搜索与列式存储。
+**当前重点**：Phase 2 收尾 — Agent Memory ✅、架构重构 ✅（v0.1.5 已发布）、Delete/Update 加固 ✅。准备进入 Phase 3（IVF-PQ、Zone Map、Blob 存储）。
 
-> **Phase 0 范围调整说明**：若干非关键任务（备份/恢复、高级可观测性、结构化错误）已推迟至 Phase 6，以优先在 Phase 1 修复关键的 Get() O(n) 性能问题。详见 Phase 6 "第五层" 了解推迟的任务。
+> **说明**：Phase 0（统一 API）和 Phase 1（存储引擎加固）已完成。若干非关键任务（备份/恢复、高级可观测性、结构化错误）已推迟至 Phase 6。详见 Phase 6 "第六层" 了解推迟的任务。
 
 ---
 
-## Phase 0: 统一 API 与基础 ⭐ 当前优先
+## Phase 0: 统一 API 与基础 ✅ 已完成
 
 ### 目标
 创建统一、直观的 API，将 HNSW 向量搜索与列式存储相结合，让用户无需深入了解底层组件即可使用 Vego。
@@ -82,7 +82,7 @@ results, _ := coll.Search(queryVector, 10,
 - [~] `db.Restore(path)` - 从备份恢复（推迟至 Phase 6）
 
 #### 6. 性能与可观测性 📊
-- [ ] `coll.Stats()` - 集合统计信息（修复孤儿节点计数）
+- [x] `coll.Stats()` - 集合统计信息
 - [~] `db.Stats()` - 数据库级统计（推迟至 Phase 6）
 - [~] 查询延迟指标（推迟至 Phase 6）
 - [~] 索引构建进度回调（推迟至 Phase 6）
@@ -95,10 +95,10 @@ results, _ := coll.Search(queryVector, 10,
 
 ### 完成标准
 - [x] 用户无需直接接触 `index` 或 `storage` 包即可执行所有 CRUD 操作
-- [ ] 示例展示真实用例（RAG、语义搜索、推荐系统）
+- [x] 示例展示真实用例（RAG、语义搜索、推荐系统、批量插入、持久化）
 - [x] API 文档及使用模式
 - [~] vego 包单元测试覆盖率 > 70%（目标移至 Phase 1）
-- [ ] 完整工作流的集成测试（基础覆盖）
+- [x] 完整工作流的集成测试（e2e_test.go 覆盖核心工作流）
 
 ### API 设计原则
 
@@ -110,7 +110,7 @@ results, _ := coll.Search(queryVector, 10,
 
 ---
 
-## Phase 1: 存储引擎加固
+## Phase 1: 存储引擎加固 ✅ 已完成
 
 ### 目标
 巩固存储基础，建立基准测试，确保后续开发无需返工。
@@ -181,7 +181,7 @@ results, _ := coll.Search(queryVector, 10,
 - [x] 所有编码器通过往返测试 ✅（编码 → 解码 → 数据完整性）
 - [x] `go test -race` 无竞态条件 ✅
 - [x] 基准测试目标：写入/读取/Search 基线已建立 ✅
-- [x] 代码测试覆盖率 > 60% ✅（实际 81.3%）
+- [x] 代码测试覆盖率 > 60% ✅（vego 包实际 79.4%，2026-05）
 - [x] Deletion Vector 框架 ✅：能够标记行为已删除并在搜索时过滤
 - [x] Compact 实现 ✅：能够重建索引并清理已删除数据
 
@@ -193,7 +193,7 @@ results, _ := coll.Search(queryVector, 10,
 
 ---
 
-## Phase 2: MVP（最小可行产品）🔄
+## Phase 2: MVP（最小可行产品）⭐ 当前优先
 
 ### 目标
 使系统能够处理真实世界的数据，具备基础 CRUD 和查询能力。参考 Lance 设计：向量存储（Page 内）与多模态存储（外部）分离，支持大对象懒加载。
@@ -205,7 +205,7 @@ results, _ := coll.Search(queryVector, 10,
   - HNSW 节点通过 DV 标记删除，不从图中移除
   - 搜索结果通过 DV 过滤（每次结果 O(1) 检查）
   - 后台压缩定期回收空间
-- **墓碑机制 ⚠️**：带宽限期的软删除（基础实现完成，宽限期机制未实现）
+- **墓碑机制 ⚠️**：带宽限期的软删除（当前通过 DeletionVector bitmap 标记实现即时软删除；带宽限期/恢复机制的独立 Tombstone 未实现）
 - **孤儿预防 ✅**：Update 使用 DV 标记旧版本，插入新版本
 - **索引压缩 ✅**：后台重建移除 DV 标记节点并优化图结构
   - 阻塞式压缩已实现（自动触发 + 手动触发）
@@ -234,6 +234,41 @@ results, _ := coll.Search(queryVector, 10,
   }
   ```
 
+#### Phase 1 延续任务（存储引擎收尾）
+以下任务从 Phase 1 移至 Phase 2，不影响 MVP 核心功能但提升存储引擎完整度：
+- **逐页 Min/Max 统计**：在 `format.Page` 结构体中增加 `MinValue`/`MaxValue` 字段，`PageWriter` 写入时逐页收集，为 Phase 3 Zone Map 页面跳过提供细粒度统计
+- **Delta 编码实现**：实现变长整数 Delta 编解码器，适用于时间戳、自增 ID 等单调递增数据，启用 `factory.go` 中的 `EnableDeltaEncoding` 开关
+- **Writer 异步优化**：Column Writer / PageWriter 当前为同步写入；实现多列并行编码 + 顺序写入，提升大批量写入吞吐（当前 ~330 MB/s 在目标场景下够用，但作为性能专项优化）
+
+#### Agent Memory 系统 ✅
+- **目标**：为 AI Agent 提供嵌入式向量可搜索记忆，基于 Vego 的 HNSW + 列式存储构建
+- **摄入管线 ✅**：统一 `Ingest()` 入口，两种模式：
+  - **ModeNormal**：消息 → LLM 事实提取 → 与已有记忆 Reconcile
+  - **ModeRaw**：消息 → 内容哈希去重 → 按会话顺序存储
+- **调和（Reconcile）✅**：将提取的事实与已有记忆进行向量 + 关键词搜索比对，LLM 为每条事实决策 ADD/UPDATE/DELETE/NOOP
+- **混合搜索 ✅**：10 阶段管线：
+  - HNSW 向量搜索 + BM25 关键词搜索 + RRF 融合
+  - 信号加权（置顶、时间衰减、双通道加分）
+  - 二跳关联召回
+  - 间隙截断 + 分页
+- **基础设施 ✅**：
+  - 内存 BM25 倒排索引（英文 + CJK 分词）
+  - 时间表达式归一化（中英文相对时间 → 绝对时间 → 相对显示）
+  - 会话消息内容哈希去重
+  - 调和用近似重复检测
+  - Schema 迁移系统
+- **架构**：`memory/`（L5）→ `vego/`（L4），不直接导入 `index/` 或 `storage/`
+
+#### 架构重构 ✅
+- **目标**：建立清晰的 5 层依赖架构
+- **已完成步骤**：
+  - Step 0：提升 `storage/arrow/` → `core/`，`storage/errors/` → `core/`
+  - Step 1：提升 `storage/io/` → `vfs/`
+  - Step 2：隔离 `index/`（移除非法 storage 导入）
+  - Step 3：清理 `memory/` → `vego/`（移除对 `index/` 的直接依赖）
+- **结果**：`core/`（L1）→ `vfs/`（L2）→ `index/`（L3-A）+ `storage/`（L3-B）→ `vego/`（L4）→ `memory/`（L5）
+- **详情**：见 [ARCHITECTURE_CN.md](ARCHITECTURE_CN.md)
+
 #### Blob 存储基础（新增）❌
 - **目标**：支持多模态数据（图像、视频、音频），参考 Lance Blob v2 设计
 - **存储策略**（3 层，类似 Lance）：
@@ -250,12 +285,6 @@ results, _ := coll.Search(queryVector, 10,
   }
   ```
 
-#### Phase 1 延续任务（存储引擎收尾）
-以下任务从 Phase 1 移至 Phase 2，不影响 MVP 核心功能但提升存储引擎完整度：
-- **逐页 Min/Max 统计**：在 `format.Page` 结构体中增加 `MinValue`/`MaxValue` 字段，`PageWriter` 写入时逐页收集，为 Phase 3 Zone Map 页面跳过提供细粒度统计
-- **Delta 编码实现**：实现变长整数 Delta 编解码器，适用于时间戳、自增 ID 等单调递增数据，启用 `factory.go` 中的 `EnableDeltaEncoding` 开关
-- **Writer 异步优化**：Column Writer / PageWriter 当前为同步写入；实现多列并行编码 + 顺序写入，提升大批量写入吞吐（当前 ~330 MB/s 在目标场景下够用，但作为性能专项优化）
-
 #### 存储引擎增强 🔄
 - **累积缓冲区 🔄**：避免小页面（< 4KB）（Write Buffer 部分实现）
 - **基础监控 ⚠️**：I/O 计数、缓存命中率、编码延迟（Stats 接口部分实现）
@@ -266,7 +295,6 @@ results, _ := coll.Search(queryVector, 10,
 
 #### 性能优化
   - 异步 I/O 内存开销
-  - Page Writer 支持异步 IO
   - 多读取器并发退化（当前：4x 并发 = 4x  slowdown！）
     ```
     并发 1:  2.3 ms
@@ -283,6 +311,8 @@ results, _ := coll.Search(queryVector, 10,
 - [x] **更新操作使用 DV + Insert** ✅（无孤儿节点）
 - [ ] Blob 存储：支持内联（<64KB）和打包（64KB-4MB）存储 ❌
 - [x] **索引压缩在大批量删除后减少大小** ✅（>30% 空间回收，`Compact()` 实现）
+- [x] **Agent Memory**：Ingest + Reconcile + 混合搜索管线 ✅
+- [x] **架构重构**：5 层依赖结构已建立并强制执行 ✅
 
 ---
 
@@ -499,11 +529,11 @@ results, _ := coll.Search(queryVector, 10,
 - ~~并行查询执行~~（V2.0 后）
 - **单节点并行**：单节点内多核查询执行（保留）
 
-#### 第四层：查询引擎（待定规划）
+#### 第五层：查询引擎（待定规划）
 - **表达式系统（基础）**：简单过滤
 - **行级过滤**：在 RecordBatch 上执行过滤器
 
-#### 第五层：Phase 0 推迟任务（从 Phase 0 移至此处）
+#### 第六层：Phase 0 推迟任务（从 Phase 0 移至此处）
 以下任务有意从 Phase 0 推迟，以专注于核心性能：
 
 - **数据库备份/恢复**：`db.Backup(path)`、`db.Restore(path)` 用于灾难恢复
@@ -589,6 +619,17 @@ results, _ := coll.Search(queryVector, 10,
 - 云存储：对生产用例比本地 I/O 微优化更有影响  
 **影响**：降低复杂性、更快交付、更广平台支持
 
+### ADR 12: 5 层架构重构（Phase 2）
+**背景**：原代码库依赖关系混乱 — `index/` 导入 `storage/`，`memory/` 直接导入 `index/`，共享类型埋在 `storage/arrow/` 中  
+**决策**：重构为严格的 5 层架构：`core/`（L1）→ `vfs/`（L2）→ `index/`（L3-A）+ `storage/`（L3-B）→ `vego/`（L4）→ `memory/`（L5）  
+**关键迁移**：
+- `storage/arrow/` → `core/`（共享类型如 RecordBatch）
+- `storage/errors/` → `core/`（共享错误类型）
+- `storage/io/` → `vfs/`（文件 I/O 抽象）
+- `index/` 隔离：无 storage 导入，通过 `core.RecordBatch` 做 Marshal/Unmarshal
+- `memory/` 仅使用 `vego/` 的重导出（距离函数等）  
+**影响**：清晰的依赖图，各层可独立测试，跨层安全并行开发。详见 [ARCHITECTURE_CN.md](ARCHITECTURE_CN.md)。
+
 ---
 
 ## 额外待办
@@ -606,7 +647,7 @@ results, _ := coll.Search(queryVector, 10,
 - [ ] 从其他格式迁移指南（Parquet 等）
 
 ### 工具
-- [ ] Lance 文件检查器/转储器
+- [ ] Vego 文件检查器/转储器
 - [ ] 格式转换工具
 - [ ] 基准对比工具
 - [ ] 可视化分析器集成
