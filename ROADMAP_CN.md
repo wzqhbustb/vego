@@ -118,39 +118,98 @@ results, _ := coll.Search(queryVector, 10,
 ### 关键任务
 
 #### 第 1-2 周：文件格式基础 ✅
-- **文件版本管理**：向 Header/Footer 添加版本字段，兼容性检查框架
-- **格式演进策略**：设计未来模式变更的前向/后向兼容性
+- [x] **Header/Footer 版本字段**（`storage/format/header.go:18`，`footer.go:17`）
+  - Header 中的 `Version uint16` + Footer 中冗余 `Version` 用于校验
+  - Magic number + 基于 flag 的特征检测（`FlagVersioned`）
+- [x] **`VersionPolicy` 结构化版本管理**（`storage/format/version.go`）
+  - `V1_0`、`V1_1`、`V1_2` 带 FeatureFlags 位图
+  - `Encoded()` / `String()` / `HasFeature()` / `CanRead()`
+- [x] **`VersionChecker` 运行时兼容性检查**（`storage/format/version.go:276`）
+  - 主版本必须匹配；次版本向后兼容
+  - `CheckReadCompatibility()` 返回结构化 `VersionError` 并附迁移建议
+- [x] **Legacy 版本映射**（`storage/format/version.go:192`）
+  - `NormalizeVersion()`：将旧版 `version=1` 映射为 `V1.0`（0x0100）
+  - `version_legacy_test.go`：验证所有版本对的向后兼容性
+- [x] **格式版本元数据**
+  - Footer 存储显式版本字符串（`vego.format.version`）
+  - 为前向/后向兼容打基础（完整策略见 ADR 4，Phase 2 期间细化）
 
 #### 第 2-4 周：内存索引与缓存（关键路径）✅
-- **行索引实现 ✅**：idHash → rowIndex 映射，修复 Get() O(n) 复杂度
-  - 启动时从 vectors.lance 构建（内存中，<100万文档无需持久化）
-  - O(1) 文档检索查找
-- **文档 LRU 缓存**：热文档缓存，用于频繁访问的向量
-  - 缓存搜索结果以避免重复磁盘读取
-  - 可配置容量（默认：1万文档）
-  - ⚠️ 注：当前使用 BlockCache 作为页级缓存，独立的 DocumentCache 未实现
-- **GetBatch 优化 ✅**：批量加载以减少搜索结果的 I/O 往返
-- **rowIndex 和 BlockCache 的使用 ✅，Column Reader，AsyncIO 中也能用到 BlockCache**
+- [x] **RowIndex 内存映射**（`vego/storage.go`，`catalog.IDMapping`）
+  - `idToHash`（docID → internal ID）+ 反向映射，实现 O(1) 查找
+  - 启动时从 `vectors.lance` footer RowIndex metadata 重建
+  - 纯内存（<100万文档），重建成本远低于持久化复杂度
+- [x] **`Get()` O(1) 路径**（`vego/storage.go:245`）
+  - `bufferIndex` 检查（热路径：最新写入）
+  - `tryReadByRowIndex()` → 直接定位 page/offset 读取持久化数据
+  - 仅对无 RowIndex 的 legacy 文件回退到全表扫描
+- [x] **BlockCache 实现**（`storage/format/blockcache.go`）
+  - 64KB 块、shard 化 LRU（默认 64 shards）、线程安全
+  - `Get`/`Put`/`Invalidate`/`Stats` API
+  - 被列读取器、footer 读取器、RowIndex 加载器共用
+- [ ] ~~**DocumentCache**~~（未实现）
+  - Phase 1 原计划独立的文档级 LRU 缓存（默认 1万文档）
+  - **决策**：BlockCache 已提供足够缓存能力；DocumentCache 无限期推迟
+  - 搜索结果目前从 BlockCache 解码后的 page 中读取
+- [x] **GetBatch 优化**（`vego/storage.go`）
+  - 批量加载以减少搜索结果读取的 I/O 往返
 
 #### 第 4-6 周：存储引擎加固 🔄
-- **块缓存实现 ✅**：64KB 块、LRU 淘汰、线程安全的页面缓存
-- ~~写入器异步优化~~（移至 Phase 2）：多列并行编码 + 顺序写入
-- **性能基线建立 ✅**：基准测试套件已跑通并记录基线数据
-- **端到端集成测试 ✅**：从写入到读取的完整路径覆盖，含缓存验证
+- [x] **Deletion Vector 内存位图**（`index/deletion_vector.go`）
+  - 基于 `RoaringBitmap` 的行级删除标记
+  - 线程安全的 `MarkDeleted()` / `IsDeleted()` / `Count()` / `Union()`
+- [x] **DV 持久化**（`index/deletion_vector_persist.go`）
+  - 序列化为 `.del` 侧车文件（varint 编码的 RoaringBitmap）
+  - 加载时反序列化并与内存 DV 合并
+- [x] **`SearchWithDV()` API**（`index/hnsw.go:161`）
+  - 贪婪搜索返回候选集；通过 `isDeleted` 回调后过滤
+  - 调用方控制 over-fetch（高删除率时用 `k*2`）
+- [x] **端到端集成测试**
+  - `index/search_with_dv_test.go`：并发插入/删除下 DV 正确性
+  - `vego/e2e_test.go`：完整 CRUD → Search 管线
+  - `collection_compact_*_test.go`：9 种压缩策略的正确性
+- [x] **性能基线建立**（`bench_results/baseline.txt`）
+  - 写入吞吐、读取延迟、搜索延迟、构建时间
+  - 记录 4x 并发退化（9.2ms vs 2.3ms）
+- [ ] **写入器异步优化**（移至 Phase 2）
+  - 多列并行编码 + 保证顺序写入
+  - 当前 ~330 MB/s 在目标场景下够用
 
 #### 第 5-6 周：存储基础（非阻塞）
-- ~~**Delta 编码实现**~~（移至 Phase 2）：时间序列数据的变长整数编码
-- **错误分类系统 ✅**：`storage/errors` 包，结构化错误处理
-- ~~**页面级统计（Min/Max）**~~（移至 Phase 2）：Phase 3 Zone Map 的基础
-- **可空编码统一处理 ✅**：RLE / BitPacking / BSS / Dictionary / Zstd 全部支持 null
+- [x] **错误分类系统**（`core/errors` 包）
+  - 带上下文的结构化错误（`core.IO()`、`core.Validation()`）
+  - 支持 `Unwrap()` 链式 `errors.Is()` 检查
+  - 类堆栈追踪的上下文累积
+- [x] **NullBitmap 统一设计**（`storage/encoding/nullbitmap.go`）
+  - 跨所有编码器共享的 null bitmap 抽象
+  - `Encode()` / `Decode()` / `IsNull()` / `SetNull()` API
+- [x] **编码器 Null 支持**（全部编码器）
+  - RLE（`rle.go` / `rle_decoder.go`）
+  - BitPacking（`bitpacking.go` / `bitpacking_decoder.go`）
+  - BSS（`bss.go` / `bss_decoder.go`）
+  - Dictionary（`dictionary.go` / `dictionary_decoder.go`）
+  - Zstd（`zstd.go` / `zstd_decoder.go`）
+- [ ] **Delta 编码**（移至 Phase 2）
+  - 时间戳、自增 ID 等单调递增数据的变长整数 Delta
+  - `factory.go` 中预留 `EnableDeltaEncoding` 开关
+- [ ] **页面级 Min/Max 统计**（移至 Phase 2）
+  - `format.Page` 中的 `MinValue`/`MaxValue` 字段
+  - 为 Phase 3 Zone Map 页面跳过打基础
 
-#### Deletion Vector 框架（新增）✅
-- **设计原理 ✅**：参考 Lance 设计，使用逻辑删除替代物理删除，支持增量更新而无需全量重写
-- **内存删除向量 ✅**：基于位图的行级删除标记（RoaringBitmap）
-- **HNSW 集成 ✅**：`SearchWithDV()` API 在搜索期间过滤已删除节点
-- **持久化 ✅**：将 DV 序列化为 `.del` 侧车文件
-- **Compact 实现 ✅**：后台压缩重建索引，清理已删除数据
-- **收益 ✅**：实现真正的 Update 支持、防止索引膨胀、为 MVCC 打基础
+#### Deletion Vector 框架（跨周任务）✅
+- **设计原理**：参考 Lance 设计，逻辑删除替代物理删除，支持增量更新而无需全量重写
+- **实现细节**：
+  - [x] 内存：`RoaringBitmap` + `sync.RWMutex`
+  - [x] 持久化：`.del` 侧车文件，varint 编码
+  - [x] HNSW 集成：`SearchWithDV()` 后过滤
+  - [x] 压缩：`Compact()` 重建图时排除 DV 标记节点
+- **收益**：
+  - ✅ 快速软删除（O(1) 位图标记）
+  - ✅ 后台压缩均摊清理成本
+  - ✅ 为 MVCC 打基础（DV 版本化实现快照隔离）
+- **权衡**：
+  - ❌ 内存略高（位图开销，约每行 1 bit）
+  - ❌ 搜索需 DV 过滤（开销极小：位图检查为 O(1)）
 - **API**：
   ```go
   type DeletionVector interface {
@@ -162,17 +221,27 @@ results, _ := coll.Search(queryVector, 10,
   }
   ```
 
-### 步骤
-1. 错误分类系统 ✅
-2. 端到端集成测试 ✅
-3. 性能基线测试 ✅
-4. 性能优化：
-   - 索引构建性能（HNSW）
-   - 查询性能（HNSW）
-5. 文件版本管理机制 ✅
-6. ~~页面级统计框架~~（移至 Phase 2）
-7. ~~Delta 编码框架~~（移至 Phase 2）
-8. 可空统一处理 ✅
+### 详细任务清单
+
+| # | 任务 | 状态 | 关键文件 |
+|---|------|------|----------|
+| 1 | Header/Footer 版本字段 | ✅ | `storage/format/header.go`、`footer.go` |
+| 2 | `VersionPolicy` + `VersionChecker` | ✅ | `storage/format/version.go` |
+| 3 | Legacy 版本映射 | ✅ | `storage/format/version_legacy_test.go` |
+| 4 | RowIndex 内存映射 | ✅ | `vego/storage.go`、`catalog/` |
+| 5 | `Get()` O(1) via RowIndex | ✅ | `vego/storage.go:245` |
+| 6 | BlockCache（64KB、LRU、shard 化） | ✅ | `storage/format/blockcache.go` |
+| 7 | Deletion Vector 内存位图 | ✅ | `index/deletion_vector.go` |
+| 9 | DV 持久化（.del 侧车文件） | ✅ | `index/deletion_vector_persist.go` |
+| 10 | `SearchWithDV()` API | ✅ | `index/hnsw.go:161` |
+| 11 | 端到端集成测试 | ✅ | `index/search_with_dv_test.go`、`vego/e2e_test.go` |
+| 12 | 性能基线 | ✅ | `bench_results/baseline.txt` |
+| 13 | 错误分类系统 | ✅ | `core/errors` |
+| 14 | NullBitmap + 全部编码器 null 支持 | ✅ | `storage/encoding/nullbitmap.go` |
+| 15 | DocumentCache（独立） | ❌ 未实现 | —（BlockCache 足够） |
+| 17 | 写入器异步优化 | ❌ 推迟 | — |
+| 18 | Delta 编码 | ❌ 推迟 | `factory.go`（预留） |
+| 19 | 页面级 Min/Max 统计 | ❌ 推迟 | `format.Page`（预留） |
 
 ### 完成标准
 - [x] 文件版本管理 ✅：能够检测和处理格式版本不匹配
@@ -266,6 +335,13 @@ results, _ := coll.Search(queryVector, 10,
   - Step 1：提升 `storage/io/` → `vfs/`
   - Step 2：隔离 `index/`（移除非法 storage 导入）
   - Step 3：清理 `memory/` → `vego/`（移除对 `index/` 的直接依赖）
+- **I/O 层修复**（Step 1 / Step 3 期间完成）：
+  - [x] **`FilePool` 句柄复用**（`vfs/file_pool.go`）
+    - `sync.RWMutex` + 引用计数管理 OS 文件句柄
+    - 防止并发列读取时 `too many open files`
+  - [x] **Partial Read 修复**（`storage/format/footer.go`、`manifest.go`、`page.go`）
+    - 对定长结构将裸 `Read()` 替换为 `io.ReadFull()`
+    - 防止高 I/O 压力下的损坏读取
 - **结果**：`core/`（L1）→ `vfs/`（L2）→ `index/`（L3-A）+ `storage/`（L3-B）→ `vego/`（L4）→ `memory/`（L5）
 - **详情**：见 [ARCHITECTURE_CN.md](ARCHITECTURE_CN.md)
 

@@ -118,37 +118,98 @@ Solidify the storage foundation, establish benchmarks, and ensure subsequent dev
 ### Key Tasks
 
 #### Week 1-2: File Format Foundation
-- **File Version Management**: Add version fields to Header/Footer, compatibility checking framework
-- **Format Evolution Strategy**: Design forward/backward compatibility for future schema changes
+- [x] **Header/Footer Version Fields** (`storage/format/header.go:18`, `footer.go:17`)
+  - `Version uint16` in Header + redundant `Version` in Footer for validation
+  - Magic number + flag-based feature detection (`FlagVersioned`)
+- [x] **`VersionPolicy` Structured Versioning** (`storage/format/version.go`)
+  - `V1_0`, `V1_1`, `V1_2` with FeatureFlags bitmap
+  - `Encoded()` / `String()` / `HasFeature()` / `CanRead()`
+- [x] **`VersionChecker` Runtime Compatibility** (`storage/format/version.go:276`)
+  - Major version must match; minor version backward compatible
+  - `CheckReadCompatibility()` returns structured `VersionError` with migration hints
+- [x] **Legacy Version Mapping** (`storage/format/version.go:192`)
+  - `NormalizeVersion()`: maps old `version=1` → `V1.0` (0x0100)
+  - `version_legacy_test.go`: validates backward compatibility for all version pairs
+- [x] **Format Version Metadata**
+  - Footer stores explicit version string (`vego.format.version`)
+  - Foundation for forward/backward compatibility (full strategy in ADR 4, refined during Phase 2)
 
 #### Week 2-4: Memory Index & Caching (Critical Path)
-- **Row Index Implementation**: idHash → rowIndex mapping to fix Get() O(n) complexity
-  - Build from vectors.lance on startup (in-memory, no persistence needed for <1M docs)
-  - O(1) lookup for document retrieval
-- **LRU Cache for Documents**: Hot document caching for frequently accessed vectors
-  - Note: Current implementation uses BlockCache (page-level) only; standalone DocumentCache is not yet implemented
-  - Cache Search results to avoid repeated disk reads
-  - Configurable capacity (default: 10K documents)
-- **GetBatch Optimization**: Batch loading to reduce I/O round trips for Search results
+- [x] **RowIndex Memory Mapping** (`vego/storage.go`, `catalog.IDMapping`)
+  - `idToHash` (docID → internal ID) + reverse mapping for O(1) lookup
+  - Built from `vectors.lance` footer RowIndex metadata on startup
+  - In-memory only (<1M docs); rebuild cost negligible vs persistence complexity
+- [x] **`Get()` O(1) Path** (`vego/storage.go:245`)
+  - `bufferIndex` check (hot path: most recent writes)
+  - `tryReadByRowIndex()` → direct page/offset seek for persisted data
+  - Falls back to full scan only for legacy files without RowIndex
+- [x] **BlockCache Implementation** (`storage/format/blockcache.go`)
+  - 64KB blocks, sharded LRU (default 64 shards), thread-safe
+  - `Get`/`Put`/`Invalidate`/`Stats` API
+  - Used by column readers, footer readers, and RowIndex loaders
+- [ ] ~~**DocumentCache**~~ (not implemented)
+  - Phase 1 planned per-document LRU cache (default 10K docs)
+  - **Decision**: BlockCache provides sufficient caching; DocumentCache deferred indefinitely
+  - Search results currently read from BlockCache-decoded pages
+- [x] **GetBatch Optimization** (`vego/storage.go`)
+  - Batch loading to reduce I/O round trips for Search results
 
 #### Week 4-6: Storage Engine Hardening
-- **Block Cache Implementation**: 64KB blocks, LRU eviction, thread-safe page caching
-- **Writer Async Optimization**: Parallel encoding with guaranteed sequential writes
-- **Performance Baseline Establishment**: Comprehensive benchmark suite validating O(1) Get()
-- **End-to-End Integration Tests**: Full path coverage from Write → Read with cache validation
+- [x] **Deletion Vector In-Memory** (`index/deletion_vector.go`)
+  - `RoaringBitmap`-based row-level deletion markers
+  - Thread-safe `MarkDeleted()` / `IsDeleted()` / `Count()` / `Union()`
+- [x] **DV Persistence** (`index/deletion_vector_persist.go`)
+  - Serialize to `.del` sidecar files (varint-encoded RoaringBitmap)
+  - Deserialize on load; merge with in-memory DV
+- [x] **`SearchWithDV()` API** (`index/hnsw.go:161`)
+  - Greedy search returns candidates; post-filter via `isDeleted` callback
+  - Caller controls over-fetch (`k*2` for high deletion rates)
+- [x] **End-to-End Integration Tests**
+  - `index/search_with_dv_test.go`: DV correctness under concurrent insert/delete
+  - `vego/e2e_test.go`: full CRUD → Search pipeline
+  - `collection_compact_*_test.go`: compaction correctness across 9 strategies
+- [x] **Performance Baseline** (`bench_results/baseline.txt`)
+  - Write throughput, Read latency, Search latency, Build time
+  - 4x concurrency degradation documented (9.2ms vs 2.3ms)
+- [ ] **Writer Async Optimization** (deferred)
+  - Multi-column parallel encoding + guaranteed sequential writes
+  - Current ~330 MB/s sufficient for target scenarios
 
 #### Week 5-6: Storage Foundation (Non-blocking)
-- **Delta Encoding Implementation**: Variable-length integer encoding for time-series data (deferred to Phase 2)
-- **Error Classification System**: `storage/errors` package with structured error handling ✅
-- **Page-Level Statistics (Min/Max)**: Foundation for Phase 3 Zone Map (deferred to Phase 2)
-- **Nullable Encoding Unified Handling**: All encoders (RLE, BitPacking, BSS, Dictionary, Zstd) support null ✅
+- [x] **Error Classification System** (`core/errors` package)
+  - Structured errors with context (`core.IO()`, `core.Validation()`)
+  - `Unwrap()` support for `errors.Is()` chain inspection
+  - Stack-trace-like context accumulation
+- [x] **NullBitmap Unified Design** (`storage/encoding/nullbitmap.go`)
+  - Shared null bitmap abstraction across all encoders
+  - `Encode()` / `Decode()` / `IsNull()` / `SetNull()` API
+- [x] **Encoder Null Support** (all encoders)
+  - RLE (`rle.go` / `rle_decoder.go`)
+  - BitPacking (`bitpacking.go` / `bitpacking_decoder.go`)
+  - BSS (`bss.go` / `bss_decoder.go`)
+  - Dictionary (`dictionary.go` / `dictionary_decoder.go`)
+  - Zstd (`zstd.go` / `zstd_decoder.go`)
+- [ ] **Delta Encoding** (deferred to Phase 2)
+  - Variable-length integer delta for timestamps, auto-increment IDs
+  - `EnableDeltaEncoding` switch in `factory.go` reserved
+- [ ] **Page-Level Min/Max Statistics** (deferred to Phase 2)
+  - `MinValue`/`MaxValue` fields in `format.Page`
+  - Foundation for Phase 3 Zone Map page skipping
 
-#### Deletion Vector Framework (New)
-- **Design Rationale**: Following Lance's design, use logical deletion instead of physical deletion to support incremental updates without full rewrite
-- **In-Memory Deletion Vector**: Bitmap-based row-level deletion marker (RoaringBitmap or similar)
-- **HNSW Integration**: `SearchWithDV()` API to filter deleted nodes during search
-- **Persistence**: Serialize DV to `.del` sidecar files on flush
-- **Benefits**: Enables true Update support, prevents index bloat, foundation for MVCC
+#### Deletion Vector Framework (Cross-cutting)
+- **Design Rationale**: Following Lance's design, logical deletion instead of physical deletion to support incremental updates without full rewrite
+- **Implementation Details**:
+  - [x] In-memory: `RoaringBitmap` with `sync.RWMutex`
+  - [x] Persistence: `.del` sidecar with varint encoding
+  - [x] HNSW integration: `SearchWithDV()` post-filter
+  - [x] Compaction: `Compact()` rebuilds graph excluding DV-marked nodes
+- **Benefits**:
+  - ✅ Fast soft-delete (O(1) bitmap mark)
+  - ✅ Background compaction amortizes cleanup cost
+  - ✅ Foundation for MVCC (snapshot isolation via DV versioning)
+- **Trade-offs**:
+  - ❌ Slightly higher memory (bitmap overhead, ~1 bit per row)
+  - ❌ Search needs DV filtering (minimal: bitmap check is O(1))
 - **API**:
   ```go
   type DeletionVector interface {
@@ -160,17 +221,27 @@ Solidify the storage foundation, establish benchmarks, and ensure subsequent dev
   }
   ```
 
-### Steps
-1. Error classification system ✅
-2. End-to-end integration tests ✅
-3. Performance baseline tests ✅
-4. Performance optimization:
-   - Index Build Performance (HNSW)
-   - Query Performance (HNSW)
-5. File version management mechanism ✅
-6. Page-level statistics framework (deferred to Phase 2)
-7. Delta encoding framework (deferred to Phase 2)
-8. Nullable unified handling ✅ - All encoders support null
+### Detailed Task Inventory
+
+| # | Task | Status | Key Files |
+|---|------|--------|-----------|
+| 1 | Header/Footer version fields | ✅ | `storage/format/header.go`, `footer.go` |
+| 2 | `VersionPolicy` + `VersionChecker` | ✅ | `storage/format/version.go` |
+| 3 | Legacy version mapping | ✅ | `storage/format/version_legacy_test.go` |
+| 4 | RowIndex memory mapping | ✅ | `vego/storage.go`, `catalog/` |
+| 5 | `Get()` O(1) via RowIndex | ✅ | `vego/storage.go:245` |
+| 6 | BlockCache (64KB, LRU, sharded) | ✅ | `storage/format/blockcache.go` |
+| 7 | Deletion Vector in-memory | ✅ | `index/deletion_vector.go` |
+| 9 | DV persistence (.del sidecar) | ✅ | `index/deletion_vector_persist.go` |
+| 10 | `SearchWithDV()` API | ✅ | `index/hnsw.go:161` |
+| 11 | End-to-end integration tests | ✅ | `index/search_with_dv_test.go`, `vego/e2e_test.go` |
+| 12 | Performance baseline | ✅ | `bench_results/baseline.txt` |
+| 13 | Error classification system | ✅ | `core/errors` |
+| 14 | NullBitmap + all encoder null support | ✅ | `storage/encoding/nullbitmap.go` |
+| 15 | DocumentCache (standalone) | ❌ not impl | — (BlockCache sufficient) |
+| 17 | Writer Async Optimization | ❌ deferred | — |
+| 18 | Delta Encoding | ❌ deferred | `factory.go` (reserved) |
+| 19 | Page-level Min/Max Statistics | ❌ deferred | `format.Page` (reserved) |
 
 ### Definition of Done
 - [x] File version management: Can detect and handle format version mismatches
@@ -264,6 +335,13 @@ The following tasks were moved from Phase 1 to Phase 2. They don't affect MVP co
   - Step 1: Promote `storage/io/` → `vfs/`
   - Step 2: Isolate `index/` (remove illegal storage imports)
   - Step 3: Clean up `memory/` → `vego/` (remove direct `index/` dependency)
+- **I/O Layer Fixes** (completed during Step 1 / Step 3):
+  - [x] **`FilePool` Handle Reuse** (`vfs/file_pool.go`)
+    - `sync.RWMutex` + reference counting for OS file handles
+    - Prevents `too many open files` under concurrent column reads
+  - [x] **Partial Read Fix** (`storage/format/footer.go`, `manifest.go`, `page.go`)
+    - Replaced bare `Read()` with `io.ReadFull()` for fixed-size structures
+    - Prevents corrupted reads under high I/O pressure
 - **Result**: `core/` (L1) → `vfs/` (L2) → `index/` (L3-A) + `storage/` (L3-B) → `vego/` (L4) → `memory/` (L5)
 - **Details**: See [ARCHITECTURE.md](ARCHITECTURE.md) for full specification
 
