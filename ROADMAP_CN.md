@@ -6,15 +6,17 @@
 |------|------|--------|-----------|
 | Phase 0 ✅ | 统一 API 与基础 | 1-2 周 | 用户友好的 API、基础集成测试 |
 | Phase 1 ✅ | 存储引擎加固 | 4-6 周 | 行索引、块缓存、Deletion Vector（框架）、Get() O(1) |
-| **Phase 2** | MVP（最小可行产品） | 6-8 周 | CRUD 操作、Agent Memory、架构重构、Delete/Update 加固 |
+| **Phase 2** | MVP（最小可行产品） | 10-12 周 | CRUD 操作、Agent Memory、架构重构、Delete/Update 加固、I/O 调度器、Blob 描述符 |
 | Phase 3 | Beta 版 | 8-10 周 | CMO、Zone Map、IVF-PQ 索引、Blob 分层存储、生产就绪 |
 | Phase 4 | V1.0 性能版 | 10-12 周 | MiniBlock、预取、IVF-HNSW-PQ、Late Materialization |
 | Phase 5 | V1.5 云原生版 | 12-16 周 | 对象存储、多模态优化、云存储支持 |
 | Phase 6 | V2.0 企业版 | 20-24 周 | WAL、MVCC（简化版）、标量索引、时间点恢复 |
 
-**当前重点**：Phase 2 收尾 — Agent Memory ✅、架构重构 ✅（v0.1.5 已发布）、Delete/Update 加固 ✅。准备进入 Phase 3（IVF-PQ、Zone Map、Blob 存储）。
+**状态图例**：✅ 已完成 · 🔄 进行中 · ⚠️ 部分/需跟进 · ❌ 未开始 · ~ 推迟
 
-> **说明**：Phase 0（统一 API）和 Phase 1（存储引擎加固）已完成。若干非关键任务（备份/恢复、高级可观测性、结构化错误）已推迟至 Phase 6。详见 Phase 6 "第六层" 了解推迟的任务。
+**当前重点**：Phase 2 作用域扩大 — 核心 MVP 已交付（Agent Memory ✅、架构重构 ✅ 于 v0.1.5、Delete/Update 加固 ✅）。剩余工作：I/O 调度器（关键）、Tombstone 带宽限期、Blob 描述符 + 内联层、Phase 1 存储收尾任务。Pack/Dedicated Blob 层级和 Pack GC 移至 Phase 3。
+
+> **说明**：Phase 0（统一 API）和 Phase 1（存储引擎加固）已完成。架构重构（Phase 2）已合并到 `main` 分支，标签 `v0.1.5`。Phase 2 时间线从 6-8 周扩展到 10-12 周，以吸收 I/O 调度器、Tombstone 和最小 Blob 基础；完整 Blob 分层存储移至 Phase 3。若干非关键任务（备份/恢复、高级可观测性、结构化错误）已推迟至 Phase 6。详见 Phase 6 "第六层" 了解推迟的任务。
 
 ---
 
@@ -264,8 +266,12 @@ results, _ := coll.Search(queryVector, 10,
 
 ## Phase 2: MVP（最小可行产品）⭐ 当前优先
 
+**时间线**：10-12 周（从 6-8 周修订，以吸收 I/O 调度器 + Tombstone + Blob 基础 + Phase 1 遗留任务）
+
 ### 目标
 使系统能够处理真实世界的数据，具备基础 CRUD 和查询能力。参考 Lance 设计：向量存储（Page 内）与多模态存储（外部）分离，支持大对象懒加载。
+
+Phase 2 交付 **最小** blob 基础（仅描述符格式 + 内联层）。Pack 文件、Dedicated 文件和 Pack GC 划入 Phase 3，以保持 Phase 2 可交付。
 
 ### 关键任务
 
@@ -274,7 +280,9 @@ results, _ := coll.Search(queryVector, 10,
   - HNSW 节点通过 DV 标记删除，不从图中移除
   - 搜索结果通过 DV 过滤（每次结果 O(1) 检查）
   - 后台压缩定期回收空间
-- **墓碑机制 ⚠️**：带宽限期的软删除（当前通过 DeletionVector bitmap 标记实现即时软删除；带宽限期/恢复机制的独立 Tombstone 未实现）
+- **墓碑机制 ❌**：软删除带宽限期与恢复
+  - **当前状态**：DV bitmap 仅提供即时软删除，无带宽限期、无恢复窗口
+  - **未实现**：无代码存在（`index/tombstone.go`、`index/tombstone_persist.go` 不存在）
 - **孤儿预防 ✅**：Update 使用 DV 标记旧版本，插入新版本
 - **索引压缩 ✅**：后台重建移除 DV 标记节点并优化图结构
   - 阻塞式压缩已实现（自动触发 + 手动触发）
@@ -287,27 +295,118 @@ results, _ := coll.Search(queryVector, 10,
     - 实现在线服务的零停机压缩
     - 工程复杂度较高（4-5 倍工作量）
 
-#### I/O 调度器重構（关键）❌
+#### I/O 调度器重构（关键）🔄
 - **问题**：当前 4x 并发 = 4x 性能退化
-- **解决方案**：实现 Lance 风格的 I/O 调度器：
-  - **请求合并 ❌**：合并相邻/小 I/O 请求
-  - **优先级队列 ❌**：基于行号的优先级，优化顺序扫描
-  - **背压 ❌**：限制进行中的 I/O 防止内存爆炸
-  - **每文件调度 ❌**：每文件独立队列避免队头阻塞
-- **状态**：未实现，计划推迟至 Phase 3 或作为独立优化项目
-- **API**：
+- **目标**：4x 并发退化 < 20%（对比当前 300%+）
+- **状态**：骨架已实现（`vfs/scheduler.go` + `vfs/async.go` + `vfs/executor.go` + `storage/column/reader.go` `NewReaderWithAsyncIO`）。**生产路径未接入** — `vego/storage.go` 仍使用同步 `column.NewReader()` / `column.NewReaderWithCache()`；`NewReaderWithAsyncIO()` 仅用于测试。
+
+**设计原理**：当前同步 I/O 模型在每个 goroutine 内串行化读取，导致并发下过度上下文切换和 OS 页缓存抖动。用户空间 I/O 调度器（参考 Lance 设计）集中 I/O 决策以最大化吞吐。
+
+**架构**：两级调度器（全局准入 + 每文件分发）。详见下方子任务。
+
+##### 子任务 1：核心调度器接口与类型 🔄
+- [x] `IORequest` / `IORange` 结构体定义（`vfs/request.go`）
+- [x] `Scheduler` 结构体含 `Submit()` / `SubmitBatch()`（`vfs/scheduler.go`）
+- [x] `Executor` 工作池（`vfs/executor.go`）
+- [x] `AsyncIO` 外观（`vfs/async.go`）
+- [ ] `GetScheduler()` 单例 + `NewScheduler(cfg)` 工厂
+- [ ] 完整 `Config` 结构体：`MaxInFlight`、`EnableCoalescing`、`CoalesceWindow`、`WorkersPerFile`、`FileIdleTimeout`
+
+##### 子任务 2：请求合并引擎 ❌
+- [ ] `Coalescer` 结构体：在时间窗口内将相邻/重叠的 `IORange` 请求分组
+- [ ] 算法：按 `(FileID, Offset)` 排序，在 gap < threshold 时合并连续区间
+- [ ] `CoalesceWindow`：可配置批处理窗口（默认 100µs）
+- [ ] 单元测试：相邻合并、gap 阈值、多文件隔离、窗口超时
+
+##### 子任务 3：带行号排序的优先级队列 🔄
+- [x] `priorityQueue` 基于 `container/heap`（`vfs/scheduler.go:267`）
+- [x] 基础优先级排序（`Priority` 字段）
+- [ ] 优先级分层枚举：`PriorityHigh` / `PriorityNormal` / `PriorityLow`
+- [ ] 同层内行号决胜：有利于顺序扫描
+- [ ] 饥饿预防：基于年龄的优先级提升
+
+##### 子任务 4：背压机制 🔄
+- [x] 队列容量阻塞：`Submit()` 在 `queue.Len() >= maxQueueSize` 时阻塞
+- [ ] `MaxInFlight` 字节限制（默认 64MB）— 当前仅有队列槽位限制
+- [ ] `ErrBackpressure` / `ErrOverloaded` 非阻塞模式
+- [ ] `InFlight() int64` 监控 API
+- [ ] 自适应阈值自动调优
+
+##### 子任务 5：每文件调度 ❌
+- [ ] `FileScheduler` 结构体：每个活跃文件一个
+- [ ] 每文件有界工作池（默认 2–4 个 worker）
+- [ ] `SubmitToFile(fileID, req)` 从全局调度器路由
+- [ ] 每文件头行阻塞隔离
+- [ ] 空闲超时清理（默认 30s）
+
+##### 子任务 6：存储层集成 🔄
+- [x] `ColumnReader` 支持 `NewReaderWithAsyncIO()`（`storage/column/reader.go`）
+- [x] `readPage()` / `readPagesBatch()` 在 `useAsync=true` 时走异步路径
+- [ ] **生产接入**：`vego/storage.go` 必须改用 AsyncIO 创建 reader，而非 `NewReader()` / `NewReaderWithCache()`
+- [ ] 多页读取批量 API
+- [ ] 调度器为 nil 时的向后兼容回退
+
+##### 子任务 7：指标与可观测性 🔄
+- [x] 基础计数器：`Submitted`、`Completed`、`Errors`（`SchedulerStats` 部分）
+- [ ] `SchedulerStats` 完整结构体：`CoalescedRequests`、`AvgQueueDepth`、`AvgWaitLatency`、`InFlightBytes`、`BackpressureEvents`
+- [ ] Prometheus 格式导出（Phase 3 监控基础）
+
+##### 完成标准（I/O 调度器）
+- [ ] 生产读路径接入 AsyncIO（`vego/storage.go`）
+- [ ] 4x 并发搜索延迟退化 < 20%（对比基线 1x 并发）
+- [ ] 16x 并发延迟退化 < 50%
+- [ ] 合并使顺序扫描下 I/O 系统调用减少 > 40%
+- [ ] 背压在 1000+ 并发查询下防止 OOM
+- [ ] 所有现有存储测试在调度器启用时通过
+
+#### Phase 1 遗留任务（存储引擎收尾）
+
+这些任务不影响 MVP 核心功能，但提升存储引擎完整度。从 Phase 1 移至 Phase 2。
+
+##### 遗留任务 1：逐页 Min/Max 统计 ❌
+- [ ] 在 `format.Page` 结构体中增加 `MinValue any` + `MaxValue any` 字段
+- [ ] `PageWriter` 中按列类型比较：
+  - 数值列：写入 page 时通过 `Compare()` 循环跟踪 min/max
+  - 字符串列：跟踪字典序 min/max
+  - 向量列：跳过（高维向量的 min/max 无意义）
+- [ ] `PageWriter` 的 `UpdateStats(val any)` 方法 — 编码期间每值调用
+- [ ] `Page.Stats() PageStats` — 返回 `{Min, Max, NullCount, RowCount}`
+- [ ] min/max 序列化为 footer 元数据（不内联到 page 体，避免破坏 page 布局）
+- [ ] `PageSkipper` 接口（Phase 3 Zone Map 使用）：
   ```go
-  type IOScheduler interface {
-      Submit(requests []IORange, priority int) Future<[]bytes>
-      Coalesce(requests []IORange) []IORange
+  type PageSkipper interface {
+      CanSkip(page PageStats, predicate Predicate) bool
   }
   ```
+- [ ] 单元测试：验证每种编码器的 min/max 正确性、null 处理
 
-#### Phase 1 延续任务（存储引擎收尾）
-以下任务从 Phase 1 移至 Phase 2，不影响 MVP 核心功能但提升存储引擎完整度：
-- **逐页 Min/Max 统计**：在 `format.Page` 结构体中增加 `MinValue`/`MaxValue` 字段，`PageWriter` 写入时逐页收集，为 Phase 3 Zone Map 页面跳过提供细粒度统计
-- **Delta 编码实现**：实现变长整数 Delta 编解码器，适用于时间戳、自增 ID 等单调递增数据，启用 `factory.go` 中的 `EnableDeltaEncoding` 开关
-- **Writer 异步优化**：Column Writer / PageWriter 当前为同步写入；实现多列并行编码 + 顺序写入，提升大批量写入吞吐（当前 ~330 MB/s 在目标场景下够用，但作为性能专项优化）
+##### 遗留任务 2：Delta 编码实现 ❌
+- [ ] `storage/encoding/delta.go` 中的 `DeltaEncoder`：
+  - 输入：已排序/近似排序的 int64/uint64 序列
+  - 算法：首值存绝对值，后续值存 `delta = val[i] - val[i-1]`，使用 varint 编码
+  - `Encode(values []int64) ([]byte, error)`
+- [ ] `storage/encoding/delta_decoder.go` 中的 `DeltaDecoder`：
+  - `Decode(data []byte, out []int64) error` — 重建原始值
+  - 支持部分读取：通过累加 delta 定位到位置 N
+- [ ] 集成到 `storage/encoding/factory.go`：
+  - `EnableDeltaEncoding` 开关（factory.go 中已预留）
+  - 自动检测资格：列类型为 `int64/uint64/timestamp` 且升序排列
+  - 数据未排序时回退到 plain/ZSTD
+- [ ] 最佳压缩比目标：时间戳 > 80%，自增 ID > 60%
+- [ ] 单元测试：往返、边界情况（全同值、负 delta、溢出）、部分读取
+
+##### 遗留任务 3：Writer 异步优化 ❌
+- [ ] 当前状态：`ColumnWriter` / `PageWriter` 同步编码，一次一列
+- [ ] 目标：多列并行编码，然后顺序写入 page（确定性文件布局）
+- [ ] 实现计划：
+  - [ ] `AsyncColumnWriter`：每列一个 goroutine 执行编码阶段
+  - [ ] `sync.WaitGroup` 收集所有已编码 page 缓冲区
+  - [ ] 顺序写入完成的 page（确保 page 顺序确定性）
+  - [ ] 可配置工作池：`NumWriteWorkers`（默认 `runtime.GOMAXPROCS(0)`）
+- [ ] 内存预算：限制在途编码 page 总量为 `MaxWriteBufferBytes`（默认 128MB）
+- [ ] 预期吞吐：800–1200 MB/s（估计比当前 ~330 MB/s 提升 2.5–3.5 倍；实际收益取决于列数和编码组合，受 Amdahl 定律约束 — 单宽列收益极小，10+ 窄列收益最大）
+- [ ] 集成：`WriterConfig` 增加 `WithAsyncWrite(bool)` 选项，默认关闭保安全
+- [ ] 基准测试：比较 `BenchmarkWrite*` 前后，测量 wall-clock 时间和 CPU 利用率
 
 #### Agent Memory 系统 ✅
 - **目标**：为 AI Agent 提供嵌入式向量可搜索记忆，基于 Vego 的 HNSW + 列式存储构建
@@ -345,50 +444,319 @@ results, _ := coll.Search(queryVector, 10,
 - **结果**：`core/`（L1）→ `vfs/`（L2）→ `index/`（L3-A）+ `storage/`（L3-B）→ `vego/`（L4）→ `memory/`（L5）
 - **详情**：见 [ARCHITECTURE_CN.md](ARCHITECTURE_CN.md)
 
-#### Blob 存储基础（新增）❌
-- **目标**：支持多模态数据（图像、视频、音频），参考 Lance Blob v2 设计
-- **存储策略**（3 层，类似 Lance）：
-  - **内联 ❌**：< 64KB Blob 直接存储在 Page 中
-  - **打包 ❌**：64KB ~ 4MB Blob 存储在 `.pack` 侧车文件（每文件最大 1GB）
-  - **独立 ❌**：> 4MB Blob 存储在单独的 `.blob` 文件
-- **描述符格式**：`struct { kind uint8; position uint64; size uint64; fileID uint32 }`
-- **API 预览**：
-- **状态**：未实现，计划作为 Phase 3 或独立功能模块
+#### Blob 存储基础（最小范围 — 仅内联层）❌
+- **目标（Phase 2 范围）**：确立 blob 描述符格式和可用的内联层（< 64KB），使列类型、API 表面和磁盘布局在 Phase 3 叠加 Pack 和 Dedicated 层之前就已确定。
+- **状态**：未实现
+- **推迟到 Phase 3**：Pack 文件管理器（64KB–4MB）、Dedicated blob 文件（> 4MB）、完整 `BlobStorage` 注册表路由、`take_blobs()` 流式 API、Pack GC、大 blob 边界测试。见 Phase 3 "Blob 存储：分层实现"。
+
+**设计原理**：向量和大型二进制对象访问模式根本不同。向量小（768 维约 3KB）、计算密集、急切加载。多模态数据大（KB 到 GB）、I/O 密集、应懒加载。根据 ADR 10，blob 存储与向量/列式存储分离。Phase 2 仅锁定描述符 + 内联路径，使面向用户的类型稳定；Phase 3 扩展层级而不破坏 API。
+
+##### 子任务 1：Blob 描述符格式 ❌
+- [ ] `storage/format/blob.go` 中的 `BlobDescriptor` 结构体：
   ```go
-  type BlobStorage interface {
-      Write(data []byte) (BlobDescriptor, error)
-      Read(desc BlobDescriptor) (io.ReadCloser, error)
+  type BlobDescriptor struct {
+      Kind     uint8   // 0=内联（Phase 2），1=pack（Phase 3），2=dedicated（Phase 3）
+      Position uint64  // 目标文件内的字节偏移
+      Size     uint64  // blob 大小（字节）
+      FileID   uint32  // 内联为 0（位于列 page 中）；Phase 3 为 pack/.blob 预留
   }
   ```
+- [ ] 序列化大小：每个描述符 21 字节（足够紧凑，可内联存储在 page 元数据中）
+- [ ] `Encode()/Decode()` 二进制 I/O 方法
+- [ ] **前向兼容**：
+  - `Encode()` 在 21 字节载荷前写入 1 字节格式版本前缀（`0x01`）；`Decode()` 检查并拒绝未知版本。这样 Phase 3 可扩展描述符布局而不破坏 Phase 2 解析。
+  - 编码器仅写入 `Kind=0`；解码器遇到 `Kind=1/2` 时以明确的"Phase 3 必需"错误拒绝，使现有读取器在升级数据出现时大声失败
+
+##### 子任务 2：内联 Blob 存储（< 64KB）❌
+- [ ] `storage/format/blob_inline.go` 中的 `InlineBlobWriter`：
+  - 将 blob 字节直接作为变长二进制数组存储在列 page 中
+  - `Write(blobs [][]byte) ([]BlobDescriptor, error)` — 返回所有 `Kind=0` 的描述符
+  - 最大 blob 大小：64KB（通过 `MaxInlineBlobSize` 配置）；更大 blob 返回 `ErrBlobTooLargeForPhase2`（Phase 3 将路由到 Pack/Dedicated）
+- [ ] `InlineBlobReader`：
+  - `Read(desc BlobDescriptor) ([]byte, error)` — 使用 Position + Size 从 page 读取 blob
+  - 无额外文件 I/O：blob 已在列 reader 加载的 page 中
+- [ ] 权衡：内联 blob 增大 page 大小 → 每页行数减少 → 内存更高。最适合小缩略图、短文本、图标。
+
+##### 子任务 3：最小列 + 集合接入（仅内联）❌
+- [ ] 仅内联 blob 的 `BlobColumnWriter` / `BlobColumnReader`：
+  - 列类型：`core.BlobType`（新 Arrow 扩展类型）
+  - 每行存储 `[]BlobDescriptor`（21 字节 × N），payload 共置于列 page 中
+- [ ] `BlobHandle` 类型：
+  ```go
+  type BlobHandle struct {
+      desc  BlobDescriptor
+      store BlobStorage
+  }
+  func (h BlobHandle) Read() ([]byte, error)
+  func (h BlobHandle) Size() int64
+  // Phase 3 随 Pack/Dedicated 层增加 ReadCloser/Range
+  func (h BlobHandle) Close() error  // Phase 2 无操作；Phase 3 Pack/Dedicated 释放文件句柄
+  ```
+- [ ] `coll.Insert()` 接受 ≤ `MaxInlineBlobSize` 的 blob 字段；更大 blob 返回 `ErrBlobTooLargeForPhase2`，直到 Phase 3 落地
+- [ ] `coll.Get()` 为 blob 字段返回 `BlobHandle`（调用方调用 `.Read()` 物化字节）
+
+##### 子任务 4：测试（内联层）❌
+- [ ] 往返测试：写 → 读 → SHA256 校验，尺寸 {1B, 1KB, 16KB, 64KB-1, 正好 64KB}
+- [ ] 边界测试：blob > 64KB 返回 `ErrBlobTooLargeForPhase2`（Phase 3 将替换为自动分层路由）
+- [ ] 兼容测试：`Kind=1` 或 `Kind=2` 的描述符被 Phase 2 读取器拒绝并附带 Phase 3 提示
+- [ ] 并发写入：多页多小内联 blob，验证无跨行损坏
 
 #### 存储引擎增强 🔄
-- **累积缓冲区 🔄**：避免小页面（< 4KB）（Write Buffer 部分实现）
-- **基础监控 ⚠️**：I/O 计数、缓存命中率、编码延迟（Stats 接口部分实现）
-- **请求合并 ❌**：合并相邻 I/O 请求（待 I/O 调度器实现）
-- **表抽象层 ⚠️**：用户的高级 API（Collection API 基础版本已可用）
-- **Manifest 基础版本 ❌**：文件元数据管理（Phase 5 MVCC 的基础）
-- **列裁剪（基础）❌**：仅读取所需列
 
-#### 性能优化
-  - 异步 I/O 内存开销
-  - 多读取器并发退化（当前：4x 并发 = 4x  slowdown！）
-    ```
-    并发 1:  2.3 ms
-    并发 4:  9.2 ms  (4x 退化！)
-    并发 16: 38 ms   (16x 退化！)
-    ```
+##### 增强 1：累积缓冲区 ❌
+- **问题**：小页面（< 4KB）导致 I/O 放大和差压缩比
+- **目标**：所有列类型最小 64KB 页面
+- **当前状态**：存储格式层无 `WriteBuffer` 实现。唯一的缓冲是 `vego/storage.go` 中的 `DocumentStorage.writeBuffer`，它是用于批处理写入的文档级内存缓冲 — 并非下文描述的页面级累积缓冲区。
+- [ ] `storage/format/write_buffer.go` 中的 `WriteBuffer`：
+  - 累积值直到缓冲区达到 `MinPageSize`（默认 64KB）或 `MaxPageRows`（默认 65535）
+  - `Append(val any) (flushed bool, page *Page, err error)` — 缓冲区满前返回 nil page
+  - `Flush() (*Page, error)` — 强制刷写剩余缓冲数据
+- [ ] 按列类型大小估算：
+  - 定宽类型（int32、float64）：已知 `sizeof(val)` × 数量
+  - 变宽类型（string、binary）：`len(val)` 运行总和
+  - 压缩类型：保守估计压缩后大小（原始大小的 50%）
+- [ ] `Flush()` 触发时机：缓冲区阈值、集合关闭、或显式 `coll.Sync()`
+- [ ] 基准测试：比较前后 page 数量和写入吞吐，目标 page 数量减少 > 60%
+
+##### 增强 2：基础监控 ⚠️
+- **当前**：Stats 接口部分实现
+- [ ] `vego/metrics.go` 中的 `StorageMetrics` 结构体（无外部依赖 — 保持 `vego` 包零依赖）：
+  ```go
+  type StorageMetrics struct {
+      IOCount       atomic.Int64    // 总 I/O 操作数
+      IOBytes       atomic.Int64    // 总读取字节数
+      CacheHits     atomic.Int64    // BlockCache 命中
+      CacheMisses   atomic.Int64    // BlockCache 未命中
+      CacheHitRate  float64         // 计算：hits / (hits + misses)
+      EncodeLatency LatencyHistogram // 编码时间分布（自定义，Phase 3 增加 Prometheus 适配器）
+      ReadLatency   LatencyHistogram // 读取时间分布
+      ActiveReaders atomic.Int32    // 当前并发读取器
+  }
+  // LatencyHistogram 是简单分桶直方图（[]int64 buckets + 总计数）。
+  // Phase 3 导出到 Prometheus；Phase 2 仅通过 Metrics() 快照暴露。
+  type LatencyHistogram struct { ... }
+  ```
+- [ ] 集成点：
+  - `vfs.ReadAt()` 包装器：增加 `IOCount`、`IOBytes`
+  - `BlockCache.Get()`：增加 `CacheHits` 或 `CacheMisses`
+  - 编码器 `Encode()` 调用：通过直方图计时
+- [ ] `coll.Metrics() StorageMetrics` — 应用快照
+- [ ] `WithMetrics(enabled bool)` 选项：禁用时零开销（默认**关闭**，兑现零开销承诺；生产部署选择开启）
+- [ ] Prometheus 导出器（Phase 3）：`GET /metrics` 端点提供 Prometheus 格式数据
+
+##### 增强 3：Manifest 系统 ⚠️
+- **目标**：文件级元数据管理，Phase 5 MVCC 基础
+- **当前状态**：`storage/format/manifest.go` 已有带 MVCC 版本追踪的 `ManifestManager`（`CreateVersion`/`CommitVersion`/`GetVersion`/`GetLatestVersion`）。缺失：文件注册表级 `ManifestEntry`（per-file CRC、行范围、文件类型），设计如下。
+- [ ] `storage/manifest.go` 中的 `Manifest` 结构体：
+  ```go
+  type Manifest struct {
+      Version     uint32              // manifest 格式版本
+      Files       []ManifestEntry     // 该集合的所有文件
+      SequenceNum uint64              // 单调递增
+      CreatedAt   time.Time
+      UpdatedAt   time.Time
+  }
+  type ManifestEntry struct {
+      FilePath   string              // 集合目录内的相对路径
+      FileType   FileType            // data / index / del / blob / pack
+      Size       int64               // 文件大小（字节）
+      Checksum   uint32              // 文件内容 CRC32
+      RowCount   uint32              // 文件内行数
+      MinRowID   uint32              // 行范围（裁剪用）
+      MaxRowID   uint32
+      CreatedAt  time.Time
+  }
+  ```
+- [ ] `FileType` 枚举：`{DataFile, IndexFile, DelFile, TombstoneFile, PackFile, BlobFile}`
+- [ ] Manifest 持久化：JSON 供人可读（manifest.json）+ 二进制供性能（manifest.bin）
+- [ ] 原子更新：写入临时文件 → rename（防止损坏）
+- [ ] `Manifest.Load(path string)` — 读取并验证（每项 CRC 检查）
+- [ ] `Manifest.Add(entry ManifestEntry)` / `Manifest.Remove(filePath string)`
+- [ ] 集成策略 — **Writer 拥有（方案 A）**：`PageWriter` / `ColumnWriter` 内部创建或替换数据文件时调用 `Manifest.Add()`，compact/reclaim 时调用 `Manifest.Remove()`。这使 manifest 始终正确，代价是 storage→manifest 依赖。（替代方案：将文件列表返回给 `vego` 层由其管理 manifest — 依赖图更简单，但如果 writer 在文件创建和 manifest 更新之间崩溃则存在竞态。从方案 A 开始保证正确性；若依赖成为问题再 revisit。）
+- [ ] 单元测试：CRUD、同时读写、损坏检测、版本兼容
+
+##### 增强 4：列裁剪（基础）❌
+- **目标**：只读取所需列，减少触及列子集的查询 I/O
+- [ ] `core/schema.go` 中的 `Schema` 结构体：
+  ```go
+  type Schema struct {
+      Columns []ColumnMeta
+  }
+  type ColumnMeta struct {
+      Name     string
+      Type     core.DataType
+      Nullable bool
+  }
+  ```
+- [ ] `ReaderOptions.WithColumns(names []string)` — 指定加载哪些列
+- [ ] `ColumnReader` 集成：
+  - 解析 footer → 获取列偏移
+  - 完全不读取未请求列的 page
+  - 仍需读取 RowIndex（行解析始终需要）
+- [ ] 搜索集成：`coll.Search(query, k, WithColumns("id", "title"))` — 回读时跳过向量列
+- [ ] `ForEach` / `GetAllValidDocuments`：列裁剪避免将向量加载到内存
+- [ ] 性能目标：10 列文件上单列查询 I/O 减少 > 70%
+- [ ] 单元测试：验证未请求列零 I/O，验证结果正确性
+
+##### 性能实现任务
+
+###### 任务 1：Async I/O 内存预算 ⚠️
+- [ ] `ReadAheadConfig`：`{MaxReadAheadBytes int64; MaxReadAheadPages int}`
+- [ ] 限制总飞行读前预算为 `MaxReadAheadBytes`（默认 32MB）
+- [ ] `ActiveReadAhead() int64` — 当前读前内存用量，用于监控
+- [ ] 溢写到同步：预算耗尽时，新读取回退到同步路径
+- [ ] 单元测试：预算执行、并发读取器内存追踪
+
+###### 任务 2：BlockCache 调优 🔄
+- [ ] 基于 `GOMAXPROCS` 自动调优缓存 shard 数量（当前：硬编码 64 shards；自动调优禁用或计算不合理值时保留 64 作为 fallback）
+- [ ] 自适应缓存大小：`MaxCacheSize` 为可用系统内存的百分比（默认 25%）
+- [ ] 顺序访问模式上的缓存预取：检测前向扫描 → 预加载下一 block
+- [ ] `WarmCache(column string, rowRange RowRange)` — 已知热范围的显式预加载
+- [ ] 基准测试：比较不同 shard 数量和大小下的缓存命中率
+
+###### 任务 3：搜索 Goroutine 池 ⚠️
+- [ ] `index/hnsw.go` 中的 `SearchWorkerPool`：
+  - 并发搜索图遍历的有界 goroutine 池
+  - 默认 workers：`min(GOMAXPROCS, 8)` — 防止过度订阅
+  - `Submit(query) → channel` — worker 通过 channel 返回结果
+- [ ] 预判 I/O 调度器集成：搜索 worker 向调度器提交读取，而非直接访问 OS
+- [ ] 基准测试：4x/8x/16x 并发搜索，有/无 worker pool
+
+###### 任务 4：基准测试套件 ⚠️
+- [ ] CI 基准回归检测：
+  - `bench_results/baseline.txt` — 参考数值
+  - `make bench-compare` — 对比当前与基线，标记 >10% 退化
+- [ ] 追踪的关键指标：
+  - 写入：768 维向量的 MB/s（1K、10K、100K 批量大小）
+  - 读取：Get() 延迟（冷缓存 vs 热缓存）
+  - 搜索：10K、100K、1M 规模下 k=10 延迟
+  - 并发：1x/4x/8x/16x 搜索吞吐
+  - 内存：空闲 RSS、写入期间、并发搜索期间
+- [ ] 目标：在 `bench_results/history/` 中维护基准历史以进行趋势分析
+
+#### 已知瓶颈与解决路径
+
+**当前问题**：多读取器并发因 OS 页缓存抖动和缺乏协调 I/O 导致严重退化：
+
+```
+并发 1:  2.3 ms
+并发 4:  9.2 ms  (4x 退化！)
+并发 16: 38 ms   (16x 退化！)
+```
+
+##### 瓶颈 1: flush() 全量重写 — O(n) ❌
+- **位置**：`vego/storage.go:661` — 读取所有现有文档，追加缓冲区，重写整个文件
+- **影响**：写入延迟随集合大小线性增长；1M 文档 → 多秒级 flush
+- **解决路径**：追加写段文件（O(buffer_size)）→ 后台合并 → Manifest 追踪活跃段
+- **依赖**：Manifest 系统（增强 3）
+- **验收**：flush() 代价 = O(buffer_size)；1M 向量（768维）写入 < 30s
+
+##### 瓶颈 2: GetBatch 顺序 I/O ❌
+- **位置**：`vego/storage.go:365` — 循环顺序调用 Get()
+- **影响**：GetBatch(k=10) 代价 ~10x 单次 Get()，而非批量 I/O 的 ~1x
+- **解决路径**：批量 RowIndex 查找 → 按文件偏移排序 → 单次顺序扫描物化
+- **验收**：GetBatch(k=10) < 2x 单次 Get() 延迟
+
+##### 瓶颈 3: ForEach / GetAllValidDocuments 全量内存加载 ❌
+- **位置**：`vego/storage.go:541`（GetAllValidDocuments），`storage.go:597`（ForEach）
+- **影响**：全文件加载到内存；1GB 文件 = 1GB+ RSS 峰值
+- **解决路径**：多 batch 文件格式 + `ReadNextBatch()` 迭代器 + 列裁剪
+- **依赖**：列裁剪（增强 4）、Writer 多 batch 支持
+- **验收**：1GB 文件 ForEach RSS < 100MB
+
+##### 瓶颈 4: 并发退化 300%+ ⚠️
+- **位置**：OS 页缓存抖动 — 并发 `vfs.File.ReadAt()` 调用导致内核竞争
+- **影响**：4x 并发 = 4x 延迟（应为亚线性）
+- **解决路径**：`vego/` 层接入 I/O 调度器（已有 `vfs/scheduler.go` + `vfs/async.go` 基础设施）
+- **验收**：4x 并发退化 < 20%；16x < 50%
+
+##### 瓶颈 5: 缓存效果未量化 ⚠️
+- **位置**：`storage/format/blockcache.go` — Stats() 存在但未暴露到用户 API
+- **影响**：无法在没有可见性的情况下调优缓存大小
+- **解决路径**：通过 `coll.Metrics()` 暴露 `BlockCache.Stats()`（关联增强 2：基础监控）
+- **验收**：重复查询 < 冷缓存延迟 20%（即 5x+ 提升）；命中率通过 `coll.Metrics()` 可见
+
+### 实施优先级与依赖图
+
+#### 优先级 1 — 阻塞 Phase 3（Phase 2 关闭前必须完成）
+
+| 任务 | 位置 | 阻塞 |
+|------|------|------|
+| 列裁剪（基础） | `storage/column/reader.go` | Phase 3 ForEach 流式遍历、投影下推、并行列读取 |
+| 逐页 Min/Max 统计 | `storage/format/page.go` | Phase 3 Zone Map（页面跳过） |
+| I/O 调度器存储层集成 | `vego/storage.go` ← `vfs/scheduler.go` | Phase 3 并行列读取、并发读取扩展性 |
+
+#### 优先级 2 — MVP 完整性（核心 Phase 2 交付物）
+
+| 任务 | 理由 | 依赖 |
+|------|------|------|
+| 墓碑机制 | 生产安全的软删除恢复 | — |
+| flush() 追加写优化 | 解决 1M 写入目标（瓶颈 1） | Manifest 系统 |
+| Manifest 系统（文件注册表） | 段管理基础、flush 优化、Phase 5 MVCC | — |
+| GetBatch 批量 I/O | 解决搜索结果物化性能（瓶颈 2） | — |
+| Blob 描述符 + 内联层 | 锁定 API 表面供 Phase 3 Pack/独立层使用 | — |
+| 累积缓冲区 | 减少小页面的 I/O 放大 | — |
+
+#### 优先级 3 — 可吸收到 Phase 3
+
+| 任务 | Phase 3 入口点 |
+|------|----------------|
+| Delta 编码 | Phase 3 存储优化 |
+| Writer 异步优化 | Phase 4 性能 |
+| 统一监控聚合 | Phase 3 Prometheus 导出器 |
+| BlockCache 自动调优 | Phase 3 配置系统 |
+
+#### 推荐执行顺序
+
+```
+Wave 1（并行）: 列裁剪 ‖ 逐页 Min/Max ‖ 累积缓冲区
+Wave 2（并行）: Manifest 系统 ‖ 墓碑机制
+Wave 3:         I/O 调度器存储层集成
+Wave 4:         flush() 追加写优化（需要 Wave 2 的 Manifest）
+Wave 5（并行）: GetBatch 批量 I/O ‖ Blob 内联层
+```
 
 ### 完成标准
-- [ ] 单文件 1GB 向量数据读写不 OOM 🔄
-- [ ] 重复查询性能提升 5x+（缓存命中）🔄
-- [ ] 写入 100万向量（768维）< 30秒 🔄
-- [ ] I/O 调度器：4x 并发性能退化 < 20%（对比当前 300%）❌
-- [x] **删除操作使用 Deletion Vector** ✅（`MarkDeleted()` + DV 实现）
+
+**已交付**：
+- [x] **删除操作使用 Deletion Vector** ✅（`MarkDeleted()` + DV 已实现）
 - [x] **更新操作使用 DV + Insert** ✅（无孤儿节点）
-- [ ] Blob 存储：支持内联（<64KB）和打包（64KB-4MB）存储 ❌
-- [x] **索引压缩在大批量删除后减少大小** ✅（>30% 空间回收，`Compact()` 实现）
+- [x] **索引压缩在大批量删除后减少大小** ✅（>30% 空间回收，`Compact()` 已实现）
 - [x] **Agent Memory**：Ingest + Reconcile + 混合搜索管线 ✅
-- [x] **架构重构**：5 层依赖结构已建立并强制执行 ✅
+- [x] **架构重构**：5 层依赖结构已强制执行 ✅
+
+---
+
+#### P0 — Phase 2 不完成这些不关闭
+
+如果时间不够，先裁减 P1 项；P0 项门控 Phase 2 里程碑。
+
+| # | 交付物 | 验收标准 | 状态 |
+|---|--------|----------|------|
+| P0-1 | **I/O 调度器** | 4x 并发延迟退化 < 20%（对比当前 300%+） | ❌ |
+| P0-2 | **I/O 调度器** | 16x 并发延迟退化 < 50% | ❌ |
+| P0-3 | **I/O 调度器** | 合并使顺序扫描下 I/O 系统调用减少 > 40% | ❌ |
+| P0-4 | **I/O 调度器** | 背压在 1000+ 并发查询下防止 OOM | ❌ |
+| P0-5 | **I/O 调度器** | 所有现有存储测试在调度器启用时通过 | ❌ |
+| P0-6 | **墓碑机制** | grace>0 生命周期工作（标记 → grace → 过期→DV → 窗口内恢复成功，窗口外失败）；grace=0 短路到 DV，无 goroutine 开销 | ❌ |
+| P0-7 | **Blob 存储（Phase 2 最小范围）** | 描述符格式冻结 + 内联层（< 64KB）SHA256 往返；> 64KB 返回 `ErrBlobTooLargeForPhase2`；Pack/Dedicated 明确推迟到 Phase 3 | ❌ |
+| P0-8 | **Manifest 系统** | 每集合 `manifest.json` + `manifest.bin` 含 CRC；原子 temp-rename 写入；CRUD API 被测试覆盖 | ❌ |
+| P0-9 | **列裁剪（基础）** | `WithColumns([...])` 使 10 列文件上单列查询 I/O 减少 > 70%；`Search`/`ForEach`/`GetAllValidDocuments` 遵循它 | ❌ |
+| P0-10 | **累积缓冲区** | 写入基准上 page 数量减少 > 60%；所有列类型强制最小 64KB page | ❌ |
+| P0-11 | **1GB 文件可扩展性** | 单文件 1GB 向量数据读写不 OOM → *瓶颈 3（ForEach 流式）+ 列裁剪* | 🔄 |
+| P0-12 | **写入吞吐** | 100万向量（768维）写入 < 30秒 → *瓶颈 1（flush 追加写）* | 🔄 |
+| P0-13 | **缓存效果** | 重复查询 < 冷缓存延迟的 20%（即 5x+ 提升）→ *瓶颈 5（缓存可见性 + 调优）* | 🔄 |
+| P0-14 | **逐页 Min/Max 统计** | 数值 + 字符串列 min/max 存储于 footer 元数据；null 感知；`PageSkipper` 接口定义（阻塞 Phase 3 Zone Map） | ❌ |
+
+#### P1 — 有则发布；无则 Phase 3 吸收
+
+这些提升存储引擎完整度，但不阻塞 MVP 里程碑。Phase 3 对每个都有自然的入口点。
+
+| # | 交付物 | 验收标准 | Phase 3 入口点 | 状态 |
+|---|--------|----------|----------------|------|
+| P1-1 | **Delta 编码** | sorted int64/uint64 往返正确；时间戳基准压缩 > 80%；factory.go 中自动检测 | Phase 3 存储优化 | ❌ |
+| P1-2 | **Writer 异步优化** | `WithAsyncWrite(true)` 在 `BenchmarkWrite*` 上达到 800–1200 MB/s（估计）；保留确定性 page 顺序 | Phase 4 性能 | ❌ |
+| P1-3 | **存储指标（基础）** | `coll.Metrics()` 快照 + 通过 `WithMetrics(true)` 选择启用（默认关闭）；禁用时零开销 | Phase 3 Prometheus 导出器 | ❌ |
 
 ---
 
@@ -438,8 +806,31 @@ results, _ := coll.Search(queryVector, 10,
   ```
 - **内存节省**：1亿 向量 (768d) = 300GB 原始 → ~5GB（60倍减少）
 
-#### Blob 存储：分层实现（新增）
-- **独立文件支持**：>4MB Blob 作为独立 `.blob` 文件存储
+#### Blob 存储：分层实现（基于 Phase 2）
+**Phase 2 交付**：仅 `BlobDescriptor` 格式和内联层（< 64KB）。
+**Phase 3 交付**：Pack 层（64KB–4MB）、Dedicated 层（> 4MB）、统一 `BlobStorage` 注册表、`take_blobs()` 流式传输、压缩期间 Pack GC。
+
+- **Pack 文件管理器（64KB–4MB）**：
+  - 仅追加 `.pack_NNNN` 侧车文件，在 `MaxPackFileSize`（默认 1GB）处自动滚动
+  - `PackWriter.Write(blob) (BlobDescriptor, error)` — `Kind=1` 的描述符
+  - `PackReader.Read(desc) / ReadCloser(desc)` — 随机和流式访问
+- **Dedicated 文件支持**：> 4MB blob 作为独立 `.blob` 文件存储
+  - > 100MB blob 的分段写入；描述符 footer 中 SHA256 保证完整性
+  - `DedicatedReader.ReadRange(desc, offset, length)` — HTTP Range 风格部分读取
+  - 生命周期：仅在父文档硬删除后删除（tombstone 过期后）
+- **BlobStorage 接口与注册表**：基于大小路由内联 / pack / dedicated
+  ```go
+  type BlobStorage interface {
+      Put(blob []byte) (BlobDescriptor, error)
+      PutStream(reader io.Reader, size int64) (BlobDescriptor, error)
+      Get(desc BlobDescriptor) ([]byte, error)
+      GetStream(desc BlobDescriptor) (io.ReadCloser, error)
+      GetRange(desc BlobDescriptor, offset, length int64) ([]byte, error)
+      Delete(desc BlobDescriptor) error
+  }
+  ```
+  - 默认路由：`size ≤ MaxInlineSize (64KB)` → 内联；`< MinDedicatedSize (4MB)` → pack；否则 dedicated
+- **Pack GC**：压缩移除引用 pack blob 的行时，通过重写 pack 文件（跳过未引用范围）回收孤立条目
 - **take_blobs() API**：大对象懒加载
   ```go
   func (c *Collection) TakeBlobs(column string, ids []string) ([]BlobFile, error)
@@ -459,6 +850,7 @@ results, _ := coll.Search(queryVector, 10,
   chunk := make([]byte, 4096)
   blobs[0].Read(chunk)  // 读取 4KB 块
   ```
+- **边界测试**（从 Phase 2 推迟的测试计划继承）：正好 4MB pack/dedicated 边界、500MB 流式、并发 pack 写入、GC 正确性
 - **与 PyTorch 集成**：Go ML 框架的 `LanceDataset` 等价物
 
 #### Late Materialization（新增）
