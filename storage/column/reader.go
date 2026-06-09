@@ -7,7 +7,6 @@ import (
 	"io"
 	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/format"
-	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -18,7 +17,7 @@ import (
 
 // Reader reads RecordBatch data from a Lance file
 type Reader struct {
-	file       *os.File
+	file       vfs.File
 	header     *format.Header
 	footer     *format.Footer
 	pageReader *PageReader
@@ -37,9 +36,14 @@ type Reader struct {
 	cacheKey   string             // 文件唯一标识（用于缓存键）
 }
 
-// NewReader creates a new column reader（同步模式）
+// NewReader creates a new column reader（同步模式）using the default local VFS.
 func NewReader(filename string) (*Reader, error) {
-	file, err := os.Open(filename)
+	return NewReaderWithVFS(filename, vfs.Local)
+}
+
+// NewReaderWithVFS creates a new column reader with a custom VFS.
+func NewReaderWithVFS(filename string, fs vfs.VFS) (*Reader, error) {
+	file, err := fs.Open(filename)
 	if err != nil {
 		return nil, core.IO("new_reader", filename, err)
 	}
@@ -74,10 +78,15 @@ func NewReader(filename string) (*Reader, error) {
 	return reader, nil
 }
 
-// NewReaderWithCache creates a new column reader with BlockCache support
-// The cache parameter can be shared across multiple readers for the same or different files
+// NewReaderWithCache creates a new column reader with BlockCache support using the default local VFS.
+// The cache parameter can be shared across multiple readers for the same or different files.
 func NewReaderWithCache(filename string, cache *format.BlockCache) (*Reader, error) {
-	reader, err := NewReader(filename)
+	return NewReaderWithCacheAndVFS(filename, vfs.Local, cache)
+}
+
+// NewReaderWithCacheAndVFS creates a new column reader with BlockCache support using a custom VFS.
+func NewReaderWithCacheAndVFS(filename string, fs vfs.VFS, cache *format.BlockCache) (*Reader, error) {
+	reader, err := NewReaderWithVFS(filename, fs)
 	if err != nil {
 		return nil, err
 	}

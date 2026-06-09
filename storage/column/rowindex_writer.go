@@ -7,6 +7,7 @@ import (
 	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/encoding"
 	"github.com/wzqhbustb/vego/storage/format"
+	"github.com/wzqhbustb/vego/vfs"
 )
 
 // RowIndexWriter extends Writer with RowIndex and BlockCache support for V1.1+ files
@@ -19,25 +20,31 @@ type RowIndexWriter struct {
 	schema        *core.Schema
 }
 
-// NewRowIndexWriter creates a writer with RowIndex support
-// If version is V1.0, RowIndex will not be written
+// NewRowIndexWriter creates a writer with RowIndex support using the default local VFS.
+// If version is V1.0, RowIndex will not be written.
 func NewRowIndexWriter(filename string, schema *core.Schema, version format.VersionPolicy, factory *encoding.EncoderFactory) (*RowIndexWriter, error) {
+	return NewRowIndexWriterWithVFS(filename, vfs.Local, schema, version, factory)
+}
+
+// NewRowIndexWriterWithVFS creates a writer with RowIndex support using a custom VFS.
+// If version is V1.0, RowIndex will not be written.
+func NewRowIndexWriterWithVFS(filename string, fs vfs.VFS, schema *core.Schema, version format.VersionPolicy, factory *encoding.EncoderFactory) (*RowIndexWriter, error) {
 	if factory == nil {
 		factory = encoding.NewEncoderFactory(3)
 	}
 
-	writer, err := NewWriter(filename, schema, factory)
+	writer, err := NewWriterWithVFS(filename, fs, schema, factory)
 	if err != nil {
 		return nil, err
 	}
 
 	return &RowIndexWriter{
-		Writer:     writer,
-		version:    version,
-		rowIndex:   format.NewRowIndex(1000), // Default capacity
+		Writer:        writer,
+		version:       version,
+		rowIndex:      format.NewRowIndex(1000), // Default capacity
 		writeRowIndex: version.HasFeature(format.FeatureRowIndex),
-		blockSize:  format.DefaultBlockSize,
-		schema:     schema,
+		blockSize:     format.DefaultBlockSize,
+		schema:        schema,
 	}, nil
 }
 

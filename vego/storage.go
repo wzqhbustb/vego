@@ -17,6 +17,7 @@ import (
 	"github.com/wzqhbustb/vego/storage/column"
 	"github.com/wzqhbustb/vego/storage/encoding"
 	"github.com/wzqhbustb/vego/storage/format"
+	"github.com/wzqhbustb/vego/vfs"
 )
 
 const (
@@ -65,6 +66,10 @@ type DocumentStorage struct {
 	rowIdxMu       sync.Mutex
 	rowIdxTried    bool // true once ensureRowIndex has been attempted
 
+	// VFS is the filesystem abstraction layer. All file I/O goes through this.
+	// Defaults to vfs.Local (standard os package delegation).
+	fs vfs.VFS
+
 	// State tracking
 	dirty  bool
 	mu     sync.RWMutex
@@ -84,7 +89,7 @@ type StorageStats struct {
 
 // cleanupTempFiles removes stale temporary files from previous crashed writes.
 // Only removes temp files for the data file (vectors.lance.tmp.*), not other .tmp.* files.
-func cleanupTempFiles(dir string) {
+func cleanupTempFiles(dir string, fs vfs.VFS) {
 	// Use precise pattern: only match data file temp files (vectors.lance.tmp.*)
 	// Avoid matching user files like backup.tmp.bak or config.tmp.json
 	pattern := filepath.Join(dir, dataFileName+".tmp.*")
@@ -93,7 +98,7 @@ func cleanupTempFiles(dir string) {
 		return // Glob error, skip cleanup
 	}
 	for _, m := range matches {
-		if err := os.Remove(m); err != nil {
+		if err := fs.Remove(m); err != nil {
 			log.Printf("[Storage] Warning: failed to remove temp file %s: %v", m, err)
 		} else {
 			log.Printf("[Storage] Cleaned up temp file: %s", m)
@@ -101,16 +106,22 @@ func cleanupTempFiles(dir string) {
 	}
 }
 
-// NewDocumentStorage creates a new document storage instance.
+// NewDocumentStorage creates a new document storage instance using the default local VFS.
 // Optionally accepts a shared BlockCache for page-level caching.
 // Optionally accepts a format version (defaults to V1_2 for RowIndex + BlockCache support).
 func NewDocumentStorage(path string, dimension int, cache ...*format.BlockCache) (*DocumentStorage, error) {
-	if err := os.MkdirAll(path, 0755); err != nil {
+	return NewDocumentStorageWithVFS(path, dimension, vfs.Local, cache...)
+}
+
+// NewDocumentStorageWithVFS creates a new document storage instance with a custom VFS.
+// All file I/O operations go through the provided vfs.VFS.
+func NewDocumentStorageWithVFS(path string, dimension int, fs vfs.VFS, cache ...*format.BlockCache) (*DocumentStorage, error) {
+	if err := fs.MkdirAll(path, 0755); err != nil {
 		return nil, fmt.Errorf("create storage directory: %w", err)
 	}
 
 	// Clean up any stale temp files from previous crashes
-	cleanupTempFiles(path)
+	cleanupTempFiles(path, fs)
 
 	s := &DocumentStorage{
 		path:           path,
@@ -120,6 +131,7 @@ func NewDocumentStorage(path string, dimension int, cache ...*format.BlockCache)
 		bufferIndex:    make(map[string]int),
 		maxBuffer:      maxBufferSize,
 		version:        format.V1_2, // Default to V1.2 for RowIndex + BlockCache support
+		fs:             fs,
 	}
 
 	// Optional BlockCache for shared caching across storages
@@ -548,7 +560,7 @@ func (s *DocumentStorage) GetAllValidDocuments() ([]*Document, error) {
 
 	// Check if data file exists
 	dataFile := filepath.Join(s.path, dataFileName)
-	if _, err := os.Stat(dataFile); os.IsNotExist(err) {
+	if _, err := s.fs.Stat(dataFile); errors.Is(err, os.ErrNotExist) {
 		// No data file yet, return empty slice
 		return []*Document{}, nil
 	}
@@ -621,7 +633,7 @@ func (s *DocumentStorage) ForEach(ctx context.Context, fn func(*Document) bool) 
 
 	// Step 2: Iterate persisted documents, skipping those already seen in buffer
 	dataFile := filepath.Join(s.path, dataFileName)
-	if _, err := os.Stat(dataFile); os.IsNotExist(err) {
+	if _, err := s.fs.Stat(dataFile); errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 
@@ -693,7 +705,7 @@ func (s *DocumentStorage) flush() error {
 
 	// Read existing vectors if file exists
 	var existingDocs []*Document
-	if _, err := os.Stat(dataFile); err == nil {
+	if _, err := s.fs.Stat(dataFile); err == nil {
 		docs, err := s.readAllDocuments()
 		if err != nil {
 			return fmt.Errorf("read existing documents: %w", err)
@@ -821,24 +833,24 @@ func (s *DocumentStorage) writeColumnStorage(docs []*Document) error {
 
 	// Step 1: Write to temporary file
 	if err := s.doWriteColumnStorage(tempFile, schema, docs); err != nil {
-		os.Remove(tempFile) // Best effort cleanup
+		s.fs.Remove(tempFile) // Best effort cleanup
 		return fmt.Errorf("write temp file: %w", err)
 	}
 
 	// Step 2: Fsync temp file to ensure data is on disk
-	if err := fsyncFile(tempFile); err != nil {
-		os.Remove(tempFile) // Best effort cleanup
+	if err := fsyncFile(tempFile, s.fs); err != nil {
+		s.fs.Remove(tempFile) // Best effort cleanup
 		return fmt.Errorf("fsync temp file: %w", err)
 	}
 
 	// Step 3: Atomic rename (POSIX guarantee)
-	if err := os.Rename(tempFile, dataFile); err != nil {
-		os.Remove(tempFile) // Best effort cleanup
+	if err := s.fs.Rename(tempFile, dataFile); err != nil {
+		s.fs.Remove(tempFile) // Best effort cleanup
 		return fmt.Errorf("rename temp file: %w", err)
 	}
 
 	// Step 4: Fsync directory to ensure rename is persisted
-	if err := fsyncDir(s.path); err != nil {
+	if err := fsyncDir(s.path, s.fs); err != nil {
 		// Don't fail here, data is already safe
 		log.Printf("[Storage] Warning: fsync directory failed: %v", err)
 	}
@@ -850,7 +862,7 @@ func (s *DocumentStorage) writeColumnStorage(docs []*Document) error {
 func (s *DocumentStorage) doWriteColumnStorage(filePath string, schema *core.Schema, docs []*Document) error {
 	// Use RowIndexWriter for V1.1+ format support
 	var writer column.IndexedBatchWriter
-	writer, err := column.NewRowIndexWriter(filePath, schema, s.version, s.factory)
+	writer, err := column.NewRowIndexWriterWithVFS(filePath, s.fs, schema, s.version, s.factory)
 	if err != nil {
 		return fmt.Errorf("create row index writer: %w", err)
 	}
@@ -911,8 +923,8 @@ func (s *DocumentStorage) doWriteColumnStorage(filePath string, schema *core.Sch
 }
 
 // fsyncFile performs fsync on a file to ensure data is persisted to disk.
-func fsyncFile(path string) error {
-	file, err := os.Open(path)
+func fsyncFile(path string, fs vfs.VFS) error {
+	file, err := fs.Open(path)
 	if err != nil {
 		return err
 	}
@@ -922,13 +934,13 @@ func fsyncFile(path string) error {
 
 // fsyncDir performs fsync on a directory to ensure metadata changes are persisted.
 // On Windows, directory fsync may not be supported and is silently ignored.
-func fsyncDir(path string) error {
-	dir, err := os.Open(path)
+func fsyncDir(path string, fs vfs.VFS) error {
+	dir, err := fs.OpenFile(path, 0, 0)
 	if err != nil {
 		return err
 	}
 	defer dir.Close()
-	
+
 	err = dir.Sync()
 	// Windows does not support directory sync, ignore EINVAL
 	if err != nil && !errors.Is(err, syscall.EINVAL) {
@@ -1051,7 +1063,7 @@ func (s *DocumentStorage) ensureRowIndex() {
 	}
 
 	dataFile := filepath.Join(s.path, dataFileName)
-	if _, err := os.Stat(dataFile); err != nil {
+	if _, err := s.fs.Stat(dataFile); err != nil {
 		return
 	}
 
@@ -1175,7 +1187,7 @@ func (s *DocumentStorage) lookupRowIndexFromFile(id string) int64 {
 	dataFile := filepath.Join(s.path, dataFileName)
 
 	// Check if file exists
-	if _, err := os.Stat(dataFile); err != nil {
+	if _, err := s.fs.Stat(dataFile); err != nil {
 		return -1
 	}
 
@@ -1215,7 +1227,7 @@ func (s *DocumentStorage) lookupRowIndexFromFile(id string) int64 {
 func (s *DocumentStorage) load() error {
 	dataFile := filepath.Join(s.path, dataFileName)
 	fileExists := false
-	if _, err := os.Stat(dataFile); err == nil {
+	if _, err := s.fs.Stat(dataFile); err == nil {
 		fileExists = true
 	}
 	return s.snapshot.MetaStore.LoadWithRepair(
@@ -1235,11 +1247,11 @@ func (s *DocumentStorage) Stats() StorageStats {
 	var dataSize, metaSize int64
 	
 	dataFile := filepath.Join(s.path, dataFileName)
-	if info, err := os.Stat(dataFile); err == nil {
+	if info, err := s.fs.Stat(dataFile); err == nil {
 		dataSize = info.Size()
 	}
 
-	if info, err := os.Stat(s.snapshot.MetaStore.Path()); err == nil {
+	if info, err := s.fs.Stat(s.snapshot.MetaStore.Path()); err == nil {
 		metaSize = info.Size()
 	}
 	
@@ -1270,12 +1282,12 @@ func (s *DocumentStorage) getFileVersion() (format.VersionPolicy, error) {
 	dataFile := filepath.Join(s.path, dataFileName)
 	
 	// Check if file exists
-	if _, err := os.Stat(dataFile); err != nil {
+	if _, err := s.fs.Stat(dataFile); err != nil {
 		return s.version, fmt.Errorf("data file not found: %w", err)
 	}
 	
 	// Open reader to get version from footer
-	reader, err := column.NewRowIndexReader(dataFile)
+	reader, err := column.NewRowIndexReaderWithVFS(dataFile, s.fs)
 	if err != nil {
 		return s.version, fmt.Errorf("open reader: %w", err)
 	}

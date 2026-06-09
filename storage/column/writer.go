@@ -6,7 +6,7 @@ import (
 	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/encoding"
 	"github.com/wzqhbustb/vego/storage/format"
-	"os"
+	"github.com/wzqhbustb/vego/vfs"
 )
 
 const (
@@ -16,12 +16,12 @@ const (
 )
 
 // Writer writes RecordBatch data to a Lance file.
-// 
+//
 // Thread Safety: Writer is NOT safe for concurrent use. WriteRecordBatch and Close
 // must be called from a single goroutine. If you need concurrent writes, external
 // synchronization is required.
 type Writer struct {
-	file       *os.File
+	file       vfs.File
 	header     *format.Header
 	footer     *format.Footer
 	pageWriter *PageWriter
@@ -32,9 +32,14 @@ type Writer struct {
 	columnStats *format.StatisticsList // Accumulated column statistics across all batches
 }
 
-// NewWriter creates a new column writer
+// NewWriter creates a new column writer using the default local VFS.
 func NewWriter(filename string, schema *core.Schema, factory *encoding.EncoderFactory) (*Writer, error) {
-	file, err := os.Create(filename)
+	return NewWriterWithVFS(filename, vfs.Local, schema, factory)
+}
+
+// NewWriterWithVFS creates a new column writer with a custom VFS.
+func NewWriterWithVFS(filename string, fs vfs.VFS, schema *core.Schema, factory *encoding.EncoderFactory) (*Writer, error) {
+	file, err := fs.Create(filename)
 	if err != nil {
 		return nil, core.IO("new_writer", filename, err)
 	}

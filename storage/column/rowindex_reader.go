@@ -9,6 +9,7 @@ import (
 
 	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/format"
+	"github.com/wzqhbustb/vego/vfs"
 )
 
 // RowIndexReader extends Reader with RowIndex support for V1.1+ files
@@ -22,9 +23,14 @@ type RowIndexReader struct {
 	blockSize      int32
 }
 
-// NewRowIndexReader creates a reader with RowIndex support
+// NewRowIndexReader creates a reader with RowIndex support using the default local VFS.
 func NewRowIndexReader(filename string) (*RowIndexReader, error) {
-	reader, err := NewReader(filename)
+	return NewRowIndexReaderWithVFS(filename, vfs.Local)
+}
+
+// NewRowIndexReaderWithVFS creates a reader with RowIndex support using a custom VFS.
+func NewRowIndexReaderWithVFS(filename string, fs vfs.VFS) (*RowIndexReader, error) {
+	reader, err := NewReaderWithVFS(filename, fs)
 	if err != nil {
 		return nil, err
 	}
@@ -49,9 +55,14 @@ func NewRowIndexReader(filename string) (*RowIndexReader, error) {
 	}, nil
 }
 
-// NewRowIndexReaderWithCache creates a reader with a shared BlockCache
-// The cache is shared with the embedded Reader, so all data pages and RowIndex are cached uniformly
+// NewRowIndexReaderWithCache creates a reader with a shared BlockCache using the default local VFS.
+// The cache is shared with the embedded Reader, so all data pages and RowIndex are cached uniformly.
 func NewRowIndexReaderWithCache(filename string, cache *format.BlockCache) (*RowIndexReader, error) {
+	return NewRowIndexReaderWithCacheAndVFS(filename, vfs.Local, cache)
+}
+
+// NewRowIndexReaderWithCacheAndVFS creates a reader with a shared BlockCache using a custom VFS.
+func NewRowIndexReaderWithCacheAndVFS(filename string, fs vfs.VFS, cache *format.BlockCache) (*RowIndexReader, error) {
 	// Use NewReaderWithCache to create a Reader with cache support
 	reader, err := NewReaderWithCache(filename, cache)
 	if err != nil {
