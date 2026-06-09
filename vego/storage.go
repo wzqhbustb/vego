@@ -92,6 +92,11 @@ type StorageStats struct {
 func cleanupTempFiles(dir string, fs vfs.VFS) {
 	// Use precise pattern: only match data file temp files (vectors.lance.tmp.*)
 	// Avoid matching user files like backup.tmp.bak or config.tmp.json
+	//
+	// NOTE: filepath.Glob operates directly on the underlying filesystem and
+	// does not go through the VFS abstraction. This is acceptable for the
+	// local VFS (the only implementation today), but will need re-implementation
+	// if a non-local VFS (e.g. in-memory, S3) is introduced.
 	pattern := filepath.Join(dir, dataFileName+".tmp.*")
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
@@ -957,9 +962,9 @@ func (s *DocumentStorage) readAllDocuments() ([]*Document, error) {
 	var reader column.BatchReader
 	var err error
 	if s.blockCache != nil {
-		reader, err = column.NewReaderWithCache(dataFile, s.blockCache)
+		reader, err = column.NewReaderWithCacheAndVFS(dataFile, s.fs, s.blockCache)
 	} else {
-		reader, err = column.NewReader(dataFile)
+		reader, err = column.NewReaderWithVFS(dataFile, s.fs)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("open reader: %w", err)
@@ -1075,9 +1080,9 @@ func (s *DocumentStorage) ensureRowIndex() {
 	var reader column.IndexedBatchReader
 	var err error
 	if s.blockCache != nil {
-		reader, err = column.NewRowIndexReaderWithCache(dataFile, s.blockCache)
+		reader, err = column.NewRowIndexReaderWithCacheAndVFS(dataFile, s.fs, s.blockCache)
 	} else {
-		reader, err = column.NewRowIndexReader(dataFile)
+		reader, err = column.NewRowIndexReaderWithVFS(dataFile, s.fs)
 	}
 	if err != nil {
 		return
@@ -1131,9 +1136,9 @@ func (s *DocumentStorage) tryReadByRowIndex(id string) (*Document, bool, error) 
 	var reader column.IndexedBatchReader
 	var err error
 	if s.blockCache != nil {
-		reader, err = column.NewRowIndexReaderWithCache(dataFile, s.blockCache)
+		reader, err = column.NewRowIndexReaderWithCacheAndVFS(dataFile, s.fs, s.blockCache)
 	} else {
-		reader, err = column.NewRowIndexReader(dataFile)
+		reader, err = column.NewRowIndexReaderWithVFS(dataFile, s.fs)
 	}
 	if err != nil {
 		return nil, false, nil
@@ -1200,9 +1205,9 @@ func (s *DocumentStorage) lookupRowIndexFromFile(id string) int64 {
 	var reader column.IndexedBatchReader
 	var err error
 	if s.blockCache != nil {
-		reader, err = column.NewRowIndexReaderWithCache(dataFile, s.blockCache)
+		reader, err = column.NewRowIndexReaderWithCacheAndVFS(dataFile, s.fs, s.blockCache)
 	} else {
-		reader, err = column.NewRowIndexReader(dataFile)
+		reader, err = column.NewRowIndexReaderWithVFS(dataFile, s.fs)
 	}
 	if err != nil {
 		return -1

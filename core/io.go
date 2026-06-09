@@ -2,6 +2,7 @@
 package core
 
 import (
+	"errors"
 	"os"
 )
 
@@ -36,7 +37,7 @@ func DiskFull(path string, required int64) error {
 // ReadAt 读取特定位置失败
 func ReadAt(path string, offset int64, size int32, err error) error {
 	code := ErrIO
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		code = ErrFileNotFound
 	}
 	return New(code).

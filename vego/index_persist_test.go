@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	hnsw "github.com/wzqhbustb/vego/index"
+	"github.com/wzqhbustb/vego/vfs"
 )
 
 func TestSaveLoadHNSWIndex(t *testing.T) {
@@ -29,7 +30,7 @@ func TestSaveLoadHNSWIndex(t *testing.T) {
 	}
 
 	indexPath := filepath.Join(tempDir, "index")
-	if err := saveHNSWIndex(idx, indexPath); err != nil {
+	if err := saveHNSWIndex(idx, indexPath, vfs.Local); err != nil {
 		t.Fatalf("saveHNSWIndex failed: %v", err)
 	}
 
@@ -41,7 +42,7 @@ func TestSaveLoadHNSWIndex(t *testing.T) {
 		}
 	}
 
-	loaded, err := loadHNSWIndex(indexPath)
+	loaded, err := loadHNSWIndex(indexPath, vfs.Local)
 	if err != nil {
 		t.Fatalf("loadHNSWIndex failed: %v", err)
 	}
@@ -61,7 +62,7 @@ func TestSaveLoadHNSWIndexEmpty(t *testing.T) {
 	idx := hnsw.NewHNSW(config)
 
 	indexPath := filepath.Join(tempDir, "index")
-	if err := saveHNSWIndex(idx, indexPath); err == nil {
+	if err := saveHNSWIndex(idx, indexPath, vfs.Local); err == nil {
 		t.Error("expected error saving empty index, got nil")
 	}
 }
@@ -77,7 +78,7 @@ func TestSaveLoadHNSWIndexNoConnections(t *testing.T) {
 	idx.Add([]float32{1.0, 2.0, 3.0, 4.0})
 
 	indexPath := filepath.Join(tempDir, "index")
-	if err := saveHNSWIndex(idx, indexPath); err != nil {
+	if err := saveHNSWIndex(idx, indexPath, vfs.Local); err != nil {
 		t.Fatalf("save failed: %v", err)
 	}
 
@@ -87,7 +88,7 @@ func TestSaveLoadHNSWIndexNoConnections(t *testing.T) {
 		t.Error("expected connections.lance to not exist for single-node index")
 	}
 
-	loaded, err := loadHNSWIndex(indexPath)
+	loaded, err := loadHNSWIndex(indexPath, vfs.Local)
 	if err != nil {
 		t.Fatalf("load failed: %v", err)
 	}
@@ -112,11 +113,11 @@ func TestSaveLoadHNSWIndexDistanceFunc(t *testing.T) {
 		}
 
 		indexPath := filepath.Join(tempDir, "index")
-		if err := saveHNSWIndex(idx, indexPath); err != nil {
+		if err := saveHNSWIndex(idx, indexPath, vfs.Local); err != nil {
 			t.Fatalf("save failed: %v", err)
 		}
 
-		loaded, err := loadHNSWIndex(indexPath)
+		loaded, err := loadHNSWIndex(indexPath, vfs.Local)
 		if err != nil {
 			t.Fatalf("load failed: %v", err)
 		}
@@ -144,7 +145,7 @@ func TestLoadHNSWIndexMissingMetadata(t *testing.T) {
 	idx.Add([]float32{1.0, 2.0, 3.0, 4.0})
 
 	indexPath := filepath.Join(tempDir, "index")
-	if err := saveHNSWIndex(idx, indexPath); err != nil {
+	if err := saveHNSWIndex(idx, indexPath, vfs.Local); err != nil {
 		t.Fatalf("save failed: %v", err)
 	}
 
@@ -154,7 +155,7 @@ func TestLoadHNSWIndexMissingMetadata(t *testing.T) {
 		t.Fatalf("failed to remove metadata: %v", err)
 	}
 
-	if _, err := loadHNSWIndex(indexPath); err == nil {
+	if _, err := loadHNSWIndex(indexPath, vfs.Local); err == nil {
 		t.Error("expected error loading index with missing metadata, got nil")
 	}
 }
@@ -170,7 +171,7 @@ func TestLoadHNSWIndexMissingNodes(t *testing.T) {
 	idx.Add([]float32{1.0, 2.0, 3.0, 4.0})
 
 	indexPath := filepath.Join(tempDir, "index")
-	if err := saveHNSWIndex(idx, indexPath); err != nil {
+	if err := saveHNSWIndex(idx, indexPath, vfs.Local); err != nil {
 		t.Fatalf("save failed: %v", err)
 	}
 
@@ -180,7 +181,7 @@ func TestLoadHNSWIndexMissingNodes(t *testing.T) {
 		t.Fatalf("failed to remove nodes: %v", err)
 	}
 
-	if _, err := loadHNSWIndex(indexPath); err == nil {
+	if _, err := loadHNSWIndex(indexPath, vfs.Local); err == nil {
 		t.Error("expected error loading index with missing nodes, got nil")
 	}
 }

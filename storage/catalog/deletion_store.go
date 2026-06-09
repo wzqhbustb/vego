@@ -4,10 +4,10 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"os"
 	"sync"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/wzqhbustb/vego/vfs"
 )
 
 const (
@@ -27,24 +27,37 @@ type deletionFileHeader struct {
 // It is independent of the index package and uses the same on-disk format.
 type DeletionStore struct {
 	deleted *roaring.Bitmap
+	fs      vfs.VFS // filesystem abstraction; defaults to vfs.Local
 	mu      sync.RWMutex
 }
 
-// NewDeletionStore creates a new empty DeletionStore.
+// NewDeletionStore creates a new empty DeletionStore using the default local VFS.
 func NewDeletionStore() *DeletionStore {
+	return NewDeletionStoreWithVFS(vfs.Local)
+}
+
+// NewDeletionStoreWithVFS creates a new empty DeletionStore with a custom VFS.
+func NewDeletionStoreWithVFS(fs vfs.VFS) *DeletionStore {
 	return &DeletionStore{
 		deleted: roaring.NewBitmap(),
+		fs:      fs,
 	}
 }
 
-// NewDeletionStoreFromBitmap creates a DeletionStore from an existing bitmap.
+// NewDeletionStoreFromBitmap creates a DeletionStore from an existing bitmap using the default local VFS.
 // The bitmap is cloned to avoid shared state.
 func NewDeletionStoreFromBitmap(bitmap *roaring.Bitmap) *DeletionStore {
+	return NewDeletionStoreFromBitmapWithVFS(bitmap, vfs.Local)
+}
+
+// NewDeletionStoreFromBitmapWithVFS creates a DeletionStore from an existing bitmap with a custom VFS.
+func NewDeletionStoreFromBitmapWithVFS(bitmap *roaring.Bitmap, fs vfs.VFS) *DeletionStore {
 	if bitmap == nil {
-		return NewDeletionStore()
+		return NewDeletionStoreWithVFS(fs)
 	}
 	return &DeletionStore{
 		deleted: bitmap.Clone(),
+		fs:      fs,
 	}
 }
 
@@ -100,7 +113,7 @@ func (ds *DeletionStore) Save(path string) error {
 	ds.mu.RLock()
 	defer ds.mu.RUnlock()
 
-	f, err := os.Create(path)
+	f, err := ds.fs.Create(path)
 	if err != nil {
 		return fmt.Errorf("create deletion store file: %w", err)
 	}
@@ -129,7 +142,7 @@ func (ds *DeletionStore) Save(path string) error {
 
 // Load reads a DeletionStore from a file.
 func (ds *DeletionStore) Load(path string) error {
-	f, err := os.Open(path)
+	f, err := ds.fs.Open(path)
 	if err != nil {
 		return fmt.Errorf("open deletion store file: %w", err)
 	}
@@ -158,13 +171,19 @@ func (ds *DeletionStore) Load(path string) error {
 	return nil
 }
 
-// LoadOrEmpty attempts to load a DeletionStore from a file.
+// LoadOrEmpty attempts to load a DeletionStore from a file using the default local VFS.
 // If the file doesn't exist or is corrupted, returns an empty DeletionStore.
 func LoadOrEmpty(path string) *DeletionStore {
-	ds := NewDeletionStore()
+	return LoadOrEmptyWithVFS(path, vfs.Local)
+}
+
+// LoadOrEmptyWithVFS attempts to load a DeletionStore from a file with a custom VFS.
+// If the file doesn't exist or is corrupted, returns an empty DeletionStore.
+func LoadOrEmptyWithVFS(path string, fs vfs.VFS) *DeletionStore {
+	ds := NewDeletionStoreWithVFS(fs)
 	if err := ds.Load(path); err != nil {
 		// File doesn't exist or is corrupted, return empty
-		return NewDeletionStore()
+		return NewDeletionStoreWithVFS(fs)
 	}
 	return ds
 }

@@ -1,6 +1,7 @@
 package vego
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	hnsw "github.com/wzqhbustb/vego/index"
 	"github.com/wzqhbustb/vego/storage/column"
 	"github.com/wzqhbustb/vego/storage/encoding"
+	"github.com/wzqhbustb/vego/vfs"
 )
 
 func defaultEncoderFactory() *encoding.EncoderFactory {
@@ -16,8 +18,8 @@ func defaultEncoderFactory() *encoding.EncoderFactory {
 }
 
 // saveHNSWIndex persists an HNSW index to Lance-format files in baseDir.
-func saveHNSWIndex(idx *hnsw.HNSWIndex, baseDir string) error {
-	if err := os.MkdirAll(baseDir, 0755); err != nil {
+func saveHNSWIndex(idx *hnsw.HNSWIndex, baseDir string, fs vfs.VFS) error {
+	if err := fs.MkdirAll(baseDir, 0755); err != nil {
 		return fmt.Errorf("create directory failed: %w", err)
 	}
 
@@ -36,26 +38,26 @@ func saveHNSWIndex(idx *hnsw.HNSWIndex, baseDir string) error {
 		return fmt.Errorf("marshal metadata failed: %w", err)
 	}
 
-	if err := writeRecordBatch(filepath.Join(baseDir, "nodes.lance"), nodesBatch); err != nil {
+	if err := writeRecordBatch(filepath.Join(baseDir, "nodes.lance"), nodesBatch, fs); err != nil {
 		return fmt.Errorf("save nodes failed: %w", err)
 	}
 
 	if connBatch != nil {
-		if err := writeRecordBatch(filepath.Join(baseDir, "connections.lance"), connBatch); err != nil {
+		if err := writeRecordBatch(filepath.Join(baseDir, "connections.lance"), connBatch, fs); err != nil {
 			return fmt.Errorf("save connections failed: %w", err)
 		}
 	}
 
-	if err := writeRecordBatch(filepath.Join(baseDir, "metadata.lance"), metaBatch); err != nil {
+	if err := writeRecordBatch(filepath.Join(baseDir, "metadata.lance"), metaBatch, fs); err != nil {
 		return fmt.Errorf("save metadata failed: %w", err)
 	}
 
 	return nil
 }
 
-func writeRecordBatch(filename string, batch *core.RecordBatch) error {
+func writeRecordBatch(filename string, batch *core.RecordBatch, fs vfs.VFS) error {
 	var writer column.BatchWriter
-	writer, err := column.NewWriter(filename, batch.Schema(), defaultEncoderFactory())
+	writer, err := column.NewWriterWithVFS(filename, fs, batch.Schema(), defaultEncoderFactory())
 	if err != nil {
 		return fmt.Errorf("create writer failed: %w", err)
 	}
@@ -68,8 +70,8 @@ func writeRecordBatch(filename string, batch *core.RecordBatch) error {
 }
 
 // loadHNSWIndex restores an HNSW index from Lance-format files in baseDir.
-func loadHNSWIndex(baseDir string) (*hnsw.HNSWIndex, error) {
-	metaBatch, err := readRecordBatch(filepath.Join(baseDir, "metadata.lance"))
+func loadHNSWIndex(baseDir string, fs vfs.VFS) (*hnsw.HNSWIndex, error) {
+	metaBatch, err := readRecordBatch(filepath.Join(baseDir, "metadata.lance"), fs)
 	if err != nil {
 		return nil, fmt.Errorf("load metadata failed: %w", err)
 	}
@@ -90,7 +92,7 @@ func loadHNSWIndex(baseDir string) (*hnsw.HNSWIndex, error) {
 	idx.SetEntryPoint(meta.EntryPoint)
 	idx.SetMaxLevel(meta.MaxLevel)
 
-	nodesBatch, err := readRecordBatch(filepath.Join(baseDir, "nodes.lance"))
+	nodesBatch, err := readRecordBatch(filepath.Join(baseDir, "nodes.lance"), fs)
 	if err != nil {
 		return nil, fmt.Errorf("load nodes failed: %w", err)
 	}
@@ -100,13 +102,13 @@ func loadHNSWIndex(baseDir string) (*hnsw.HNSWIndex, error) {
 	}
 
 	connPath := filepath.Join(baseDir, "connections.lance")
-	if _, err := os.Stat(connPath); err != nil {
-		if os.IsNotExist(err) {
+	if _, err := fs.Stat(connPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
 			return idx, nil
 		}
 		return nil, fmt.Errorf("stat connections failed: %w", err)
 	}
-	connBatch, err := readRecordBatch(connPath)
+	connBatch, err := readRecordBatch(connPath, fs)
 	if err != nil {
 		return nil, fmt.Errorf("load connections failed: %w", err)
 	}
@@ -117,9 +119,9 @@ func loadHNSWIndex(baseDir string) (*hnsw.HNSWIndex, error) {
 	return idx, nil
 }
 
-func readRecordBatch(filename string) (*core.RecordBatch, error) {
+func readRecordBatch(filename string, fs vfs.VFS) (*core.RecordBatch, error) {
 	var reader column.BatchReader
-	reader, err := column.NewReader(filename)
+	reader, err := column.NewReaderWithVFS(filename, fs)
 	if err != nil {
 		return nil, fmt.Errorf("create reader failed: %w", err)
 	}

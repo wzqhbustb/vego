@@ -3,6 +3,7 @@ package vego
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	hnsw "github.com/wzqhbustb/vego/index"
 	"github.com/wzqhbustb/vego/storage/catalog"
+	"github.com/wzqhbustb/vego/vfs"
 )
 
 // Collection represents a collection of documents with vector search capability
@@ -31,6 +33,7 @@ type Collection struct {
 
 	mu     sync.RWMutex
 	config *Config
+	fs     vfs.VFS // filesystem abstraction; defaults to vfs.Local
 
 	// Auto-compaction fields
 	compactStopCh    chan struct{}  // Signal to stop background compaction goroutine
@@ -79,9 +82,14 @@ func (s CompactState) String() string {
 	}
 }
 
-// NewCollection creates a new collection
+// NewCollection creates a new collection using the default local VFS.
 func NewCollection(name, path string, config *Config) (*Collection, error) {
-	if err := os.MkdirAll(path, 0755); err != nil {
+	return NewCollectionWithVFS(name, path, config, vfs.Local)
+}
+
+// NewCollectionWithVFS creates a new collection with a custom VFS.
+func NewCollectionWithVFS(name, path string, config *Config, fs vfs.VFS) (*Collection, error) {
+	if err := fs.MkdirAll(path, 0755); err != nil {
 		return nil, err
 	}
 
@@ -91,6 +99,7 @@ func NewCollection(name, path string, config *Config) (*Collection, error) {
 		dimension:        config.Dimension,
 		idMapping:        catalog.NewIDMapping(),
 		config:           config,
+		fs:               fs,
 		compactStopCh:    make(chan struct{}),
 		compactTriggerCh: make(chan struct{}, 1), // Buffered to avoid blocking
 		lastCompactTime:  time.Now(), // Initialize to prevent immediate max interval trigger
@@ -109,14 +118,14 @@ func NewCollection(name, path string, config *Config) (*Collection, error) {
 
 	// Initialize document storage
 	storagePath := filepath.Join(path, "documents")
-	storage, err := NewDocumentStorage(storagePath, config.Dimension)
+	storage, err := NewDocumentStorageWithVFS(storagePath, config.Dimension, fs)
 	if err != nil {
 		return nil, wrapError("NewCollection", name, "", err)
 	}
 	coll.storage = storage
 
 	// Try to load existing data
-	if err := coll.load(); err != nil && !os.IsNotExist(err) {
+	if err := coll.load(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, wrapError("NewCollection", name, "", err)
 	}
 
@@ -1069,7 +1078,7 @@ func (c *Collection) Save() error {
 
 	// Save HNSW index
 	indexPath := filepath.Join(c.path, "index")
-	if err := saveHNSWIndex(c.index, indexPath); err != nil {
+	if err := saveHNSWIndex(c.index, indexPath, c.fs); err != nil {
 		return wrapError("Save", c.name, "", err)
 	}
 
@@ -1119,14 +1128,14 @@ func (c *Collection) Close() error {
 func (c *Collection) Drop() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return os.RemoveAll(c.path)
+	return c.fs.RemoveAll(c.path)
 }
 
 func (c *Collection) load() error {
 	// Load HNSW index
 	indexPath := filepath.Join(c.path, "index")
-	if _, err := os.Stat(indexPath); err == nil {
-		loadedIndex, err := loadHNSWIndex(indexPath)
+	if _, err := c.fs.Stat(indexPath); err == nil {
+		loadedIndex, err := loadHNSWIndex(indexPath, c.fs)
 		if err != nil {
 			return wrapError("load", c.name, "", ErrIndexCorrupted)
 		}
@@ -1135,7 +1144,7 @@ func (c *Collection) load() error {
 
 	// Load mappings
 	mappingsPath := filepath.Join(c.path, "mappings.json")
-	if err := c.loadMappings(mappingsPath); err != nil && !os.IsNotExist(err) {
+	if err := c.loadMappings(mappingsPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return wrapError("load", c.name, "", err)
 	}
 
@@ -1153,7 +1162,7 @@ func (c *Collection) saveMappings(path string) error {
 		return err
 	}
 
-	if err := os.WriteFile(path, bytes, 0644); err != nil {
+	if err := vfs.WriteFile(c.fs, path, bytes, 0644); err != nil {
 		return err
 	}
 
@@ -1161,7 +1170,7 @@ func (c *Collection) saveMappings(path string) error {
 }
 
 func (c *Collection) loadMappings(path string) error {
-	data, err := os.ReadFile(path)
+	data, err := vfs.ReadFile(c.fs, path)
 	if err != nil {
 		return err
 	}

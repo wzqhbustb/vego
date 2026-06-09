@@ -2,9 +2,10 @@ package vego
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/wzqhbustb/vego/vfs"
 )
 
 // DB is the unified database interface for vector search
@@ -12,20 +13,26 @@ type DB struct {
 	config      *Config
 	path        string                 // Database directory path
 	collections map[string]*Collection // Collection name -> Collection
+	fs          vfs.VFS                // filesystem abstraction; defaults to vfs.Local
 
 	mu     sync.RWMutex
 	closed bool
 }
 
-// Open opens or creates a database at the given path
+// Open opens or creates a database at the given path using the default local VFS.
 func Open(path string, opts ...Option) (*DB, error) {
+	return OpenWithVFS(path, vfs.Local, opts...)
+}
+
+// OpenWithVFS opens or creates a database with a custom VFS.
+func OpenWithVFS(path string, fs vfs.VFS, opts ...Option) (*DB, error) {
 	config := DefaultConfig()
 	for _, opt := range opts {
 		opt(config)
 	}
 
 	// Ensure directory exists
-	if err := os.MkdirAll(path, 0755); err != nil {
+	if err := fs.MkdirAll(path, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create database directory: %w", err)
 	}
 
@@ -33,6 +40,7 @@ func Open(path string, opts ...Option) (*DB, error) {
 		config:      config,
 		path:        path,
 		collections: make(map[string]*Collection),
+		fs:          fs,
 	}
 
 	// Load existing collections
@@ -118,11 +126,11 @@ func (db *DB) Collections() []string {
 
 func (db *DB) createCollection(name string) (*Collection, error) {
 	collPath := filepath.Join(db.path, name)
-	return NewCollection(name, collPath, db.config)
+	return NewCollectionWithVFS(name, collPath, db.config, db.fs)
 }
 
 func (db *DB) loadCollections() error {
-	entries, err := os.ReadDir(db.path)
+	entries, err := db.fs.ReadDir(db.path)
 	if err != nil {
 		return err
 	}

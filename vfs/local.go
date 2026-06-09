@@ -24,12 +24,20 @@ func (l *localVFS) Remove(name string) error {
 	return os.Remove(name)
 }
 
+func (l *localVFS) RemoveAll(path string) error {
+	return os.RemoveAll(path)
+}
+
 func (l *localVFS) Rename(oldpath, newpath string) error {
 	return os.Rename(oldpath, newpath)
 }
 
 func (l *localVFS) MkdirAll(path string, perm os.FileMode) error {
 	return os.MkdirAll(path, perm)
+}
+
+func (l *localVFS) ReadDir(name string) ([]os.DirEntry, error) {
+	return os.ReadDir(name)
 }
 
 func (l *localVFS) Stat(name string) (os.FileInfo, error) {

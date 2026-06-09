@@ -7,9 +7,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/wzqhbustb/vego/vfs"
 )
 
 const (
@@ -50,7 +50,7 @@ func (dv *DeletionVector) Serialize(path string) error {
 	defer dv.mu.RUnlock()
 
 	// Create file
-	f, err := os.Create(path)
+	f, err := dv.fs.Create(path)
 	if err != nil {
 		return fmt.Errorf("failed to create deletion vector file: %w", err)
 	}
@@ -80,12 +80,17 @@ func (dv *DeletionVector) Serialize(path string) error {
 	return nil
 }
 
-// Deserialize reads a DeletionVector from a file.
+// Deserialize reads a DeletionVector from a file using the default local VFS.
 // Returns an error if the file is corrupted or has an unsupported version.
 // If the file doesn't exist, returns (nil, error).
 func Deserialize(path string) (*DeletionVector, error) {
+	return DeserializeWithVFS(path, vfs.Local)
+}
+
+// DeserializeWithVFS reads a DeletionVector from a file with a custom VFS.
+func DeserializeWithVFS(path string, fs vfs.VFS) (*DeletionVector, error) {
 	// Open file
-	f, err := os.Open(path)
+	f, err := fs.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open deletion vector file: %w", err)
 	}
@@ -124,6 +129,7 @@ func Deserialize(path string) (*DeletionVector, error) {
 
 	return &DeletionVector{
 		deleted: bitmap,
+		fs:      fs,
 	}, nil
 }
 
@@ -137,28 +143,43 @@ func readBitmapFromReader(r io.Reader) (*roaring.Bitmap, error) {
 	return bitmap, nil
 }
 
-// DeserializeOrEmpty attempts to deserialize a DeletionVector from a file.
+// DeserializeOrEmpty attempts to deserialize a DeletionVector from a file using the default local VFS.
 // If the file doesn't exist or is corrupted, returns an empty DeletionVector instead of an error.
 // This is useful for backward compatibility where old data may not have a .del file.
 func DeserializeOrEmpty(path string) *DeletionVector {
-	dv, err := Deserialize(path)
+	return DeserializeOrEmptyWithVFS(path, vfs.Local)
+}
+
+// DeserializeOrEmptyWithVFS attempts to deserialize a DeletionVector from a file with a custom VFS.
+func DeserializeOrEmptyWithVFS(path string, fs vfs.VFS) *DeletionVector {
+	dv, err := DeserializeWithVFS(path, fs)
 	if err != nil {
 		// File doesn't exist or is corrupted, return empty DV
-		return NewDeletionVector()
+		return NewDeletionVectorWithVFS(fs)
 	}
 	return dv
 }
 
-// FileExists checks if a deletion vector file exists at the given path.
+// FileExists checks if a deletion vector file exists at the given path using the default local VFS.
 func FileExists(path string) bool {
-	_, err := os.Stat(path)
+	return FileExistsWithVFS(path, vfs.Local)
+}
+
+// FileExistsWithVFS checks if a deletion vector file exists at the given path with a custom VFS.
+func FileExistsWithVFS(path string, fs vfs.VFS) bool {
+	_, err := fs.Stat(path)
 	return err == nil
 }
 
 // GetDeletionVectorInfo returns information about a deletion vector file without loading it.
-// Returns the number of deleted rows and the file size.
+// Uses the default local VFS.
 func GetDeletionVectorInfo(path string) (numDeleted uint64, fileSize int64, err error) {
-	f, err := os.Open(path)
+	return GetDeletionVectorInfoWithVFS(path, vfs.Local)
+}
+
+// GetDeletionVectorInfoWithVFS returns information about a deletion vector file without loading it using a custom VFS.
+func GetDeletionVectorInfoWithVFS(path string, fs vfs.VFS) (numDeleted uint64, fileSize int64, err error) {
+	f, err := fs.Open(path)
 	if err != nil {
 		return 0, 0, err
 	}

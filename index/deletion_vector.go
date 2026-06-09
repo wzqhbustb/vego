@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/wzqhbustb/vego/vfs"
 )
 
 // DeletionVector marks deleted rows using a bitmap.
@@ -14,24 +15,37 @@ import (
 // for sparse deletion patterns using RoaringBitmap.
 type DeletionVector struct {
 	deleted *roaring.Bitmap
+	fs      vfs.VFS // filesystem abstraction; defaults to vfs.Local
 	mu      sync.RWMutex
 }
 
-// NewDeletionVector creates a new empty DeletionVector.
+// NewDeletionVector creates a new empty DeletionVector using the default local VFS.
 func NewDeletionVector() *DeletionVector {
+	return NewDeletionVectorWithVFS(vfs.Local)
+}
+
+// NewDeletionVectorWithVFS creates a new empty DeletionVector with a custom VFS.
+func NewDeletionVectorWithVFS(fs vfs.VFS) *DeletionVector {
 	return &DeletionVector{
 		deleted: roaring.NewBitmap(),
+		fs:      fs,
 	}
 }
 
-// NewDeletionVectorFromBitmap creates a DeletionVector from an existing bitmap.
+// NewDeletionVectorFromBitmap creates a DeletionVector from an existing bitmap using the default local VFS.
 // The bitmap is cloned to avoid shared state.
 func NewDeletionVectorFromBitmap(bitmap *roaring.Bitmap) *DeletionVector {
+	return NewDeletionVectorFromBitmapWithVFS(bitmap, vfs.Local)
+}
+
+// NewDeletionVectorFromBitmapWithVFS creates a DeletionVector from an existing bitmap with a custom VFS.
+func NewDeletionVectorFromBitmapWithVFS(bitmap *roaring.Bitmap, fs vfs.VFS) *DeletionVector {
 	if bitmap == nil {
-		return NewDeletionVector()
+		return NewDeletionVectorWithVFS(fs)
 	}
 	return &DeletionVector{
 		deleted: bitmap.Clone(),
+		fs:      fs,
 	}
 }
 
@@ -174,6 +188,7 @@ func (dv *DeletionVector) Clone() *DeletionVector {
 
 	return &DeletionVector{
 		deleted: dv.deleted.Clone(),
+		fs:      dv.fs,
 	}
 }
 

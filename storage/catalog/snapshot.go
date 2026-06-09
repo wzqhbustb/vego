@@ -1,11 +1,11 @@
 package catalog
 
 import (
-	"os"
 	"path/filepath"
 
 	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/format"
+	"github.com/wzqhbustb/vego/vfs"
 )
 
 const (
@@ -29,18 +29,25 @@ type Snapshot struct {
 	Version       format.VersionPolicy
 	MetaStore     *MetadataStore
 	DeletionStore *DeletionStore
+	fs            vfs.VFS // filesystem abstraction; defaults to vfs.Local
 }
 
-// NewSnapshot creates a new Snapshot for the given directory.
+// NewSnapshot creates a new Snapshot for the given directory using the default local VFS.
 func NewSnapshot(dirPath string, version format.VersionPolicy) *Snapshot {
+	return NewSnapshotWithVFS(dirPath, version, vfs.Local)
+}
+
+// NewSnapshotWithVFS creates a new Snapshot for the given directory with a custom VFS.
+func NewSnapshotWithVFS(dirPath string, version format.VersionPolicy, fs vfs.VFS) *Snapshot {
 	dataFile := filepath.Join(dirPath, DataFileName)
 	return &Snapshot{
 		Path:          dirPath,
 		DataFile:      dataFile,
 		MetaFile:      filepath.Join(dirPath, MetaFileName),
 		Version:       version,
-		MetaStore:     NewMetadataStore(filepath.Join(dirPath, MetaFileName)),
-		DeletionStore: NewDeletionStore(),
+		MetaStore:     NewMetadataStoreWithVFS(filepath.Join(dirPath, MetaFileName), fs),
+		DeletionStore: NewDeletionStoreWithVFS(fs),
+		fs:            fs,
 	}
 }
 
@@ -60,8 +67,8 @@ func (s *Snapshot) SaveMetaStore() error {
 func (s *Snapshot) SaveDeletionStore() error {
 	dvPath := DeletionStorePath(s.DataFile)
 	if s.DeletionStore.IsEmpty() {
-		if _, err := os.Stat(dvPath); err == nil {
-			return os.Remove(dvPath)
+		if _, err := s.fs.Stat(dvPath); err == nil {
+			return s.fs.Remove(dvPath)
 		}
 		return nil
 	}
@@ -72,14 +79,14 @@ func (s *Snapshot) SaveDeletionStore() error {
 // If no file exists, the DeletionStore remains empty.
 func (s *Snapshot) LoadDeletionStore() {
 	dvPath := DeletionStorePath(s.DataFile)
-	if _, err := os.Stat(dvPath); err == nil {
-		s.DeletionStore = LoadOrEmpty(dvPath)
+	if _, err := s.fs.Stat(dvPath); err == nil {
+		s.DeletionStore = LoadOrEmptyWithVFS(dvPath, s.fs)
 	}
 }
 
 // DataFileSize returns the size of the data file, or 0 if it doesn't exist.
 func (s *Snapshot) DataFileSize() int64 {
-	if info, err := os.Stat(s.DataFile); err == nil {
+	if info, err := s.fs.Stat(s.DataFile); err == nil {
 		return info.Size()
 	}
 	return 0
@@ -87,7 +94,7 @@ func (s *Snapshot) DataFileSize() int64 {
 
 // MetaFileSize returns the size of the metadata file, or 0 if it doesn't exist.
 func (s *Snapshot) MetaFileSize() int64 {
-	if info, err := os.Stat(s.MetaStore.Path()); err == nil {
+	if info, err := s.fs.Stat(s.MetaStore.Path()); err == nil {
 		return info.Size()
 	}
 	return 0

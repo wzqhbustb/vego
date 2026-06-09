@@ -2,10 +2,14 @@ package catalog
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"sync"
+
+	"github.com/wzqhbustb/vego/vfs"
 )
 
 // DocMeta stores metadata for a document (not stored in column storage).
@@ -22,15 +26,22 @@ type MetadataStore struct {
 	// string ID -> idHash (for quick lookup)
 	idToHash map[string]int64
 	path     string
+	fs       vfs.VFS // filesystem abstraction; defaults to vfs.Local
 	mu       sync.RWMutex
 }
 
-// NewMetadataStore creates a new metadata store for the given metadata file path.
+// NewMetadataStore creates a new metadata store for the given metadata file path using the default local VFS.
 func NewMetadataStore(path string) *MetadataStore {
+	return NewMetadataStoreWithVFS(path, vfs.Local)
+}
+
+// NewMetadataStoreWithVFS creates a new metadata store with a custom VFS.
+func NewMetadataStoreWithVFS(path string, fs vfs.VFS) *MetadataStore {
 	return &MetadataStore{
 		entries:  make(map[int64]DocMeta),
 		idToHash: make(map[string]int64),
 		path:     path,
+		fs:       fs,
 	}
 }
 
@@ -124,7 +135,7 @@ func (s *MetadataStore) Save() error {
 		IDToHash: idToHashCopy,
 	}
 
-	file, err := os.Create(s.path)
+	file, err := s.fs.Create(s.path)
 	if err != nil {
 		return fmt.Errorf("create metadata file: %w", err)
 	}
@@ -142,15 +153,21 @@ func (s *MetadataStore) Save() error {
 // Load reads the metadata store from disk.
 // If the file does not exist, the store remains empty (no error).
 func (s *MetadataStore) Load() error {
-	_, err := os.Stat(s.path)
-	if os.IsNotExist(err) {
+	_, err := s.fs.Stat(s.path)
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
 
-	data, err := os.ReadFile(s.path)
+	file, err := s.fs.Open(s.path)
+	if err != nil {
+		return fmt.Errorf("open metadata file: %w", err)
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(file)
 	if err != nil {
 		return fmt.Errorf("read metadata file: %w", err)
 	}
