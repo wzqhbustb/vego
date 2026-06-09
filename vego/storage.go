@@ -7,9 +7,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strconv"
+	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/wzqhbustb/vego/core"
@@ -88,25 +87,25 @@ type StorageStats struct {
 }
 
 // cleanupTempFiles removes stale temporary files from previous crashed writes.
-// Only removes temp files for the data file (vectors.lance.tmp.*), not other .tmp.* files.
+// Removes all vego temporary files (containing ".vego-tmp." infix).
+// Covers temp files from column.Writer and deletion_store.Save.
 func cleanupTempFiles(dir string, fs vfs.VFS) {
-	// Use precise pattern: only match data file temp files (vectors.lance.tmp.*)
-	// Avoid matching user files like backup.tmp.bak or config.tmp.json
-	//
-	// NOTE: filepath.Glob operates directly on the underlying filesystem and
-	// does not go through the VFS abstraction. This is acceptable for the
-	// local VFS (the only implementation today), but will need re-implementation
-	// if a non-local VFS (e.g. in-memory, S3) is introduced.
-	pattern := filepath.Join(dir, dataFileName+".tmp.*")
-	matches, err := filepath.Glob(pattern)
+	// Match all vego temporary files (containing ".vego-tmp." infix).
+	// This covers temp files from column.Writer and deletion_store.Save.
+	entries, err := fs.ReadDir(dir)
 	if err != nil {
-		return // Glob error, skip cleanup
+		log.Printf("[Storage] Warning: failed to read dir for cleanup: %v", err)
+		return
 	}
-	for _, m := range matches {
-		if err := fs.Remove(m); err != nil {
-			log.Printf("[Storage] Warning: failed to remove temp file %s: %v", m, err)
-		} else {
-			log.Printf("[Storage] Cleaned up temp file: %s", m)
+	for _, e := range entries {
+		name := e.Name()
+		if strings.Contains(name, ".vego-tmp.") {
+			path := filepath.Join(dir, name)
+			if err := fs.Remove(path); err != nil {
+				log.Printf("[Storage] Warning: failed to remove temp file %s: %v", path, err)
+			} else {
+				log.Printf("[Storage] Cleaned up temp file: %s", path)
+			}
 		}
 	}
 }
@@ -824,7 +823,7 @@ func (s *DocumentStorage) rewriteStorage(docs []*Document) error {
 }
 
 // writeColumnStorage writes vectors to columnar format with RowIndex support.
-// This method uses atomic write pattern: write to temp file, fsync, rename.
+// Delegates atomic write to column.Writer (temp + sync + rename).
 // On failure, original data file remains intact.
 func (s *DocumentStorage) writeColumnStorage(docs []*Document) error {
 	if len(docs) == 0 {
@@ -832,32 +831,10 @@ func (s *DocumentStorage) writeColumnStorage(docs []*Document) error {
 	}
 
 	dataFile := filepath.Join(s.path, dataFileName)
-	// Use timestamp to avoid conflicts with stale temp files
-	tempFile := dataFile + ".tmp." + strconv.FormatInt(time.Now().UnixNano(), 10)
 	schema := s.createSchema()
 
-	// Step 1: Write to temporary file
-	if err := s.doWriteColumnStorage(tempFile, schema, docs); err != nil {
-		s.fs.Remove(tempFile) // Best effort cleanup
-		return fmt.Errorf("write temp file: %w", err)
-	}
-
-	// Step 2: Fsync temp file to ensure data is on disk
-	if err := fsyncFile(tempFile, s.fs); err != nil {
-		s.fs.Remove(tempFile) // Best effort cleanup
-		return fmt.Errorf("fsync temp file: %w", err)
-	}
-
-	// Step 3: Atomic rename (POSIX guarantee)
-	if err := s.fs.Rename(tempFile, dataFile); err != nil {
-		s.fs.Remove(tempFile) // Best effort cleanup
-		return fmt.Errorf("rename temp file: %w", err)
-	}
-
-	// Step 4: Fsync directory to ensure rename is persisted
-	if err := fsyncDir(s.path, s.fs); err != nil {
-		// Don't fail here, data is already safe
-		log.Printf("[Storage] Warning: fsync directory failed: %v", err)
+	if err := s.doWriteColumnStorage(dataFile, schema, docs); err != nil {
+		return fmt.Errorf("write column storage: %w", err)
 	}
 
 	return nil
@@ -924,33 +901,6 @@ func (s *DocumentStorage) doWriteColumnStorage(filePath string, schema *core.Sch
 		return fmt.Errorf("close writer: %w", err)
 	}
 
-	return nil
-}
-
-// fsyncFile performs fsync on a file to ensure data is persisted to disk.
-func fsyncFile(path string, fs vfs.VFS) error {
-	file, err := fs.Open(path)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	return file.Sync()
-}
-
-// fsyncDir performs fsync on a directory to ensure metadata changes are persisted.
-// On Windows, directory fsync may not be supported and is silently ignored.
-func fsyncDir(path string, fs vfs.VFS) error {
-	dir, err := fs.OpenFile(path, 0, 0)
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-
-	err = dir.Sync()
-	// Windows does not support directory sync, ignore EINVAL
-	if err != nil && !errors.Is(err, syscall.EINVAL) {
-		return err
-	}
 	return nil
 }
 

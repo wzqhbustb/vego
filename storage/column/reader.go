@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
+	"sort"
 	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/format"
 	"path/filepath"
@@ -34,6 +35,10 @@ type Reader struct {
 	// BlockCache 支持（可选）
 	blockCache *format.BlockCache // 页面缓存实例
 	cacheKey   string             // 文件唯一标识（用于缓存键）
+
+	// Range coalescing config (Wave 2)
+	coalesceGap  int64 // max gap between pages to merge (default 4KB)
+	maxMergeSize int64 // max size of a merged range (default 1MB)
 }
 
 // NewReader creates a new column reader（同步模式）using the default local VFS.
@@ -49,10 +54,12 @@ func NewReaderWithVFS(filename string, fs vfs.VFS) (*Reader, error) {
 	}
 
 	reader := &Reader{
-		file:       file,
-		pageReader: NewPageReader(),
-		closed:     false,
-		useAsync:   false, // 默认同步模式
+		file:         file,
+		pageReader:   NewPageReader(),
+		closed:       false,
+		useAsync:     false, // 默认同步模式
+		coalesceGap:  4 * 1024,    // 4KB default
+		maxMergeSize: 1024 * 1024, // 1MB default
 	}
 
 	// Read header
@@ -149,6 +156,8 @@ func NewReaderWithAsyncIO(filename string, asyncIO *vfs.AsyncIO) (*Reader, error
 		fileID:       fileID,
 		useAsync:     true,
 		asyncEnabled: true,
+		coalesceGap:  4 * 1024,    // 4KB default
+		maxMergeSize: 1024 * 1024, // 1MB default
 	}
 
 	// 读取 header/footer（使用 FilePool 的句柄）
@@ -417,35 +426,76 @@ func (r *Reader) readColumnAsync(columnIndex int32) (core.Array, error) {
 	return r.mergeArrays(arrays, field.Type)
 }
 
-// readPageAsyncWithEncoding 使用指定编码异步读取 page
-func (r *Reader) readPageAsyncWithEncoding(pageIdx format.PageIndex, encoding format.EncodingType, dataType core.DataType) (core.Array, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	// 读取 page 原始数据
-	resultCh := r.asyncIO.Read(ctx, r.fileID, pageIdx.Offset, pageIdx.Size)
-
-	select {
-	case result := <-resultCh:
-		if result.Error != nil {
-			return nil, result.Error
-		}
-
-		// 直接解码数据
-		return r.pageReader.ReadPageFromData(result.Data, encoding, pageIdx.NumValues, dataType)
-
-	case <-ctx.Done():
-		return nil, core.New(core.ErrTimeout).
-			Op("read_page_async_with_encoding").
-			Context("message", "timeout reading page").
-			Build()
-	}
+// mergedRange represents a coalesced read range covering multiple pages.
+type mergedRange struct {
+	offset  int64
+	size    int64
+	indices []int // original positions in pageIndices slice
 }
 
-// readPagesAsync 批量异步读取多个 Page
-// 【修改】修复 ReadPages 使用方式，避免超时
-// readPagesAsync 批量异步读取多个 Page
-// 【修改】使用 SubmitBatch 批量提交，避免过多 goroutine
+// coalesceRanges merges adjacent page read requests into larger ranges.
+// Pages are sorted by offset; two pages merge if gap <= maxGap and merged size <= maxMergeSize.
+func coalesceRanges(pages []format.PageIndex, maxGap int64, maxMergeSize int64) []mergedRange {
+	if len(pages) == 0 {
+		return nil
+	}
+
+	const defaultMaxMergeSize = 1024 * 1024 // 1MB, prevents excessive memory spike
+	if maxMergeSize <= 0 {
+		maxMergeSize = defaultMaxMergeSize
+	}
+
+	// Sort by offset, keeping track of original indices
+	type indexed struct {
+		idx int
+		p   format.PageIndex
+	}
+	ordered := make([]indexed, len(pages))
+	for i, p := range pages {
+		ordered[i] = indexed{i, p}
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return ordered[i].p.Offset < ordered[j].p.Offset
+	})
+
+	var ranges []mergedRange
+	cur := mergedRange{
+		offset:  ordered[0].p.Offset,
+		size:    int64(ordered[0].p.Size),
+		indices: []int{ordered[0].idx},
+	}
+
+	for i := 1; i < len(ordered); i++ {
+		p := ordered[i].p
+		end := cur.offset + cur.size
+		gap := p.Offset - end
+		candidateSize := p.Offset + int64(p.Size) - cur.offset
+
+		if gap <= maxGap && candidateSize <= maxMergeSize {
+			cur.size = candidateSize
+			cur.indices = append(cur.indices, ordered[i].idx)
+		} else {
+			ranges = append(ranges, cur)
+			cur = mergedRange{
+				offset:  p.Offset,
+				size:    int64(p.Size),
+				indices: []int{ordered[i].idx},
+			}
+		}
+	}
+	ranges = append(ranges, cur)
+	return ranges
+}
+
+// readPagesAsync reads multiple pages using range coalescing:
+// adjacent page requests are merged into fewer, larger ReadAt calls.
+//
+// Design note: This intentionally calls r.file.ReadAt directly instead of
+// r.asyncIO.Read(). Range coalescing has already reduced N page requests to
+// M ranges (typically M << N), so goroutine-per-range with synchronous ReadAt
+// is simple and efficient. Re-splitting into individual IORequests would defeat
+// the coalescing benefit. Future backpressure (Wave 6) can submit merged ranges
+// as large IORequests if needed.
 func (r *Reader) readPagesAsync(pageIndices []format.PageIndex, dataType core.DataType) ([]core.Array, error) {
 	if !r.useAsync || !r.asyncEnabled {
 		return r.readPagesSync(pageIndices, dataType)
@@ -455,65 +505,85 @@ func (r *Reader) readPagesAsync(pageIndices []format.PageIndex, dataType core.Da
 		return []core.Array{}, nil
 	}
 
+	// 1. Coalesce adjacent ranges
+	ranges := coalesceRanges(pageIndices, r.coalesceGap, r.maxMergeSize)
+
+	// 2. Read each merged range directly via ReadAt
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	arrays := make([]core.Array, len(pageIndices))
-	errChan := make(chan error, len(pageIndices))
+	errChan := make(chan error, len(ranges))
 	var wg sync.WaitGroup
 
-	// 【修改】限制并发度，避免过多 goroutine
+	// Limit concurrency even after coalescing: if coalesce is ineffective
+	// (all pages spaced > maxGap), goroutine count equals page count.
 	const maxConcurrency = 8
 	semaphore := make(chan struct{}, maxConcurrency)
 
-	for i, pIdx := range pageIndices {
+	for _, mr := range ranges {
 		wg.Add(1)
-		semaphore <- struct{}{} // 获取信号量
+		semaphore <- struct{}{} // acquire
 
-		go func(idx int, pageIdx format.PageIndex) {
+		go func(mr mergedRange) {
 			defer wg.Done()
-			defer func() { <-semaphore }() // 释放信号量
-
-			// 【修改】使用单个 Read，但共享同一个 AsyncIO 调度器
-			resultCh := r.asyncIO.Read(ctx, r.fileID, pageIdx.Offset, pageIdx.Size)
+			defer func() { <-semaphore }() // release
 
 			select {
-			case result := <-resultCh:
-				if result.Error != nil {
-					errChan <- core.New(core.ErrIO).
-						Op("read_pages_async").
-						Context("page_index", idx).
-						Wrap(result.Error).
-						Build()
-					return
-				}
+			case <-ctx.Done():
+				errChan <- core.New(core.ErrTimeout).
+					Op("read_pages_async").
+					Context("offset", mr.offset).
+					Context("message", "timeout before read").
+					Build()
+				return
+			default:
+			}
 
+			buf := make([]byte, mr.size)
+			n, err := r.file.ReadAt(buf, mr.offset)
+			if err != nil {
+				errChan <- core.New(core.ErrIO).
+					Op("read_pages_async").
+					Context("offset", mr.offset).
+					Context("size", mr.size).
+					Wrap(err).
+					Build()
+				return
+			}
+			if int64(n) < mr.size {
+				errChan <- core.New(core.ErrIO).
+					Op("read_pages_async").
+					Context("offset", mr.offset).
+					Context("expected", mr.size).
+					Context("got", n).
+					Context("message", "short read").
+					Build()
+				return
+			}
+
+			// 3. Slice by original boundaries and decode
+			for _, pageIdx := range mr.indices {
+				p := pageIndices[pageIdx]
+				pageOff := p.Offset - mr.offset
+				pageBuf := buf[pageOff : pageOff+int64(p.Size)]
 				array, err := r.pageReader.ReadPageFromData(
-					result.Data,
-					pageIdx.Encoding,
-					pageIdx.NumValues,
+					pageBuf,
+					p.Encoding,
+					p.NumValues,
 					dataType,
 				)
 				if err != nil {
 					errChan <- core.New(core.ErrDecodeFailed).
 						Op("decode_page_async").
-						Context("page_index", idx).
+						Context("page_index", pageIdx).
 						Wrap(err).
 						Build()
 					return
 				}
-
-				arrays[idx] = array
-
-			case <-ctx.Done():
-				errChan <- core.New(core.ErrTimeout).
-					Op("read_pages_async").
-					Context("page_index", idx).
-					Context("message", "timeout reading page").
-					Build()
-				return
+				arrays[pageIdx] = array
 			}
-		}(i, pIdx)
+		}(mr)
 	}
 
 	wg.Wait()

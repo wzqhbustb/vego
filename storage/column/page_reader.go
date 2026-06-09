@@ -83,6 +83,10 @@ func (r *PageReader) ReadPage(page *format.Page, dataType core.DataType) (core.A
 
 // ReadPageFromData 直接从编码后的数据解码 Array（用于 AsyncIO 返回的数据）
 // 注意：data 是完整的 Page 字节流（包含 30 字节 header + encoded data + optional null bitmap)
+//
+// TODO: Header 字段偏移（data[14:18] compressedSize, data[22:26] nullBitmapSize）是硬编码的。
+// 如果 Page header 格式变更，必须同步更新这些偏移。建议未来引入 Header 的反序列化方法，
+// 让 ReadPageFromData 调用统一的 header parser，消除硬编码依赖。
 func (r *PageReader) ReadPageFromData(data []byte, encodingType format.EncodingType, numValues int32, dataType core.DataType) (core.Array, error) {
 	const PageHeaderSize = 30
 

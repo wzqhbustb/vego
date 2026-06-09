@@ -6,7 +6,11 @@ import (
 	"github.com/wzqhbustb/vego/storage/format"
 )
 
-// PageWriter handles serialization of Array data to Pages with intelligent encoding
+// PageWriter handles serialization of Array data to Pages with intelligent encoding.
+//
+// Thread Safety: PageWriter is safe for concurrent use. It holds only an immutable
+// *EncoderFactory (compression level + read-only config) and has no mutable state.
+// WritePages can be called from multiple goroutines simultaneously.
 type PageWriter struct {
 	factory *encoding.EncoderFactory
 }

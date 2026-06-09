@@ -3,6 +3,7 @@ package vego
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -47,10 +48,15 @@ func TestAtomicWrite(t *testing.T) {
 		t.Fatal("Data file should exist after rewrite")
 	}
 
-	// Verify temp file is cleaned up
-	tempFile := dataFile + ".tmp"
-	if _, err := os.Stat(tempFile); !os.IsNotExist(err) {
-		t.Error("Temp file should be cleaned up after successful rewrite")
+	// Verify temp file is cleaned up (Writer uses .vego-tmp.<nonce> internally)
+	entries, err := os.ReadDir(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to read dir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".vego-tmp.") {
+			t.Errorf("Temp file %s should be cleaned up after successful rewrite", e.Name())
+		}
 	}
 
 	// Verify new data is correct
@@ -75,13 +81,13 @@ func TestAtomicWrite(t *testing.T) {
 func TestCleanupTempFiles(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Create vego data file temp files (should be cleaned up)
+	// Create vego temp files (should be cleaned up - contain .vego-tmp. infix)
 	vegoTempFiles := []string{
-		filepath.Join(tmpDir, "vectors.lance.tmp.1234567890"),
-		filepath.Join(tmpDir, "vectors.lance.tmp.1234567891"),
+		filepath.Join(tmpDir, "vectors.lance.vego-tmp.1234567890"),
+		filepath.Join(tmpDir, "vectors.lance.vego-tmp.1234567891"),
 	}
 
-	// Create other temp files (should NOT be cleaned up - not vego data files)
+	// Create other temp files (should NOT be cleaned up - no .vego-tmp. infix)
 	otherTempFiles := []string{
 		filepath.Join(tmpDir, "backup.tmp.bak"),
 		filepath.Join(tmpDir, "config.tmp.json"),
@@ -166,10 +172,15 @@ func TestAtomicWriteRollback(t *testing.T) {
 		t.Error("Data file should still exist after successful rewrite")
 	}
 
-	// Verify temp file is cleaned up
-	tempFile := dataFile + ".tmp"
-	if _, err := os.Stat(tempFile); !os.IsNotExist(err) {
-		t.Error("Temp file should be cleaned up")
+	// Verify temp file is cleaned up (Writer uses .vego-tmp.<nonce> internally)
+	entries, err := os.ReadDir(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to read dir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".vego-tmp.") {
+			t.Errorf("Temp file %s should be cleaned up", e.Name())
+		}
 	}
 
 	// Verify data integrity

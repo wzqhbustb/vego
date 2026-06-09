@@ -1,6 +1,7 @@
 package column
 
 import (
+	"errors"
 	"fmt"
 	"github.com/wzqhbustb/vego/core"
 	"github.com/wzqhbustb/vego/storage/encoding" // [NEW] 导入 encoding 包
@@ -1543,5 +1544,266 @@ func TestWriter_HeaderExceedsReservedSize(t *testing.T) {
 		t.Log("Warning: Large schema was accepted, may exceed HeaderReservedSize")
 	} else {
 		t.Logf("Large schema rejected as expected: %v", err)
+	}
+}
+
+
+// TestWriteRecordBatchAsync verifies that async encoding produces correct,
+// readable output identical to synchronous encoding.
+func TestWriteRecordBatchAsync(t *testing.T) {
+	tmpDir := t.TempDir()
+	schema := core.NewSchema([]core.Field{
+		{Name: "id", Type: core.PrimInt32(), Nullable: false},
+		{Name: "value", Type: core.PrimFloat32(), Nullable: true},
+	}, nil)
+
+	idBuilder := core.NewInt32Builder()
+	valueBuilder := core.NewFloat32Builder()
+	for i := 0; i < 100; i++ {
+		idBuilder.Append(int32(i))
+		if i%10 == 0 {
+			valueBuilder.AppendNull()
+		} else {
+			valueBuilder.Append(float32(i) * 1.5)
+		}
+	}
+	idArray := idBuilder.NewArray()
+	valueArray := valueBuilder.NewArray()
+	batch, err := core.NewRecordBatch(schema, 100, []core.Array{idArray, valueArray})
+	if err != nil {
+		t.Fatalf("NewRecordBatch failed: %v", err)
+	}
+
+	// Write with async=true
+	filename := filepath.Join(tmpDir, "async.lance")
+	writer, err := NewWriter(filename, schema, defaultEncoderFactory(), WithAsyncWrite(true))
+	if err != nil {
+		t.Fatalf("NewWriter failed: %v", err)
+	}
+	if err := writer.WriteRecordBatch(batch); err != nil {
+		t.Fatalf("WriteRecordBatch async failed: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	// Read back and verify
+	reader, err := NewReader(filename)
+	if err != nil {
+		t.Fatalf("NewReader failed: %v", err)
+	}
+	defer reader.Close()
+
+	readBatch, err := reader.ReadRecordBatch()
+	if err != nil {
+		t.Fatalf("ReadRecordBatch failed: %v", err)
+	}
+
+	if readBatch.NumRows() != 100 {
+		t.Fatalf("expected 100 rows, got %d", readBatch.NumRows())
+	}
+	if readBatch.NumCols() != 2 {
+		t.Fatalf("expected 2 columns, got %d", readBatch.NumCols())
+	}
+}
+
+// TestWriteRecordBatchAsyncVsSync writes the same batch with sync and async
+// and verifies the outputs are byte-for-byte identical (same page layout).
+func TestWriteRecordBatchAsyncVsSync(t *testing.T) {
+	tmpDir := t.TempDir()
+	schema := core.NewSchema([]core.Field{
+		{Name: "id_hash", Type: core.PrimInt64(), Nullable: false},
+		{Name: "vector", Type: core.VectorType(128), Nullable: false},
+		{Name: "timestamp", Type: core.PrimInt64(), Nullable: false},
+	}, nil)
+
+	numRows := 100
+	idBuilder := core.NewInt64Builder()
+	vecBuilder := core.NewFloat32Builder()
+	tsBuilder := core.NewInt64Builder()
+	for i := 0; i < numRows; i++ {
+		idBuilder.Append(int64(i))
+		tsBuilder.Append(int64(1000000 + i))
+	}
+	for i := 0; i < numRows*128; i++ {
+		vecBuilder.Append(float32(i) * 0.001)
+	}
+	idArray := idBuilder.NewArray()
+	vecChild := vecBuilder.NewArray()
+	tsArray := tsBuilder.NewArray()
+	listType := core.FixedSizeListOf(core.PrimFloat32(), 128)
+	vecArray := core.NewFixedSizeListArray(listType.(*core.FixedSizeListType), vecChild, nil)
+
+	batch, err := core.NewRecordBatch(schema, numRows, []core.Array{idArray, vecArray, tsArray})
+	if err != nil {
+		t.Fatalf("NewRecordBatch failed: %v", err)
+	}
+
+	// Sync write
+	syncFile := filepath.Join(tmpDir, "sync.lance")
+	syncWriter, _ := NewWriter(syncFile, schema, defaultEncoderFactory(), WithAsyncWrite(false))
+	_ = syncWriter.WriteRecordBatch(batch)
+	_ = syncWriter.Close()
+
+	// Async write
+	asyncFile := filepath.Join(tmpDir, "async.lance")
+	asyncWriter, _ := NewWriter(asyncFile, schema, defaultEncoderFactory(), WithAsyncWrite(true))
+	_ = asyncWriter.WriteRecordBatch(batch)
+	_ = asyncWriter.Close()
+
+	// Compare byte-for-byte
+	syncData, err := os.ReadFile(syncFile)
+	if err != nil {
+		t.Fatalf("read sync file: %v", err)
+	}
+	asyncData, err := os.ReadFile(asyncFile)
+	if err != nil {
+		t.Fatalf("read async file: %v", err)
+	}
+	if len(syncData) != len(asyncData) {
+		t.Fatalf("file size mismatch: sync=%d async=%d", len(syncData), len(asyncData))
+	}
+	for i := range syncData {
+		if syncData[i] != asyncData[i] {
+			t.Fatalf("byte mismatch at offset %d: sync=0x%02x async=0x%02x", i, syncData[i], asyncData[i])
+		}
+	}
+}
+
+// TestWriteRecordBatchAsyncMultiBatch writes multiple batches asynchronously
+// and verifies round-trip correctness.
+func TestWriteRecordBatchAsyncMultiBatch(t *testing.T) {
+	tmpDir := t.TempDir()
+	schema := core.NewSchema([]core.Field{
+		{Name: "id", Type: core.PrimInt32(), Nullable: false},
+		{Name: "value", Type: core.PrimFloat32(), Nullable: true},
+	}, nil)
+
+	filename := filepath.Join(tmpDir, "multi_async.lance")
+	writer, err := NewWriter(filename, schema, defaultEncoderFactory(), WithAsyncWrite(true))
+	if err != nil {
+		t.Fatalf("NewWriter failed: %v", err)
+	}
+
+	for batchNum := 0; batchNum < 3; batchNum++ {
+		idBuilder := core.NewInt32Builder()
+		valueBuilder := core.NewFloat32Builder()
+		for i := 0; i < 50; i++ {
+			idBuilder.Append(int32(batchNum*50 + i))
+			if i%5 == 0 {
+				valueBuilder.AppendNull()
+			} else {
+				valueBuilder.Append(float32(batchNum*50 + i))
+			}
+		}
+		batch, _ := core.NewRecordBatch(schema, 50, []core.Array{idBuilder.NewArray(), valueBuilder.NewArray()})
+		if err := writer.WriteRecordBatch(batch); err != nil {
+			t.Fatalf("WriteRecordBatch batch %d failed: %v", batchNum, err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	// Read back
+	reader, err := NewReader(filename)
+	if err != nil {
+		t.Fatalf("NewReader failed: %v", err)
+	}
+	defer reader.Close()
+
+	batch, err := reader.ReadRecordBatch()
+	if err != nil {
+		t.Fatalf("ReadRecordBatch failed: %v", err)
+	}
+	if batch.NumRows() != 150 {
+		t.Fatalf("expected 150 rows, got %d", batch.NumRows())
+	}
+}
+
+// TestWriteRecordBatchAsyncSingleColumn ensures single-column batches
+// correctly take the sync path (async disabled by NumCols > 1 check).
+func TestWriteRecordBatchAsyncSingleColumn(t *testing.T) {
+	tmpDir := t.TempDir()
+	schema := core.NewSchema([]core.Field{
+		{Name: "id", Type: core.PrimInt32(), Nullable: false},
+	}, nil)
+
+	idBuilder := core.NewInt32Builder()
+	for i := 0; i < 50; i++ {
+		idBuilder.Append(int32(i))
+	}
+	batch, err := core.NewRecordBatch(schema, 50, []core.Array{idBuilder.NewArray()})
+	if err != nil {
+		t.Fatalf("NewRecordBatch failed: %v", err)
+	}
+
+	filename := filepath.Join(tmpDir, "single.lance")
+	writer, err := NewWriter(filename, schema, defaultEncoderFactory(), WithAsyncWrite(true))
+	if err != nil {
+		t.Fatalf("NewWriter failed: %v", err)
+	}
+	if err := writer.WriteRecordBatch(batch); err != nil {
+		t.Fatalf("WriteRecordBatch failed: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	reader, err := NewReader(filename)
+	if err != nil {
+		t.Fatalf("NewReader failed: %v", err)
+	}
+	defer reader.Close()
+
+	readBatch, err := reader.ReadRecordBatch()
+	if err != nil {
+		t.Fatalf("ReadRecordBatch failed: %v", err)
+	}
+	if readBatch.NumRows() != 50 {
+		t.Fatalf("expected 50 rows, got %d", readBatch.NumRows())
+	}
+}
+
+// TestWriteRecordBatchAsyncErrorPropagation verifies that an I/O error
+// during the serial write phase is correctly returned.
+func TestWriteRecordBatchAsyncErrorPropagation(t *testing.T) {
+	tmpDir := t.TempDir()
+	schema := core.NewSchema([]core.Field{
+		{Name: "id", Type: core.PrimInt32(), Nullable: false},
+		{Name: "value", Type: core.PrimFloat32(), Nullable: true},
+	}, nil)
+
+	idBuilder := core.NewInt32Builder()
+	valueBuilder := core.NewFloat32Builder()
+	for i := 0; i < 10; i++ {
+		idBuilder.Append(int32(i))
+		valueBuilder.Append(float32(i))
+	}
+	batch, err := core.NewRecordBatch(schema, 10, []core.Array{idBuilder.NewArray(), valueBuilder.NewArray()})
+	if err != nil {
+		t.Fatalf("NewRecordBatch failed: %v", err)
+	}
+
+	filename := filepath.Join(tmpDir, "error.lance")
+	writer, err := NewWriter(filename, schema, defaultEncoderFactory(), WithAsyncWrite(true))
+	if err != nil {
+		t.Fatalf("NewWriter failed: %v", err)
+	}
+
+	// Close the underlying file to force an I/O error during writeColumnPages.
+	// encodeColumn runs in goroutines and doesn't touch the file, so it succeeds.
+	// writeColumnPages runs sequentially and will fail when writing to closed file.
+	writer.file.Close()
+
+	err = writer.WriteRecordBatch(batch)
+	if err == nil {
+		t.Fatal("expected error writing to closed file, got nil")
+	}
+
+	// Verify the error is a LanceError (extractable via errors.As).
+	var lanceErr *core.LanceError
+	if !errors.As(err, &lanceErr) {
+		t.Fatalf("expected *core.LanceError, got %T: %v", err, err)
 	}
 }

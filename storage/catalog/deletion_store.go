@@ -4,7 +4,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math/rand"
 	"sync"
+	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/wzqhbustb/vego/vfs"
@@ -14,6 +16,9 @@ const (
 	delFileMagic   = "DEL1"
 	delFileVersion = 1
 	delFileExt     = ".del"
+
+	// tempFileInfix is used for atomic writes in deletion store.
+	tempFileInfix = ".vego-tmp."
 )
 
 // deletionFileHeader represents the header of a .del file.
@@ -108,16 +113,18 @@ func (ds *DeletionStore) Clear() {
 	ds.deleted.Clear()
 }
 
-// Save persists the DeletionStore to a file.
+// Save persists the DeletionStore to a file using atomic write pattern:
+// write to temp file, fsync, rename to final path.
 func (ds *DeletionStore) Save(path string) error {
 	ds.mu.RLock()
 	defer ds.mu.RUnlock()
 
-	f, err := ds.fs.Create(path)
+	tmpPath := path + tempFileInfix + fmt.Sprintf("%d-%x", time.Now().UnixNano(), rand.Int63())
+
+	f, err := ds.fs.Create(tmpPath)
 	if err != nil {
-		return fmt.Errorf("create deletion store file: %w", err)
+		return fmt.Errorf("create deletion store temp file: %w", err)
 	}
-	defer f.Close()
 
 	header := deletionFileHeader{
 		Version:    delFileVersion,
@@ -126,15 +133,32 @@ func (ds *DeletionStore) Save(path string) error {
 	copy(header.Magic[:], delFileMagic)
 
 	if err := binary.Write(f, binary.LittleEndian, header); err != nil {
+		f.Close()
+		ds.fs.Remove(tmpPath)
 		return fmt.Errorf("write header: %w", err)
 	}
 
 	if _, err := ds.deleted.WriteTo(f); err != nil {
+		f.Close()
+		ds.fs.Remove(tmpPath)
 		return fmt.Errorf("write bitmap: %w", err)
 	}
 
 	if err := f.Sync(); err != nil {
+		f.Close()
+		ds.fs.Remove(tmpPath)
 		return fmt.Errorf("sync file: %w", err)
+	}
+
+	if err := f.Close(); err != nil {
+		ds.fs.Remove(tmpPath)
+		return fmt.Errorf("close file: %w", err)
+	}
+
+	// Atomic rename
+	if err := ds.fs.Rename(tmpPath, path); err != nil {
+		ds.fs.Remove(tmpPath)
+		return fmt.Errorf("rename deletion store: %w", err)
 	}
 
 	return nil
