@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
 
 	"github.com/wzqhbustb/vego/core"
@@ -483,5 +484,85 @@ func TestCoalesceRanges100PagesNoMerge(t *testing.T) {
 		if r.indices[0] != i {
 			t.Errorf("range[%d] should map to original page %d, got %d", i, i, r.indices[0])
 		}
+	}
+}
+
+// TestReaderLoadFooterCaches verifies that loadFooter() caches the result.
+// Multiple calls return the same footer pointer without re-reading from disk.
+func TestReaderLoadFooterCaches(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "test_footer_cache.lance")
+	createTestFile(t, filename, 100, 1)
+
+	reader, err := NewReader(filename)
+	if err != nil {
+		t.Fatalf("NewReader failed: %v", err)
+	}
+	defer reader.Close()
+
+	// Capture the footer pointer after NewReader (first load)
+	footerAfterNew := reader.footer
+	if footerAfterNew == nil {
+		t.Fatal("footer should be loaded after NewReader")
+	}
+
+	// Second call: should return cached result (same pointer)
+	err = reader.loadFooter()
+	if err != nil {
+		t.Fatalf("second loadFooter failed: %v", err)
+	}
+	footerAfterSecond := reader.footer
+
+	if footerAfterNew != footerAfterSecond {
+		t.Error("loadFooter did not cache: different footer pointers on second call")
+	}
+}
+
+// TestReaderLoadFooterConcurrent verifies thread-safety of loadFooter().
+// After resetting the cache, 10 concurrent calls should safely produce
+// a valid footer without panic or data races.
+func TestReaderLoadFooterConcurrent(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "test_footer_concurrent.lance")
+	createTestFile(t, filename, 100, 1)
+
+	reader, err := NewReader(filename)
+	if err != nil {
+		t.Fatalf("NewReader failed: %v", err)
+	}
+	defer reader.Close()
+
+	// Reset cache to simulate first-time load in concurrent scenario
+	reader.footerOnce = sync.Once{}
+	reader.footer = nil
+	reader.footerErr = nil
+
+	// Concurrent calls from multiple goroutines
+	var wg sync.WaitGroup
+	errors := make(chan error, 10)
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := reader.loadFooter(); err != nil {
+				errors <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errors)
+
+	for err := range errors {
+		if err != nil {
+			t.Fatalf("concurrent loadFooter failed: %v", err)
+		}
+	}
+
+	if reader.footer == nil {
+		t.Error("concurrent loadFooter failed to set footer")
+	}
+
+	if reader.footerErr != nil {
+		t.Errorf("concurrent loadFooter produced error: %v", reader.footerErr)
 	}
 }

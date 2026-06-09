@@ -39,6 +39,10 @@ type Reader struct {
 	// Range coalescing config (Wave 2)
 	coalesceGap  int64 // max gap between pages to merge (default 4KB)
 	maxMergeSize int64 // max size of a merged range (default 1MB)
+
+	// Metadata caching (Wave 3)
+	footerOnce sync.Once // ensures footer is loaded only once per Reader instance
+	footerErr  error     // cached error from footer load
 }
 
 // NewReader creates a new column reader（同步模式）using the default local VFS.
@@ -72,8 +76,8 @@ func NewReaderWithVFS(filename string, fs vfs.VFS) (*Reader, error) {
 			Build()
 	}
 
-	// Read footer
-	if err := reader.readFooter(); err != nil {
+	// Read footer (cached via sync.Once)
+	if err := reader.loadFooter(); err != nil {
 		file.Close()
 		return nil, core.New(core.ErrCorruptedFile).
 			Op("read_footer").
@@ -170,7 +174,7 @@ func NewReaderWithAsyncIO(filename string, asyncIO *vfs.AsyncIO) (*Reader, error
 			Build()
 	}
 
-	if err := reader.readFooter(); err != nil {
+	if err := reader.loadFooter(); err != nil {
 		asyncIO.ReleaseFile(fileID)
 		return nil, core.New(core.ErrCorruptedFile).
 			Op("read_footer_async").
@@ -214,8 +218,17 @@ func (r *Reader) readHeader() error {
 	return nil
 }
 
-// readFooter reads the file footer
-func (r *Reader) readFooter() error {
+// loadFooter loads footer and column statistics using sync.Once.
+// Thread-safe: multiple concurrent calls only trigger one I/O.
+func (r *Reader) loadFooter() error {
+	r.footerOnce.Do(func() {
+		r.footerErr = r.readFooterFromFile()
+	})
+	return r.footerErr
+}
+
+// readFooterFromFile performs the actual footer I/O.
+func (r *Reader) readFooterFromFile() error {
 	fileInfo, err := r.file.Stat()
 	if err != nil {
 		return err
